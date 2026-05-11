@@ -1,0 +1,35 @@
+# macOS
+.DS_Store
+
+# Xcode
+DerivedData/
+build/
+*.xcuserdata
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Swift Package Manager
+.swiftpm/
+.build/
+
+# Secrets / local config
+.env
+*.env
+Secrets/
+secrets/
+*.key
+*.pem
+*.p12
+*.mobileprovision
+
+# Database / user data
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+
+# Archives / exports
+*.xcarchive
+ExportOptions.plist
