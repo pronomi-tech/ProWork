@@ -883,6 +883,10 @@
 
 "database.error.lastOpenFailed" = "The last used data file could not be opened. Select or create a new file.";
 "database.error.openFailed" = "The selected data file could not be opened.";
+"database.error.notOpen" = "The data file is not open.";
+"database.error.unableToOpenFile" = "The data file cannot be accessed. The folder permissions may have changed or the file may have been moved. Please pick the file again.";
+"database.error.locked" = "The data file may be in use by another process. Try again in a few seconds.";
+"database.error.diskIO" = "There was a disk access error. Make sure there is enough free space and that the file is writable.";
 "database.error.createFailed" = "The new data file could not be created.";
 "database.error.saveFailed" = "The data file could not be saved:";
 "database.message.changedRelaunching" = "The data file changed. The app is restarting.";

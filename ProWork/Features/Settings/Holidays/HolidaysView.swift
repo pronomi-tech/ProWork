@@ -9,21 +9,18 @@ import SwiftUI
 
 struct HolidaysView: View {
     @EnvironmentObject private var settingsStore: AppSettingsStore
+    @StateObject private var viewModel = HolidaysViewModel()
 
-    @State private var holidays: [Holiday] = []
     @State private var selectedYear: Int = Calendar.current.component(.year, from: Date())
     @State private var isShowingCreate = false
     @State private var editingHoliday: Holiday?
     @State private var confirmation: ProWorkConfirmation?
-    @State private var errorMessage: String?
-
-    private let repository = HolidayRepository()
 
     var body: some View {
         SettingsScreenScaffold(
             title: settingsStore.localized("holidays.title", defaultValue: "Resmi Tatiller"),
             subtitle: settingsStore.localized("holidays.subtitle", defaultValue: "Tatil günlerinde yapılan çalışmalar 'Tatil' zaman tipi olarak ücretlendirilir. 2025–2030 TR tatilleri ön-yüklü gelir; düzenleyebilir, ekleyebilir veya silebilirsiniz."),
-            errorMessage: errorMessage,
+            errorMessage: viewModel.errorMessage,
             toolbar: {
                 Button {
                     isShowingCreate = true
@@ -48,15 +45,19 @@ struct HolidaysView: View {
                 holidayTable
             }
         }
-        .onAppear { load() }
+        .onAppear { viewModel.load() }
         .sheet(isPresented: $isShowingCreate) {
             HolidayFormView(mode: .create) { holiday in
-                addHoliday(holiday)
+                if viewModel.create(holiday) {
+                    isShowingCreate = false
+                }
             }
         }
         .sheet(item: $editingHoliday) { holiday in
             HolidayFormView(mode: .edit(holiday)) { updated in
-                updateHoliday(updated)
+                if viewModel.update(updated) {
+                    editingHoliday = nil
+                }
             }
         }
         .proWorkConfirmationDialog($confirmation)
@@ -86,7 +87,7 @@ struct HolidaysView: View {
     }
 
     private var availableYears: [Int] {
-        let years = Set(holidays.compactMap {
+        let years = Set(viewModel.holidays.compactMap {
             $0.dateString.split(separator: "-").first.flatMap { Int($0) }
         })
         let now = Calendar.current.component(.year, from: Date())
@@ -95,7 +96,7 @@ struct HolidaysView: View {
     }
 
     private var filteredHolidays: [Holiday] {
-        holidays
+        viewModel.holidays
             .filter { $0.dateString.hasPrefix("\(selectedYear)-") }
             .sorted { $0.dateString < $1.dateString }
     }
@@ -178,34 +179,6 @@ struct HolidaysView: View {
 
     // MARK: - Actions
 
-    private func load() {
-        do {
-            holidays = try repository.fetchAll(organizationId: BuiltInOrganizationId.default, includingInactive: true)
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func addHoliday(_ holiday: Holiday) {
-        do {
-            try repository.insert(holiday)
-            isShowingCreate = false
-            load()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func updateHoliday(_ holiday: Holiday) {
-        do {
-            try repository.update(holiday)
-            editingHoliday = nil
-            load()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
     private func askDelete(_ holiday: Holiday) {
         confirmation = ProWorkConfirmation(
             title: settingsStore.localized("holidays.delete.title", defaultValue: "Tatil silinsin mi?"),
@@ -214,16 +187,7 @@ struct HolidaysView: View {
             cancelTitle: settingsStore.localized("holidays.delete.cancel", defaultValue: "Vazgeç"),
             role: .destructive
         ) {
-            delete(holiday)
-        }
-    }
-
-    private func delete(_ holiday: Holiday) {
-        do {
-            try repository.softDelete(id: holiday.id)
-            load()
-        } catch {
-            errorMessage = error.localizedDescription
+            viewModel.softDelete(id: holiday.id)
         }
     }
 }

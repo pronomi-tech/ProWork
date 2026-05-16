@@ -32,6 +32,43 @@ final class TodoBillingOverrideRepository {
         ).first
     }
 
+    /// Birden çok todo için override'ları tek sorguda yükler ve `todoId → override`
+    /// sözlüğü döner. Faturalandırma akışında N+1'i kırmak için kullanılır.
+    func fetch(todoIds: [String]) throws -> [String: TodoBillingOverride] {
+        guard !todoIds.isEmpty else { return [:] }
+
+        var map: [String: TodoBillingOverride] = [:]
+
+        let chunkSize = 500
+        for chunkStart in stride(from: 0, to: todoIds.count, by: chunkSize) {
+            let chunk = Array(todoIds[chunkStart..<min(chunkStart + chunkSize, todoIds.count)])
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let sql = """
+            SELECT
+                id, todoId, overrideType, unitPriceMinor, fixedFeeMinor, currency, note,
+                \(RecordMetadataSQL.columns)
+            FROM todo_billing_overrides
+            WHERE todoId IN (\(placeholders)) AND deletedAt IS NULL;
+            """
+
+            let rows = try database.query(
+                sql,
+                map: { Self.makeOverride(from: $0) },
+                bind: { statement in
+                    for (offset, id) in chunk.enumerated() {
+                        statement.bindText(id, at: Int32(offset + 1))
+                    }
+                }
+            )
+
+            for override in rows {
+                map[override.todoId] = override
+            }
+        }
+
+        return map
+    }
+
     func upsert(_ override: TodoBillingOverride) throws {
         let sql = """
         INSERT INTO todo_billing_overrides (

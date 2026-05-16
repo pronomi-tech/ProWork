@@ -15,28 +15,21 @@ struct PriceListRowsEditView: View {
 
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var settingsStore: AppSettingsStore
+    @StateObject private var viewModel = PriceListRowsEditViewModel()
 
-    @State private var rows: [PriceListRow] = []
-    @State private var categories: [TaskCategory] = []
     @State private var isShowingNewRow = false
     @State private var editingRow: PriceListRow?
     @State private var confirmation: ProWorkConfirmation?
-    @State private var errorMessage: String?
 
     @State private var isShowingQuoteRecipientSheet = false
     @State private var quotePreviewDocument: QuotePreviewDocument?
-
-    private let rowRepository = PriceListRowRepository()
-    private let categoryRepository = TaskCategoryRepository()
-    private let companyProfileRepository = CompanyProfileRepository()
-    private let customerRepository = CustomerRepository()
     private let quoteBuilder = PriceListQuoteBundleBuilder()
     private let quoteRenderer = PriceListQuotePdfRenderer()
 
     var body: some View {
         ProWorkFormShell(
             title: list.name,
-            subtitle: String(format: settingsStore.localized("priceLists.rows.subtitle", defaultValue: "%@ — %d satır"), list.currency, rows.count),
+            subtitle: String(format: settingsStore.localized("priceLists.rows.subtitle", defaultValue: "%@ — %d satır"), list.currency, viewModel.rows.count),
             systemImage: "list.bullet.rectangle.portrait",
             width: 880,
             height: 640,
@@ -49,7 +42,7 @@ struct PriceListRowsEditView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.large)
-                    .disabled(rows.filter(\.isActive).isEmpty)
+                    .disabled(viewModel.rows.filter(\.isActive).isEmpty)
                     .help(settingsStore.localized("priceLists.rows.action.quote.help", defaultValue: "Fiyat listesini kurumsal teklif PDF'i olarak dışa aktar"))
 
                     Button {
@@ -63,7 +56,7 @@ struct PriceListRowsEditView: View {
             }
         ) {
             VStack(alignment: .leading, spacing: 12) {
-                if rows.isEmpty {
+                if viewModel.rows.isEmpty {
                     emptyState
                 } else {
                     rowsTable
@@ -72,16 +65,19 @@ struct PriceListRowsEditView: View {
         } footer: {
             SettingsFormSingleFooter(onPrimary: { dismiss() }, title: settingsStore.localized("common.close", defaultValue: "Kapat"), systemImage: "xmark")
         }
-        .proWorkToastNotifications(errorMessage: errorMessage)
-        .onAppear { load() }
+        .proWorkToastNotifications(errorMessage: viewModel.errorMessage)
+        .onAppear { viewModel.load(priceListId: list.id) }
         .sheet(isPresented: $isShowingNewRow) {
             PriceListRowFormView(
                 mode: .create,
                 priceListId: list.id,
                 listCurrency: list.currency,
-                categories: categories
+                categories: viewModel.categories
             ) { row in
-                addRow(row)
+                if viewModel.add(row, priceListId: list.id) {
+                    isShowingNewRow = false
+                    onChange()
+                }
             }
         }
         .sheet(item: $editingRow) { row in
@@ -89,9 +85,12 @@ struct PriceListRowsEditView: View {
                 mode: .edit(row),
                 priceListId: list.id,
                 listCurrency: list.currency,
-                categories: categories
+                categories: viewModel.categories
             ) { updated in
-                updateRow(updated)
+                if viewModel.update(updated, priceListId: list.id) {
+                    editingRow = nil
+                    onChange()
+                }
             }
         }
         .proWorkConfirmationDialog($confirmation)
@@ -106,7 +105,7 @@ struct PriceListRowsEditView: View {
             )
             PriceListQuoteRecipientSheet(
                 list: list,
-                customers: (try? customerRepository.fetchAll()) ?? [],
+                customers: viewModel.loadCustomers(),
                 suggestedCustomerId: list.ownerType == .customer ? list.ownerId : nil,
                 suggestedQuoteNumber: suggestedQuoteNumber,
                 suggestedSequence: nextSequence
@@ -146,7 +145,7 @@ struct PriceListRowsEditView: View {
             Divider()
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    ForEach(rows) { row in
+                    ForEach(viewModel.rows) { row in
                         rowView(row)
                         Divider()
                     }
@@ -179,7 +178,7 @@ struct PriceListRowsEditView: View {
 
     private func rowView(_ row: PriceListRow) -> some View {
         let categoryName = row.categoryId.flatMap { id in
-            categories.first(where: { $0.id == id })?.name
+            viewModel.categories.first(where: { $0.id == id })?.name
         } ?? settingsStore.localized("priceLists.rows.allCategories", defaultValue: "Tüm kategoriler")
 
         let unitPrice = Money(minorUnits: row.unitPriceMinor, currency: row.currency)
@@ -230,39 +229,6 @@ struct PriceListRowsEditView: View {
 
     // MARK: - Actions
 
-    private func load() {
-        do {
-            let loadedCategories = try categoryRepository.fetchAll()
-            categories = loadedCategories
-            rows = try rowRepository.fetchAll(priceListId: list.id)
-                .sorted(by: rowSortOrder)
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func addRow(_ row: PriceListRow) {
-        do {
-            try rowRepository.insert(row)
-            isShowingNewRow = false
-            load()
-            onChange()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func updateRow(_ row: PriceListRow) {
-        do {
-            try rowRepository.update(row)
-            editingRow = nil
-            load()
-            onChange()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
     private func askDelete(_ row: PriceListRow) {
         confirmation = ProWorkConfirmation(
             title: settingsStore.localized("priceLists.rows.delete.title", defaultValue: "Satır silinsin mi?"),
@@ -271,54 +237,25 @@ struct PriceListRowsEditView: View {
             cancelTitle: settingsStore.localized("priceLists.delete.cancel", defaultValue: "Vazgeç"),
             role: .destructive
         ) {
-            delete(row)
-        }
-    }
-
-    private func delete(_ row: PriceListRow) {
-        do {
-            try rowRepository.softDelete(id: row.id)
-            load()
+            viewModel.softDelete(id: row.id, priceListId: list.id)
             onChange()
-        } catch {
-            errorMessage = error.localizedDescription
         }
-    }
-
-    private func rowSortOrder(_ lhs: PriceListRow, _ rhs: PriceListRow) -> Bool {
-        if lhs.serviceType.sortOrder != rhs.serviceType.sortOrder {
-            return lhs.serviceType.sortOrder < rhs.serviceType.sortOrder
-        }
-        if lhs.timeType.sortOrder != rhs.timeType.sortOrder {
-            return lhs.timeType.sortOrder < rhs.timeType.sortOrder
-        }
-
-        let lhsCategory = lhs.categoryId.flatMap { id in
-            categories.first(where: { $0.id == id })?.name
-        } ?? ""
-        let rhsCategory = rhs.categoryId.flatMap { id in
-            categories.first(where: { $0.id == id })?.name
-        } ?? ""
-
-        return lhsCategory.localizedStandardCompare(rhsCategory) == .orderedAscending
     }
 
     // MARK: - Quote export
 
     private func generateQuote(using result: PriceListQuoteRecipientSheet.Result) {
         do {
-            let companyProfile = try companyProfileRepository.fetch(organizationId: list.organizationId)
-            let customer: Customer? = {
-                if list.ownerType == .customer, let ownerId = list.ownerId {
-                    return try? customerRepository.fetch(id: ownerId)
-                }
-                return nil
-            }()
+            let (companyProfile, customer) = try viewModel.loadQuoteContext(
+                organizationId: list.organizationId,
+                ownerType: list.ownerType,
+                ownerId: list.ownerId
+            )
 
             let bundle = quoteBuilder.build(
                 priceList: list,
-                rows: rows,
-                categories: categories,
+                rows: viewModel.rows,
+                categories: viewModel.categories,
                 recipient: result.recipient,
                 quoteNumber: result.quoteNumber,
                 issueDate: result.issueDate,
@@ -344,11 +281,11 @@ struct PriceListRowsEditView: View {
                         data: data
                     )
                 } catch {
-                    errorMessage = error.localizedDescription
+                    viewModel.errorMessage = error.localizedDescription
                 }
             }
         } catch {
-            errorMessage = error.localizedDescription
+            viewModel.errorMessage = error.localizedDescription
         }
     }
 
@@ -364,7 +301,7 @@ struct PriceListRowsEditView: View {
         do {
             try data.write(to: url)
         } catch {
-            errorMessage = error.localizedDescription
+            viewModel.errorMessage = error.localizedDescription
         }
     }
 

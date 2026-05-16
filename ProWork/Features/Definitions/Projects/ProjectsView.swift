@@ -8,23 +8,13 @@
 import SwiftUI
 
 struct ProjectsView: View {
-    @State private var projects: [ProjectListItem] = []
-    @State private var customers: [Customer] = []
-    @State private var projectCurrencies: [String: String] = [:]
-    @State private var vatLabelsById: [String: String] = [:]
+    @EnvironmentObject private var settingsStore: AppSettingsStore
+    @StateObject private var viewModel = ProjectsViewModel()
 
     @State private var isShowingCreateForm = false
     @State private var editingProject: ProjectListItem?
     @State private var pricingProject: ProjectListItem?
     @State private var confirmation: ProWorkConfirmation?
-    @State private var errorMessage: String?
-    @EnvironmentObject private var settingsStore: AppSettingsStore
-
-    private let projectRepository = ProjectRepository()
-    private let customerRepository = CustomerRepository()
-    private let priceListRepository = PriceListRepository()
-    private let organizationRepository = OrganizationRepository()
-    private let vatRateRepository = VatRateRepository()
 
     var body: some View {
         VStack(alignment: .leading, spacing: ProWorkLayout.scaled(16, using: settingsStore)) {
@@ -33,24 +23,28 @@ struct ProjectsView: View {
         }
         .padding(ProWorkLayout.scaled(24, using: settingsStore))
         .proWorkFrame(minWidth: 920, minHeight: 600)
-        .proWorkToastNotifications(errorMessage: errorMessage)
+        .proWorkToastNotifications(errorMessage: viewModel.errorMessage)
         .onAppear {
-            loadData()
+            viewModel.load(settingsStore: settingsStore)
         }
         .sheet(isPresented: $isShowingCreateForm) {
             ProjectFormView(
                 mode: .create,
-                customers: customers
+                customers: viewModel.customers
             ) { project in
-                createProject(project)
+                if viewModel.create(project, settingsStore: settingsStore) {
+                    isShowingCreateForm = false
+                }
             }
         }
         .sheet(item: $editingProject) { project in
             ProjectFormView(
                 mode: .edit(project),
-                customers: customers
+                customers: viewModel.customers
             ) { updatedProject in
-                updateProject(updatedProject)
+                if viewModel.update(updatedProject, settingsStore: settingsStore) {
+                    editingProject = nil
+                }
             }
         }
         .sheet(item: $pricingProject) { project in
@@ -58,7 +52,7 @@ struct ProjectsView: View {
                 ownerType: .project,
                 ownerId: project.id,
                 ownerLabel: "\(project.customerName) — \(project.name)",
-                defaultCurrency: projectCurrencies[project.id] ?? "TRY"
+                defaultCurrency: viewModel.projectCurrencies[project.id] ?? "TRY"
             )
         }
         .proWorkConfirmationDialog($confirmation)
@@ -84,20 +78,20 @@ struct ProjectsView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(customers.isEmpty)
-            .help(customers.isEmpty ? settingsStore.localized("projects.help.needCustomer", defaultValue: "Önce müşteri eklemelisiniz") : settingsStore.localized("projects.help.new", defaultValue: "Yeni proje ekle"))
+            .disabled(viewModel.customers.isEmpty)
+            .help(viewModel.customers.isEmpty ? settingsStore.localized("projects.help.needCustomer", defaultValue: "Önce müşteri eklemelisiniz") : settingsStore.localized("projects.help.new", defaultValue: "Yeni proje ekle"))
         }
     }
 
     private var projectList: some View {
         ZStack {
-            if customers.isEmpty {
+            if viewModel.customers.isEmpty {
                 emptyState(
                     systemImage: "person.crop.circle.badge.plus",
                     title: settingsStore.localized("projects.empty.needCustomer.title", defaultValue: "Önce müşteri ekleyin"),
                     message: settingsStore.localized("projects.empty.needCustomer.message", defaultValue: "Proje oluşturabilmek için en az bir müşteri kartı gerekir.")
                 )
-            } else if projects.isEmpty {
+            } else if viewModel.projects.isEmpty {
                 emptyState(
                     systemImage: "folder.badge.plus",
                     title: settingsStore.localized("projects.empty.title", defaultValue: "Henüz proje yok"),
@@ -106,10 +100,10 @@ struct ProjectsView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: ProWorkLayout.scaled(12, using: settingsStore)) {
-                        ForEach(projects) { project in
+                        ForEach(viewModel.projects) { project in
                             ProjectRowView(
                                 project: project,
-                                vatLabel: project.vatRateId.flatMap { vatLabelsById[$0] },
+                                vatLabel: project.vatRateId.flatMap { viewModel.vatLabelsById[$0] },
                                 onEdit: {
                                     editingProject = project
                                 },
@@ -127,7 +121,7 @@ struct ProjectsView: View {
         }
         .proWorkFrame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
-    
+
     private func emptyState(
         systemImage: String,
         title: String,
@@ -149,59 +143,6 @@ struct ProjectsView: View {
         .proWorkFrame(maxWidth: 420)
     }
 
-    private func loadData() {
-        do {
-            customers = try customerRepository.fetchAll()
-            projects = try projectRepository.fetchAll()
-            let organizationCurrency = try organizationRepository.fetchDefault()?.masterCurrency ?? "TRY"
-            let priceLists = try priceListRepository.fetchAll(organizationId: BuiltInOrganizationId.default)
-            let vatRates = try vatRateRepository.fetchAll(organizationId: BuiltInOrganizationId.default)
-            projectCurrencies = Dictionary(
-                uniqueKeysWithValues: projects.map { project in
-                    let customer = customers.first(where: { $0.id == project.customerId })
-                    return (
-                        project.id,
-                        PricingCurrencyResolver.resolveProjectCurrency(
-                            projectId: project.id,
-                            customer: customer,
-                            priceLists: priceLists,
-                            organizationCurrency: organizationCurrency
-                        )
-                    )
-                }
-            )
-            vatLabelsById = VatRateLabel.nonDefaultSelectionLabels(
-                rates: vatRates,
-                settingsStore: settingsStore
-            )
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func createProject(_ project: Project) {
-        do {
-            try projectRepository.insert(project)
-            loadData()
-            isShowingCreateForm = false
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func updateProject(_ project: Project) {
-        do {
-            try projectRepository.update(project)
-            loadData()
-            editingProject = nil
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
     private func askDeleteProject(_ project: ProjectListItem) {
         confirmation = ProWorkConfirmation(
             title: settingsStore.localized("projects.delete.title", defaultValue: "Proje silinsin mi?"),
@@ -210,17 +151,7 @@ struct ProjectsView: View {
             cancelTitle: settingsStore.localized("projects.delete.cancel", defaultValue: "Vazgeç"),
             role: .destructive
         ) {
-            deleteProject(project)
-        }
-    }
-
-    private func deleteProject(_ project: ProjectListItem) {
-        do {
-            try projectRepository.delete(id: project.id)
-            loadData()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
+            viewModel.delete(id: project.id, settingsStore: settingsStore)
         }
     }
 }

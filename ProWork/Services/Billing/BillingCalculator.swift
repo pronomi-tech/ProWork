@@ -315,8 +315,15 @@ enum BillingCalculator {
             }
         }()
 
-        // Tutar = saatlik ücret * dakika / 60
-        let amountMinor = isBillable ? (unitPriceMinor * segmentBillableMinutes) / 60 : 0
+        // Tutar = saatlik ücret * dakika / 60.
+        // Decimal aritmetik üzerinden hesaplayıp minor unit'e bankacı yuvarlaması
+        // ile dönüyoruz; integer division kullanılırsa her satırda 1 minor
+        // birime kadar kayıp birikiyor.
+        let amountMinor: Int = {
+            guard isBillable else { return 0 }
+            let unitPrice = Money(minorUnits: unitPriceMinor, currency: currency)
+            return Money.fromHourlyRate(unitPrice, billableMinutes: segmentBillableMinutes).minorUnits
+        }()
 
         // KDV
         let vatResult = isBillable && amountMinor > 0

@@ -87,6 +87,7 @@ final class BillingRunLifecycleService {
     private let computationService: BillingComputationService
     private let exportService: BillingRunExportService
     private let currencyResolver: PricingCurrencyResolver
+    private let settingsRepository: AppSettingsRepository
 
     init(
         organizationId: String? = nil,
@@ -98,7 +99,8 @@ final class BillingRunLifecycleService {
         companyProfileRepository: CompanyProfileRepository? = nil,
         computationService: BillingComputationService? = nil,
         exportService: BillingRunExportService? = nil,
-        currencyResolver: PricingCurrencyResolver? = nil
+        currencyResolver: PricingCurrencyResolver? = nil,
+        settingsRepository: AppSettingsRepository? = nil
     ) {
         self.organizationId = organizationId ?? BuiltInOrganizationId.default
         self.userId = userId ?? BuiltInUserId.defaultOwner
@@ -110,6 +112,7 @@ final class BillingRunLifecycleService {
         self.computationService = computationService ?? BillingComputationService()
         self.exportService = exportService ?? BillingRunExportService()
         self.currencyResolver = currencyResolver ?? PricingCurrencyResolver()
+        self.settingsRepository = settingsRepository ?? AppSettingsRepository()
     }
 
     func fetchAllRuns() throws -> [BillingReportRun] {
@@ -346,6 +349,13 @@ final class BillingRunLifecycleService {
         bundle.run.finalizedAt = Date()
         bundle.run.finalizedByUserId = userId
         bundle.run.invoiceNumber = invoiceNumber?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? bundle.run.invoiceNumber ?? suggestedInvoiceNumber(for: bundle.run)
+
+        // Belge numarası finalize anında bir kez atanır; yeniden finalize çağrılırsa
+        // (cancel sonrası gibi) mevcut numara korunur, yeni sayaç tüketilmez.
+        if bundle.run.documentNumber == nil {
+            let year = yearComponent(for: bundle.run.finalizedAt ?? Date())
+            bundle.run.documentNumber = try consumeNextBillingDocumentNumber(year: year)
+        }
         if bundle.run.dueDate == nil {
             let paymentTermsDays = bundle.companyProfile?.paymentTermsDays ?? 30
             let dueDate = Calendar.current.date(byAdding: .day, value: paymentTermsDays, to: bundle.run.finalizedAt ?? Date())
@@ -560,6 +570,28 @@ final class BillingRunLifecycleService {
     private func suggestedInvoiceNumber(for run: BillingReportRun) -> String {
         let stamp = Self.invoiceFormatter.string(from: Date())
         return "PRW-\(stamp)-\(run.customerId.prefix(4).uppercased())"
+    }
+
+    private func yearComponent(for date: Date) -> Int {
+        AppCalendar.istanbul.component(.year, from: date)
+    }
+
+    /// Yıl bazlı belge numarası sayacını tüketir ve "HD-YYYY-NNNNNN" formatında
+    /// dizgi döner. Atomic değil: ayrı bir process aynı anda finalize ederse
+    /// sayaçlar yarışabilir. Şimdilik kabul edilebilir; tek kullanıcılı masaüstü
+    /// uygulamasında pratik bir risk yok.
+    private func consumeNextBillingDocumentNumber(year: Int) throws -> String {
+        let key = String(year)
+        var current = try settingsRepository.fetch().billingDocumentSequenceByYear
+        let next = (current[key] ?? 0) + 1
+        current[key] = next
+
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(current)
+        let json = String(decoding: data, as: UTF8.self)
+        try settingsRepository.update(key: "billingDocumentSequenceByYear", value: json)
+
+        return String(format: "HD-%04d-%06d", year, next)
     }
 
     private func summarize(lines: [BillingReportLine], fallbackCurrency: String) -> (subtotalMinor: Int, vatMinor: Int, totalMinor: Int, currency: String) {

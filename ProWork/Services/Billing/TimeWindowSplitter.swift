@@ -176,10 +176,8 @@ enum TimeWindowSplitter {
 
     // MARK: - Calendar
 
-    static let istanbulCalendar: Calendar = {
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = TimeZone(identifier: "Europe/Istanbul") ?? .current
-        cal.locale = Locale(identifier: "tr_TR")
-        return cal
-    }()
+    /// Tek otoriteli kaynak `AppCalendar.istanbul`; mevcut caller'ları
+    /// kırmamak için bu alias korunuyor. Yeni kod doğrudan `AppCalendar`
+    /// üzerinden referans vermeli.
+    static var istanbulCalendar: Calendar { AppCalendar.istanbul }
 }

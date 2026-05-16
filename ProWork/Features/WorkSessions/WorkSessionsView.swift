@@ -10,20 +10,13 @@ import Combine
 
 struct WorkSessionsView: View {
     @EnvironmentObject private var settingsStore: AppSettingsStore
-
-    @State private var sessions: [WorkSessionListItem] = []
-    @State private var todos: [TodoListItem] = []
-    @State private var customers: [Customer] = []
-    @State private var projects: [ProjectListItem] = []
-    @State private var categories: [TaskCategory] = []
-    @State private var statuses: [TodoStatus] = []
+    @StateObject private var viewModel = WorkSessionsViewModel()
 
     @State private var isShowingCreateForm = false
     @State private var editingSession: WorkSessionListItem?
 
     @State private var pendingWorkStart: PendingWorkStart?
     @State private var confirmation: ProWorkConfirmation?
-    @State private var errorMessage: String?
     @State private var now: Date = Date()
 
     // Filtreler
@@ -36,13 +29,6 @@ struct WorkSessionsView: View {
     @State private var filterStartDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var filterEndDate: Date = Date()
     @State private var isShowingFilters: Bool = false
-
-    private let sessionRepository = TodoTimeSessionRepository()
-    private let todoRepository = TodoRepository()
-    private let customerRepository = CustomerRepository()
-    private let projectRepository = ProjectRepository()
-    private let categoryRepository = TaskCategoryRepository()
-    private let statusRepository = TodoStatusRepository()
 
     private let timer = Timer.publish(
         every: 30,
@@ -67,12 +53,12 @@ struct WorkSessionsView: View {
         .padding(ProWorkLayout.scaled(24, using: settingsStore))
         .proWorkFrame(minWidth: 760, minHeight: 760)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .proWorkToastNotifications(errorMessage: errorMessage)
+        .proWorkToastNotifications(errorMessage: viewModel.errorMessage)
         .onAppear {
-            loadData()
+            viewModel.loadData()
         }
         .onReceive(timer) { value in
-            guard sessions.contains(where: { $0.endedAt == nil }) else {
+            guard viewModel.sessions.contains(where: { $0.endedAt == nil }) else {
                 return
             }
 
@@ -81,47 +67,49 @@ struct WorkSessionsView: View {
         .sheet(isPresented: $isShowingCreateForm) {
             WorkSessionFormView(
                 mode: .create,
-                todos: todos,
-                customers: customers,
-                projects: projects,
-                categories: categories,
-                statuses: statuses,
-                onTodosChanged: { updatedTodos in
-                    todos = updatedTodos
+                todos: viewModel.todos,
+                customers: viewModel.customers,
+                projects: viewModel.projects,
+                categories: viewModel.categories,
+                statuses: viewModel.statuses,
+                onTodosChanged: { _ in
+                    viewModel.loadData()
                 }
             ) { _, todoId, startedAt, endedAt, note, _ in
-                createManualSession(
+                if viewModel.createManualSession(
                     todoId: todoId,
                     startedAt: startedAt,
                     endedAt: endedAt,
                     note: note
-                )
+                ) {
+                    isShowingCreateForm = false
+                }
             }
         }
         .sheet(item: $editingSession) { session in
             WorkSessionFormView(
                 mode: .edit(session),
-                todos: todos,
-                customers: customers,
-                projects: projects,
-                categories: categories,
-                statuses: statuses,
-                onTodosChanged: { updatedTodos in
-                    todos = updatedTodos
+                todos: viewModel.todos,
+                customers: viewModel.customers,
+                projects: viewModel.projects,
+                categories: viewModel.categories,
+                statuses: viewModel.statuses,
+                onTodosChanged: { _ in
+                    viewModel.loadData()
                 }
             ) { sessionId, todoId, startedAt, endedAt, note, isManual in
-                guard let sessionId else {
-                    return
-                }
+                guard let sessionId else { return }
 
-                updateSession(
+                if viewModel.updateSession(
                     id: sessionId,
                     todoId: todoId,
                     startedAt: startedAt,
                     endedAt: endedAt,
                     note: note,
                     isManual: isManual
-                )
+                ) {
+                    editingSession = nil
+                }
             }
         }
         .proWorkConfirmationDialog($confirmation)
@@ -130,7 +118,7 @@ struct WorkSessionsView: View {
     // MARK: - Filtered Sessions
 
     private var filteredSessions: [WorkSessionListItem] {
-        sessions.filter { session in
+        viewModel.sessions.filter { session in
             matchesRange(session) &&
             matchesCustomer(session) &&
             matchesProject(session) &&
@@ -150,13 +138,13 @@ struct WorkSessionsView: View {
 
     private func matchesCustomer(_ session: WorkSessionListItem) -> Bool {
         guard !filterCustomerId.isEmpty else { return true }
-        guard let customerName = customers.first(where: { $0.id == filterCustomerId })?.name else { return false }
+        guard let customerName = viewModel.customers.first(where: { $0.id == filterCustomerId })?.name else { return false }
         return session.customerName == customerName
     }
 
     private func matchesProject(_ session: WorkSessionListItem) -> Bool {
         guard !filterProjectId.isEmpty else { return true }
-        guard let projectName = projects.first(where: { $0.id == filterProjectId })?.name else { return false }
+        guard let projectName = viewModel.projects.first(where: { $0.id == filterProjectId })?.name else { return false }
         return session.projectName == projectName
     }
 
@@ -215,8 +203,8 @@ struct WorkSessionsView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(categories.isEmpty)
-            .help(categories.isEmpty ? settingsStore.localized("todos.help.needCategory", defaultValue: "Önce görev kategorisi eklemelisiniz") : settingsStore.localized("workSessions.help.addManual", defaultValue: "Manuel çalışma ekle"))
+            .disabled(viewModel.categories.isEmpty)
+            .help(viewModel.categories.isEmpty ? settingsStore.localized("todos.help.needCategory", defaultValue: "Önce görev kategorisi eklemelisiniz") : settingsStore.localized("workSessions.help.addManual", defaultValue: "Manuel çalışma ekle"))
         }
     }
 
@@ -282,13 +270,13 @@ struct WorkSessionsView: View {
 
     private var customerFilterOptions: [FilterOption] {
         [FilterOption(id: "", title: settingsStore.localized("dateRange.all", defaultValue: "Tümü"))] +
-        customers.map { FilterOption(id: $0.id, title: $0.name) }
+        viewModel.customers.map { FilterOption(id: $0.id, title: $0.name) }
     }
 
     private var projectFilterOptions: [FilterOption] {
         let filtered = filterCustomerId.isEmpty
-            ? projects
-            : projects.filter { $0.customerId == filterCustomerId }
+            ? viewModel.projects
+            : viewModel.projects.filter { $0.customerId == filterCustomerId }
         return [FilterOption(id: "", title: settingsStore.localized("dateRange.all", defaultValue: "Tümü"))] +
             filtered.map { FilterOption(id: $0.id, title: $0.name) }
     }
@@ -318,7 +306,7 @@ struct WorkSessionsView: View {
                         items: customerFilterOptions,
                         selectedId: $filterCustomerId,
                         isDisabled: false,
-                        showsSearch: customers.count > 8,
+                        showsSearch: viewModel.customers.count > 8,
                         systemImage: "person.2",
                         itemTitle: { $0.title },
                         matchesSearch: { item, text in item.title.localizedCaseInsensitiveContains(text) }
@@ -602,7 +590,7 @@ struct WorkSessionsView: View {
         HStack(spacing: ProWorkLayout.scaled(6, using: settingsStore)) {
             if session.endedAt == nil {
                 Button {
-                    stopWork(for: session)
+                    viewModel.stopWork(for: session)
                 } label: {
                     Image(systemName: "stop.circle.fill")
                         .proWorkFont(size: 16)
@@ -737,7 +725,7 @@ struct WorkSessionsView: View {
     }
 
     private func hasActiveSession(for todoId: String) -> Bool {
-        sessions.contains { $0.todoId == todoId && $0.endedAt == nil }
+        viewModel.sessions.contains { $0.todoId == todoId && $0.endedAt == nil }
     }
 
     @ViewBuilder
@@ -777,158 +765,45 @@ struct WorkSessionsView: View {
         filterStatus = .all
     }
 
-    // MARK: - Data
-
-    private func loadData() {
-        do {
-            sessions = try sessionRepository.fetchAllListItems()
-            todos = try todoRepository.fetchAll()
-            customers = try customerRepository.fetchAll()
-            projects = try projectRepository.fetchAll()
-            categories = try categoryRepository.fetchAll()
-            statuses = try statusRepository.fetchAll()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func createManualSession(
-        todoId: String,
-        startedAt: Date,
-        endedAt: Date,
-        note: String?
-    ) {
-        do {
-            try sessionRepository.insertManualSession(
-                todoId: todoId,
-                startedAt: startedAt,
-                endedAt: endedAt,
-                note: note
-            )
-
-            loadData()
-            isShowingCreateForm = false
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func updateSession(
-        id: String,
-        todoId: String,
-        startedAt: Date,
-        endedAt: Date,
-        note: String?,
-        isManual: Bool
-    ) {
-        do {
-            try sessionRepository.updateSession(
-                id: id,
-                todoId: todoId,
-                startedAt: startedAt,
-                endedAt: endedAt,
-                note: note,
-                isManual: isManual
-            )
-
-            loadData()
-            editingSession = nil
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
+    // MARK: - UI orkestrasyonu
 
     private func requestStartWork(for session: WorkSessionListItem) {
-        guard session.statusStartsTimer else {
+        guard session.statusStartsTimer else { return }
+
+        if let active = viewModel.activeSessionConflicting(with: session.todoId) {
+            pendingWorkStart = PendingWorkStart(
+                todoId: session.todoId,
+                targetStatusId: session.statusId,
+                activeSessionId: active.session.id,
+                activeTodoTitle: active.todoTitle
+            )
+
+            confirmation = ProWorkConfirmation(
+                title: settingsStore.localized("workSessions.confirm.activeExists.title", defaultValue: "Devam eden çalışma var"),
+                message: String(format: settingsStore.localized("workSessions.confirm.activeExists.message", defaultValue: "Şu anda “%@” üzerinde çalışma devam ediyor. Bu çalışmayı durdurup yeni çalışmayı başlatmak ister misiniz?"), active.todoTitle),
+                confirmTitle: settingsStore.localized("workSessions.confirm.activeExists.confirm", defaultValue: "Durdur ve Başlat"),
+                cancelTitle: settingsStore.localized("workSessions.confirm.activeExists.cancel", defaultValue: "Mevcut Çalışma Devam Etsin")
+            ) {
+                confirmPendingWorkStart()
+            }
             return
         }
 
-        do {
-            if let active = try sessionRepository.fetchActiveSession(),
-               active.session.todoId != session.todoId {
-                pendingWorkStart = PendingWorkStart(
-                    todoId: session.todoId,
-                    targetStatusId: session.statusId,
-                    activeSessionId: active.session.id,
-                    activeTodoTitle: active.todoTitle
-                )
-
-                confirmation = ProWorkConfirmation(
-                    title: settingsStore.localized("workSessions.confirm.activeExists.title", defaultValue: "Devam eden çalışma var"),
-                    message: String(format: settingsStore.localized("workSessions.confirm.activeExists.message", defaultValue: "Şu anda “%@” üzerinde çalışma devam ediyor. Bu çalışmayı durdurup yeni çalışmayı başlatmak ister misiniz?"), active.todoTitle),
-                    confirmTitle: settingsStore.localized("workSessions.confirm.activeExists.confirm", defaultValue: "Durdur ve Başlat"),
-                    cancelTitle: settingsStore.localized("workSessions.confirm.activeExists.cancel", defaultValue: "Mevcut Çalışma Devam Etsin")
-                ) {
-                    confirmPendingWorkStart()
-                }
-
-                return
-            }
-
-            try startWork(
-                todoId: session.todoId,
-                targetStatusId: session.statusId,
-                stoppingActiveSessionId: nil
-            )
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        viewModel.startWork(
+            todoId: session.todoId,
+            targetStatusId: session.statusId,
+            stoppingActiveSessionId: nil
+        )
     }
 
     private func confirmPendingWorkStart() {
-        guard let pendingWorkStart else {
-            return
-        }
-
-        do {
-            try startWork(
-                todoId: pendingWorkStart.todoId,
-                targetStatusId: pendingWorkStart.targetStatusId,
-                stoppingActiveSessionId: pendingWorkStart.activeSessionId
-            )
-
-            self.pendingWorkStart = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func startWork(
-        todoId: String,
-        targetStatusId: String,
-        stoppingActiveSessionId: String?
-    ) throws {
-        if let stoppingActiveSessionId {
-            try sessionRepository.stopSession(
-                sessionId: stoppingActiveSessionId,
-                endStatusId: targetStatusId
-            )
-        }
-
-        try sessionRepository.startSession(
-            todoId: todoId,
-            startStatusId: targetStatusId
+        guard let pendingWorkStart else { return }
+        viewModel.startWork(
+            todoId: pendingWorkStart.todoId,
+            targetStatusId: pendingWorkStart.targetStatusId,
+            stoppingActiveSessionId: pendingWorkStart.activeSessionId
         )
-
-        loadData()
-        errorMessage = nil
-    }
-
-    private func stopWork(for session: WorkSessionListItem) {
-        do {
-            try sessionRepository.stopOpenSession(
-                todoId: session.todoId,
-                endStatusId: session.statusId
-            )
-
-            loadData()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        self.pendingWorkStart = nil
     }
 
     private func askDeleteSession(_ session: WorkSessionListItem) {
@@ -939,17 +814,7 @@ struct WorkSessionsView: View {
             cancelTitle: settingsStore.localized("workSessions.delete.cancel", defaultValue: "Vazgeç"),
             role: .destructive
         ) {
-            deleteSession(session)
-        }
-    }
-
-    private func deleteSession(_ session: WorkSessionListItem) {
-        do {
-            try sessionRepository.delete(id: session.id)
-            loadData()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
+            viewModel.deleteSession(id: session.id)
         }
     }
 }

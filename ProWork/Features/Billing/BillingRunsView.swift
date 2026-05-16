@@ -19,27 +19,38 @@ private struct BillingSummaryMoneyMetric: Identifiable {
 
 struct BillingRunsView: View {
     @EnvironmentObject private var settingsStore: AppSettingsStore
+    @StateObject private var viewModel = BillingRunsViewModel()
 
-    @State private var runs: [BillingReportRun] = []
-    @State private var customers: [Customer] = []
-    @State private var customerCurrencies: [String: String] = [:]
     @State private var selectedRunId: String?
-    @State private var selectedBundle: BillingRunBundle?
     @State private var isShowingCreateSheet = false
     @State private var paymentSheetContext: PaymentSheetContext?
     @State private var editingPayment: Payment?
     @State private var documentInfoEditContext: DocumentInfoEditContext?
     @State private var confirmation: ProWorkConfirmation?
-    @State private var errorMessage: String?
-    @State private var savedNotice: String?
     @State private var previewDocument: PdfPreviewDocument?
     @State private var isPreparingPdfPreview = false
 
-    private let lifecycleService = BillingRunLifecycleService()
-    private let exportService = BillingRunExportService()
-    private let customerRepository = CustomerRepository()
-    private let priceListRepository = PriceListRepository()
-    private let organizationRepository = OrganizationRepository()
+    private var lifecycleService: BillingRunLifecycleService { viewModel.lifecycleService }
+    private var exportService: BillingRunExportService { viewModel.exportService }
+
+    // ViewModel'a proxy — view body 80+ noktada bu adları kullanıyor.
+    // ViewModel @StateObject olduğu için yeniden render'lar @Published üzerinden
+    // tetiklenir; bu computed proxy'ler sadece okuma kolaylığı sağlar.
+    private var runs: [BillingReportRun] { viewModel.runs }
+    private var customers: [Customer] { viewModel.customers }
+    private var customerCurrencies: [String: String] { viewModel.customerCurrencies }
+    private var selectedBundle: BillingRunBundle? {
+        get { viewModel.selectedBundle }
+        nonmutating set { viewModel.selectedBundle = newValue }
+    }
+    private var errorMessage: String? {
+        get { viewModel.errorMessage }
+        nonmutating set { viewModel.errorMessage = newValue }
+    }
+    private var savedNotice: String? {
+        get { viewModel.savedNotice }
+        nonmutating set { viewModel.savedNotice = newValue }
+    }
 
     private func localized(_ key: String, defaultValue: String) -> String {
         settingsStore.localized(key, defaultValue: defaultValue)
@@ -644,7 +655,7 @@ struct BillingRunsView: View {
     }
 
     private func convertedCompanyCurrencyMoney(for value: Money, in bundle: BillingRunBundle) -> Money? {
-        let targetCurrency = ((try? organizationRepository.fetch(id: bundle.run.organizationId))?.masterCurrency ?? "TRY").uppercased()
+        let targetCurrency = viewModel.masterCurrency(for: bundle.run.organizationId)
         guard value.currency.uppercased() != targetCurrency else {
             return nil
         }
@@ -720,38 +731,14 @@ struct BillingRunsView: View {
     }
 
     private func load() {
-        do {
-            customers = try customerRepository.fetchAll()
-            let organizationCurrency = try organizationRepository.fetchDefault()?.masterCurrency ?? "TRY"
-            let priceLists = try priceListRepository.fetchAll(organizationId: BuiltInOrganizationId.default)
-            customerCurrencies = Dictionary(
-                uniqueKeysWithValues: customers.map { customer in
-                    (
-                        customer.id,
-                        PricingCurrencyResolver.resolveCustomerCurrency(
-                            customer: customer,
-                            priceLists: priceLists,
-                            organizationCurrency: organizationCurrency
-                        )
-                    )
-                }
-            )
-            runs = try lifecycleService.fetchAllRuns()
-
-            if selectedRunId == nil {
-                selectedRunId = runs.first?.id
+        viewModel.load(reselect: selectedRunId ?? viewModel.runs.first?.id)
+        if let bundleId = viewModel.selectedBundle?.run.id {
+            selectedRunId = bundleId
+        } else if !viewModel.runs.contains(where: { $0.id == selectedRunId }) {
+            selectedRunId = viewModel.runs.first?.id
+            if let newId = selectedRunId {
+                viewModel.selectRun(id: newId)
             }
-
-            if let selectedRunId, runs.contains(where: { $0.id == selectedRunId }) {
-                setSelectedBundle(try lifecycleService.loadBundle(runId: selectedRunId))
-            } else {
-                setSelectedBundle(nil)
-                self.selectedRunId = nil
-            }
-
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
         }
     }
 
@@ -1116,14 +1103,8 @@ private struct BillingRunCreateSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var settingsStore: AppSettingsStore
+    @StateObject private var viewModel = BillingDraftPickerViewModel()
 
-    @State private var availableCustomers: [Customer] = []
-    @State private var availableCustomerCurrencies: [String: String] = [:]
-    @State private var preview: BillingDraftPreview?
-    @State private var previewErrorMessage: String?
-    @State private var previewNoticeMessage: String?
-    @State private var isLoadingPreview = false
-    @State private var isImportingTodayRates = false
     @State private var selectedCustomerId: String = ""
     @State private var selectedLineKeys: Set<String> = []
     @State private var title: String = ""
@@ -1131,12 +1112,21 @@ private struct BillingRunCreateSheet: View {
     @State private var customStart: Date = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: Date())) ?? Date()
     @State private var customEnd: Date = Date()
 
-    private let lifecycleService = BillingRunLifecycleService()
-    private let organizationRepository = OrganizationRepository()
-    private let customerRepository = CustomerRepository()
-    private let priceListRepository = PriceListRepository()
-    private let tcmbSyncService = TCMBExchangeRateSyncService()
-    private let globalSyncService = GlobalExchangeRateSyncService()
+    // ViewModel'a proxy — sheet body 30+ noktada bu adları kullanıyor.
+    private var availableCustomers: [Customer] { viewModel.availableCustomers }
+    private var availableCustomerCurrencies: [String: String] { viewModel.availableCustomerCurrencies }
+    private var preview: BillingDraftPreview? { viewModel.preview }
+    private var isLoadingPreview: Bool { viewModel.isLoadingPreview }
+    private var isImportingTodayRates: Bool { viewModel.isImportingTodayRates }
+    private var previewErrorMessage: String? {
+        get { viewModel.previewErrorMessage }
+        nonmutating set { viewModel.previewErrorMessage = newValue }
+    }
+    private var previewNoticeMessage: String? {
+        get { viewModel.previewNoticeMessage }
+        nonmutating set { viewModel.previewNoticeMessage = newValue }
+    }
+    private var lifecycleService: BillingRunLifecycleService { viewModel.lifecycleService }
 
     private func localized(_ key: String, defaultValue: String) -> String {
         settingsStore.localized(key, defaultValue: defaultValue)
@@ -1504,29 +1494,22 @@ private struct BillingRunCreateSheet: View {
 
     private func loadPreview() {
         guard !selectedCustomerId.isEmpty else {
-            preview = nil
+            viewModel.clearPreview()
             selectedLineKeys.removeAll()
-            previewErrorMessage = nil
             return
         }
 
-        isLoadingPreview = true
-        do {
-            let loadedPreview = try lifecycleService.previewDraft(
-                customerId: selectedCustomerId,
-                periodStart: effectiveStartDate,
-                periodEnd: inclusiveEndDate
-            )
-            preview = loadedPreview
-            selectedLineKeys = Set(loadedPreview.availableLines.map(\.selectionKey))
-            previewErrorMessage = nil
-            previewNoticeMessage = nil
-        } catch {
-            preview = nil
+        viewModel.loadPreview(
+            customerId: selectedCustomerId,
+            periodStart: effectiveStartDate,
+            periodEnd: inclusiveEndDate
+        )
+
+        if let loaded = viewModel.preview {
+            selectedLineKeys = Set(loaded.availableLines.map(\.selectionKey))
+        } else {
             selectedLineKeys.removeAll()
-            previewErrorMessage = error.localizedDescription
         }
-        isLoadingPreview = false
     }
 
     private var selectablePreviewLines: [BillingDraftPreviewLine] {
@@ -1563,56 +1546,28 @@ private struct BillingRunCreateSheet: View {
     }
 
     private func loadCustomers() {
-        do {
-            let loadedCustomers = try customerRepository.fetchAll()
-            let organizationCurrency = try organizationRepository.fetchDefault()?.masterCurrency ?? "TRY"
-            let priceLists = try priceListRepository.fetchAll(organizationId: BuiltInOrganizationId.default)
+        viewModel.loadCustomers(fallback: customers, fallbackCurrencies: customerCurrencies)
 
-            availableCustomers = loadedCustomers
-            availableCustomerCurrencies = Dictionary(
-                uniqueKeysWithValues: loadedCustomers.map { customer in
-                    (
-                        customer.id,
-                        PricingCurrencyResolver.resolveCustomerCurrency(
-                            customer: customer,
-                            priceLists: priceLists,
-                            organizationCurrency: organizationCurrency
-                        )
-                    )
-                }
-            )
+        let loaded = viewModel.availableCustomers
+        let availableIds = Set(loaded.map(\.id))
+        if selectedCustomerId.isEmpty || !availableIds.contains(selectedCustomerId) {
+            selectedCustomerId = loaded.first?.id ?? ""
+        } else {
+            loadPreview()
+        }
 
-            let availableIds = Set(loadedCustomers.map(\.id))
-            if selectedCustomerId.isEmpty || !availableIds.contains(selectedCustomerId) {
-                selectedCustomerId = loadedCustomers.first?.id ?? ""
-            } else {
-                loadPreview()
-            }
-
-            if loadedCustomers.isEmpty {
-                preview = nil
-                selectedLineKeys.removeAll()
-                previewErrorMessage = nil
-            }
-        } catch {
-            availableCustomers = customers
-            availableCustomerCurrencies = customerCurrencies
-            previewErrorMessage = error.localizedDescription
-            if selectedCustomerId.isEmpty {
-                selectedCustomerId = customers.first?.id ?? ""
-            } else {
-                loadPreview()
-            }
+        if loaded.isEmpty {
+            viewModel.clearPreview()
+            selectedLineKeys.removeAll()
         }
     }
 
     private var selectedTotalInMasterState: MasterTotalState {
+        let masterCurrency = viewModel.masterCurrency()
         guard !selectedLineMonies.isEmpty else {
-            let masterCurrency = (try? organizationRepository.fetchDefault())?.masterCurrency ?? "TRY"
             return .ready(ProWorkFormatters.money(Money.zero(masterCurrency)))
         }
 
-        let masterCurrency = (try? organizationRepository.fetchDefault())?.masterCurrency ?? "TRY"
         let converter = CurrencyConverter(
             organizationId: BuiltInOrganizationId.default,
             masterCurrency: masterCurrency,
@@ -1631,61 +1586,17 @@ private struct BillingRunCreateSheet: View {
     }
 
     private func importTodayRatesForPreview() {
-        previewErrorMessage = nil
-        previewNoticeMessage = nil
-        isImportingTodayRates = true
         let preferredSource = settingsStore.settings.preferredExchangeRateSource
+        let currencies = previewRequiredCurrencyCodes
 
         Task { @MainActor in
-            defer { isImportingTodayRates = false }
-
-            do {
-                let (source, result) = try await syncTodayRatesWithFallback(preferredSource: preferredSource)
+            if let outcome = await viewModel.importTodayRates(
+                currencies: currencies,
+                preferredSource: preferredSource
+            ) {
                 loadPreview()
-                previewNoticeMessage = makeTodayRateNotice(from: result, source: source)
-            } catch {
-                previewErrorMessage = error.localizedDescription
+                viewModel.previewNoticeMessage = makeTodayRateNotice(from: outcome.result, source: outcome.source)
             }
-        }
-    }
-
-    private func syncTodayRatesWithFallback(
-        preferredSource: ExchangeRateAutoSource
-    ) async throws -> (ExchangeRateAutoSource, TCMBExchangeRateSyncResult) {
-        let fallbackSource: ExchangeRateAutoSource = preferredSource == .tcmb ? .global : .tcmb
-
-        do {
-            let result = try await syncTodayRates(for: preferredSource)
-            if result.importedDayCount > 0 {
-                return (preferredSource, result)
-            }
-        } catch let primaryError {
-            do {
-                let fallbackResult = try await syncTodayRates(for: fallbackSource)
-                return (fallbackSource, fallbackResult)
-            } catch let fallbackError {
-                throw CompositeRateImportError(
-                    primarySource: preferredSource,
-                    primaryMessage: primaryError.localizedDescription,
-                    fallbackSource: fallbackSource,
-                    fallbackMessage: fallbackError.localizedDescription
-                )
-            }
-        }
-
-        let fallbackResult = try await syncTodayRates(for: fallbackSource)
-        return (fallbackSource, fallbackResult)
-    }
-
-    private func syncTodayRates(
-        for source: ExchangeRateAutoSource
-    ) async throws -> TCMBExchangeRateSyncResult {
-        let currencies = previewRequiredCurrencyCodes
-        switch source {
-        case .tcmb:
-            return try await tcmbSyncService.sync(day: Date(), currencies: currencies)
-        case .global:
-            return try await globalSyncService.sync(day: Date(), currencies: currencies)
         }
     }
 
@@ -1707,7 +1618,7 @@ private struct BillingRunCreateSheet: View {
     }
 
     private var previewRequiredCurrencyCodes: [String] {
-        let masterCurrency = ((try? organizationRepository.fetchDefault())?.masterCurrency ?? "TRY").uppercased()
+        let masterCurrency = viewModel.masterCurrency()
         var currencies = Set(
             selectedLineMonies
                 .map(\.currency)
@@ -1744,25 +1655,7 @@ private struct BillingRunCreateSheet: View {
         case missingRate
     }
 
-    private struct CompositeRateImportError: LocalizedError {
-        let primarySource: ExchangeRateAutoSource
-        let primaryMessage: String
-        let fallbackSource: ExchangeRateAutoSource
-        let fallbackMessage: String
-
-        var errorDescription: String? {
-            String(
-                format: ProWorkLocalizer.shared.string(
-                    "billing.error.rateImportFailed",
-                    defaultValue: "%@ başarısız: %@\n%@ başarısız: %@"
-                ),
-                primarySource.title,
-                primaryMessage,
-                fallbackSource.title,
-                fallbackMessage
-            )
-        }
-    }
+    // CompositeRateImportError BillingDraftPickerViewModel.swift'e taşındı.
 }
 
 private struct BillingRunDocumentInfoSheet: View {

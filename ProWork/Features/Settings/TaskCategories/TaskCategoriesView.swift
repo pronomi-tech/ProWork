@@ -8,22 +8,18 @@
 import SwiftUI
 
 struct TaskCategoriesView: View {
-    @State private var categories: [TaskCategory] = []
-    @State private var vatLabelsById: [String: String] = [:]
+    @EnvironmentObject private var settingsStore: AppSettingsStore
+    @StateObject private var viewModel = TaskCategoriesViewModel()
+
     @State private var isShowingCreateForm = false
     @State private var editingCategory: TaskCategory?
     @State private var confirmation: ProWorkConfirmation?
-    @State private var errorMessage: String?
-    @EnvironmentObject private var settingsStore: AppSettingsStore
-
-    private let repository = TaskCategoryRepository()
-    private let vatRateRepository = VatRateRepository()
 
     var body: some View {
         SettingsScreenScaffold(
             title: settingsStore.localized("taskCategories.title", defaultValue: "Görev Kategorileri"),
             subtitle: settingsStore.localized("taskCategories.subtitle", defaultValue: "Todo, zaman kaydı ve raporlarda kullanılacak görev kategorilerini yönetin."),
-            errorMessage: errorMessage,
+            errorMessage: viewModel.errorMessage,
             toolbar: {
                 Button {
                     isShowingCreateForm = true
@@ -37,16 +33,20 @@ struct TaskCategoriesView: View {
             categoryTable
         }
         .onAppear {
-            loadCategories()
+            viewModel.load(settingsStore: settingsStore)
         }
         .sheet(isPresented: $isShowingCreateForm) {
             TaskCategoryFormView(mode: .create) { category in
-                createCategory(category)
+                if viewModel.create(category, settingsStore: settingsStore) {
+                    isShowingCreateForm = false
+                }
             }
         }
         .sheet(item: $editingCategory) { category in
             TaskCategoryFormView(mode: .edit(category)) { updatedCategory in
-                updateCategory(updatedCategory)
+                if viewModel.update(updatedCategory, settingsStore: settingsStore) {
+                    editingCategory = nil
+                }
             }
         }
         .proWorkConfirmationDialog($confirmation)
@@ -58,15 +58,15 @@ struct TaskCategoriesView: View {
 
             Divider()
 
-            if categories.isEmpty {
+            if viewModel.categories.isEmpty {
                 emptyState
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(categories) { category in
+                        ForEach(viewModel.categories) { category in
                             TaskCategoryCompactRowView(
                                 category: category,
-                                vatLabel: category.vatRateId.flatMap { vatLabelsById[$0] },
+                                vatLabel: category.vatRateId.flatMap { viewModel.vatLabelsById[$0] },
                                 onEdit: {
                                     editingCategory = category
                                 },
@@ -126,46 +126,8 @@ struct TaskCategoriesView: View {
         .proWorkFrame(minHeight: 220, maxWidth: .infinity)
     }
 
-    private func loadCategories() {
-        do {
-            categories = try repository.fetchAll()
-            let vatRates = try vatRateRepository.fetchAll(organizationId: BuiltInOrganizationId.default)
-            vatLabelsById = VatRateLabel.nonDefaultSelectionLabels(
-                rates: vatRates,
-                settingsStore: settingsStore
-            )
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func createCategory(_ category: TaskCategory) {
-        do {
-            try repository.insert(category)
-            loadCategories()
-            isShowingCreateForm = false
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func updateCategory(_ category: TaskCategory) {
-        do {
-            try repository.update(category)
-            loadCategories()
-            editingCategory = nil
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
     private func askDeleteCategory(_ category: TaskCategory) {
-        guard !category.isSystem else {
-            return
-        }
+        guard !category.isSystem else { return }
 
         confirmation = ProWorkConfirmation(
             title: settingsStore.localized("taskCategories.delete.title", defaultValue: "Görev kategorisi silinsin mi?"),
@@ -174,17 +136,7 @@ struct TaskCategoriesView: View {
             cancelTitle: settingsStore.localized("taskCategories.delete.cancel", defaultValue: "Vazgeç"),
             role: .destructive
         ) {
-            deleteCategory(category)
-        }
-    }
-
-    private func deleteCategory(_ category: TaskCategory) {
-        do {
-            try repository.delete(id: category.id)
-            loadCategories()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
+            viewModel.delete(id: category.id, settingsStore: settingsStore)
         }
     }
 }

@@ -12,20 +12,12 @@ import SwiftUI
 
 struct CustomerReportView: View {
     @EnvironmentObject private var settingsStore: AppSettingsStore
+    @StateObject private var viewModel = CustomerReportViewModel()
 
-    @State private var customers: [Customer] = []
     @State private var selectedCustomerId: String = ""
     @State private var range: DateRangeFilter = .thisMonth
     @State private var customStart: Date = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: Date())) ?? Date()
     @State private var customEnd: Date = Date()
-
-    @State private var report: CustomerReport?
-    @State private var isLoading = false
-    @State private var errorMessage: String?
-
-    private let customerRepository = CustomerRepository()
-    private let computation = BillingComputationService()
-    private let currencyResolver = PricingCurrencyResolver()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -34,10 +26,10 @@ struct CustomerReportView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    if isLoading {
+                    if viewModel.isLoading {
                         ProgressView(settingsStore.localized("reports.loading", defaultValue: "Hesaplanıyor…"))
                             .frame(maxWidth: .infinity, minHeight: 200)
-                    } else if let report {
+                    } else if let report = viewModel.report {
                         summaryCard(report)
                         if !report.projectBreakdown.isEmpty {
                             projectSection(report)
@@ -53,12 +45,15 @@ struct CustomerReportView: View {
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .proWorkToastNotifications(errorMessage: errorMessage)
-        .onAppear { load() }
-        .onChange(of: selectedCustomerId) { _, _ in compute() }
-        .onChange(of: range) { _, _ in compute() }
-        .onChange(of: customStart) { _, _ in if range == .custom { compute() } }
-        .onChange(of: customEnd) { _, _ in if range == .custom { compute() } }
+        .proWorkToastNotifications(errorMessage: viewModel.errorMessage)
+        .onAppear {
+            viewModel.loadCustomers()
+            recompute()
+        }
+        .onChange(of: selectedCustomerId) { _, _ in recompute() }
+        .onChange(of: range) { _, _ in recompute() }
+        .onChange(of: customStart) { _, _ in if range == .custom { recompute() } }
+        .onChange(of: customEnd) { _, _ in if range == .custom { recompute() } }
     }
 
     // MARK: - Header
@@ -88,7 +83,7 @@ struct CustomerReportView: View {
                         placeholder: settingsStore.localized("reports.customer.filter.selectCustomer", defaultValue: "Müşteri seçin"),
                         items: customerOptions,
                         selectedId: $selectedCustomerId,
-                        showsSearch: customers.count > 6,
+                        showsSearch: viewModel.customers.count > 6,
                         systemImage: "person.2",
                         itemTitle: { $0.title },
                         matchesSearch: { $0.title.localizedCaseInsensitiveContains($1) }
@@ -117,7 +112,7 @@ struct CustomerReportView: View {
 
     private var customerOptions: [PickerOption] {
         [PickerOption(id: "", title: settingsStore.localized("reports.customer.filter.selectCustomer", defaultValue: "Müşteri seçin"))] +
-            customers.map { PickerOption(id: $0.id, title: $0.name) }
+            viewModel.customers.map { PickerOption(id: $0.id, title: $0.name) }
     }
 
     // MARK: - Summary
@@ -342,46 +337,11 @@ struct CustomerReportView: View {
 
     // MARK: - Actions
 
-    private func load() {
-        do {
-            customers = try customerRepository.fetchAll()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func compute() {
-        guard !selectedCustomerId.isEmpty else {
-            report = nil
-            return
-        }
-        guard let customer = customers.first(where: { $0.id == selectedCustomerId }) else {
-            return
-        }
-
-        isLoading = true
-        errorMessage = nil
-
-        do {
-            let lines = try computation.computePeriod(
-                customerId: selectedCustomerId,
-                from: periodStart,
-                to: periodEnd
-            )
-            let currency = try currencyResolver.resolveCustomerCurrency(
-                customerId: customer.id,
-                organizationId: customer.organizationId
-            )
-            report = BillingReportBuilder.buildCustomerReport(
-                customerId: customer.id,
-                customerName: customer.name,
-                lines: lines,
-                currency: currency
-            )
-        } catch {
-            errorMessage = error.localizedDescription
-            report = nil
-        }
-        isLoading = false
+    private func recompute() {
+        viewModel.compute(
+            selectedCustomerId: selectedCustomerId,
+            periodStart: periodStart,
+            periodEnd: periodEnd
+        )
     }
 }

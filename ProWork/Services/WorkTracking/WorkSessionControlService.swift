@@ -58,7 +58,7 @@ final class WorkSessionControlService {
             return nil
         }
 
-        let todo = try todoRepository.fetchAll().first(where: { $0.id == active.session.todoId })
+        let todo = try todoRepository.fetchListItem(id: active.session.todoId)
         return ActiveWorkSessionSummary(
             id: active.session.id,
             todoId: active.session.todoId,
@@ -76,7 +76,7 @@ final class WorkSessionControlService {
             return nil
         }
 
-        let todo = try todoRepository.fetchAll().first(where: { $0.id == paused.session.todoId })
+        let todo = try todoRepository.fetchListItem(id: paused.session.todoId)
         return ActiveWorkSessionSummary(
             id: paused.session.id,
             todoId: paused.session.todoId,
@@ -114,8 +114,7 @@ final class WorkSessionControlService {
     }
 
     func startWork(todoId: String) throws {
-        let todos = try todoRepository.fetchAll()
-        guard let todo = todos.first(where: { $0.id == todoId }) else {
+        guard let todo = try todoRepository.fetchListItem(id: todoId) else {
             throw WorkSessionControlError.todoNotFound
         }
         guard todo.statusStartsTimer else {

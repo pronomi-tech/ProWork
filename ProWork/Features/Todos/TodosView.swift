@@ -9,46 +9,19 @@ import SwiftUI
 
 struct TodosView: View {
     @EnvironmentObject private var settingsStore: AppSettingsStore
-
-    @State private var todos: [TodoListItem] = []
-    @State private var customers: [Customer] = []
-    @State private var projects: [ProjectListItem] = []
-    @State private var categories: [TaskCategory] = []
-    @State private var statuses: [TodoStatus] = []
+    @StateObject private var viewModel = TodosViewModel()
 
     @State private var quickTitle: String = ""
-    @State private var quickCategoryId: String = ""
-
     @State private var isShowingCreateForm = false
     @State private var editingTodo: TodoListItem?
     @State private var showingSessionsForTodo: TodoListItem?
 
     @State private var pendingWorkStart: PendingWorkStart?
     @State private var confirmation: ProWorkConfirmation?
-    @State private var errorMessage: String?
-
-    private let todoRepository = TodoRepository()
-    private let customerRepository = CustomerRepository()
-    private let projectRepository = ProjectRepository()
-    private let categoryRepository = TaskCategoryRepository()
-    private let statusRepository = TodoStatusRepository()
-    private let timeSessionRepository = TodoTimeSessionRepository()
 
     private var canQuickAdd: Bool {
         !quickTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        !quickCategoryId.isEmpty
-    }
-
-    private var boardStatuses: [TodoStatus] {
-        statuses
-            .filter { $0.isActive && $0.showInBoard }
-            .sorted { $0.sortOrder < $1.sortOrder }
-    }
-
-    private var defaultTodoStatusId: String {
-        statuses.first(where: { $0.id == BuiltInTodoStatusId.waiting })?.id
-            ?? statuses.first(where: { $0.isActive })?.id
-            ?? BuiltInTodoStatusId.waiting
+        !viewModel.quickCategoryId.isEmpty
     }
 
     var body: some View {
@@ -62,30 +35,34 @@ struct TodosView: View {
         .padding(ProWorkLayout.scaled(24, using: settingsStore))
         .proWorkFrame(minWidth: 760, minHeight: 600)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .proWorkToastNotifications(errorMessage: errorMessage)
+        .proWorkToastNotifications(errorMessage: viewModel.errorMessage)
         .onAppear {
-            loadData()
+            viewModel.load()
         }
         .sheet(isPresented: $isShowingCreateForm) {
             TodoFormView(
                 mode: .create,
-                customers: customers,
-                projects: projects,
-                categories: categories,
-                statuses: statuses
+                customers: viewModel.customers,
+                projects: viewModel.projects,
+                categories: viewModel.categories,
+                statuses: viewModel.statuses
             ) { todo in
-                createTodo(todo)
+                if viewModel.create(todo) {
+                    isShowingCreateForm = false
+                }
             }
         }
         .sheet(item: $editingTodo) { todo in
             TodoFormView(
                 mode: .edit(todo),
-                customers: customers,
-                projects: projects,
-                categories: categories,
-                statuses: statuses
+                customers: viewModel.customers,
+                projects: viewModel.projects,
+                categories: viewModel.categories,
+                statuses: viewModel.statuses
             ) { updatedTodo in
-                updateTodo(updatedTodo)
+                if viewModel.update(updatedTodo) {
+                    editingTodo = nil
+                }
             }
         }
         .sheet(item: $showingSessionsForTodo) { todo in
@@ -118,8 +95,8 @@ struct TodosView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(categories.isEmpty)
-            .help(categories.isEmpty ? settingsStore.localized("todos.help.needCategory", defaultValue: "Önce görev kategorisi eklemelisiniz") : settingsStore.localized("todos.help.addDetailed", defaultValue: "Detaylı yapılacak iş ekle"))
+            .disabled(viewModel.categories.isEmpty)
+            .help(viewModel.categories.isEmpty ? settingsStore.localized("todos.help.needCategory", defaultValue: "Önce görev kategorisi eklemelisiniz") : settingsStore.localized("todos.help.addDetailed", defaultValue: "Detaylı yapılacak iş ekle"))
         }
     }
 
@@ -133,11 +110,11 @@ struct TodosView: View {
             )
 
             ProWorkSearchPickerField(
-                placeholder: categories.isEmpty ? settingsStore.localized("todos.quick.category.none", defaultValue: "Kategori yok") : settingsStore.localized("todos.quick.category.placeholder", defaultValue: "Kategori seçin"),
-                items: categories,
-                selectedId: $quickCategoryId,
-                isDisabled: categories.isEmpty,
-                showsSearch: categories.count > 8,
+                placeholder: viewModel.categories.isEmpty ? settingsStore.localized("todos.quick.category.none", defaultValue: "Kategori yok") : settingsStore.localized("todos.quick.category.placeholder", defaultValue: "Kategori seçin"),
+                items: viewModel.categories,
+                selectedId: $viewModel.quickCategoryId,
+                isDisabled: viewModel.categories.isEmpty,
+                showsSearch: viewModel.categories.count > 8,
                 systemImage: "tag",
                 itemTitle: { category in
                     category.name
@@ -155,7 +132,8 @@ struct TodosView: View {
             .proWorkFrame(width: 240)
 
             Button {
-                quickAddTodo()
+                viewModel.quickAdd(title: quickTitle)
+                quickTitle = ""
             } label: {
                 ProWorkButtonLabel(
                     title: settingsStore.localized("todos.action.add", defaultValue: "Ekle"),
@@ -179,13 +157,13 @@ struct TodosView: View {
 
     private var todoList: some View {
         Group {
-            if categories.isEmpty {
+            if viewModel.categories.isEmpty {
                 emptyState(
                     systemImage: "tag",
                     title: settingsStore.localized("todos.empty.noCategory.title", defaultValue: "Görev kategorisi yok"),
                     message: settingsStore.localized("todos.empty.noCategory.message", defaultValue: "Yapılacak iş oluşturabilmek için önce Ayarlar > Görev Kategorileri bölümünde kategori tanımlayın.")
                 )
-            } else if boardStatuses.isEmpty {
+            } else if viewModel.boardStatuses.isEmpty {
                 emptyState(
                     systemImage: "rectangle.3.group",
                     title: settingsStore.localized("todos.empty.noBoardStatus.title", defaultValue: "İş panosu statüsü yok"),
@@ -201,10 +179,10 @@ struct TodosView: View {
     private var workBoard: some View {
         ScrollView(.horizontal) {
             HStack(alignment: .top, spacing: ProWorkLayout.scaled(14, using: settingsStore)) {
-                ForEach(boardStatuses) { status in
+                ForEach(viewModel.boardStatuses) { status in
                     TodoBoardColumnView(
                         status: status,
-                        todos: todosForStatus(status),
+                        todos: viewModel.todosForStatus(status),
                         onEdit: { todo in
                             editingTodo = todo
                         },
@@ -215,20 +193,20 @@ struct TodosView: View {
                             requestStartWork(for: todo)
                         },
                         onStopWork: { todo in
-                            stopWork(for: todo)
+                            viewModel.stopWork(for: todo)
                         },
                         onDelete: { todo in
                             askDeleteTodo(todo)
                         },
                         onMoveTodo: { todo, targetStatus in
-                            moveTodo(todo, to: targetStatus)
+                            handleMoveTodo(todo, to: targetStatus)
                         }
                     )
                 }
             }
             .padding(.vertical, ProWorkLayout.scaled(4, using: settingsStore))
             .padding(.trailing, ProWorkLayout.scaled(12, using: settingsStore))
-            .animation(.snappy, value: todos)
+            .animation(.snappy, value: viewModel.todos)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
@@ -254,302 +232,61 @@ struct TodosView: View {
         .proWorkFrame(maxWidth: 460)
     }
 
-    private func todosForStatus(_ status: TodoStatus) -> [TodoListItem] {
-        todos.filter { $0.statusId == status.id }
-    }
+    // MARK: - UI orkestrasyonu
+    //
+    // Tüm DB / mutation işleri TodosViewModel'de. View burada yalnızca:
+    //   - Drag-drop sonrası "startsTimer" geçişlerinde start-work confirmation
+    //     dialog'unu tetikler
+    //   - askDelete / confirmPendingWorkStart gibi confirmation akışlarını kurar
 
-    private func loadData() {
-        do {
-            customers = try customerRepository.fetchAll()
-            projects = try projectRepository.fetchAll()
-            categories = try categoryRepository.fetchAll()
-            statuses = try statusRepository.fetchAll()
-            todos = try todoRepository.fetchAll()
-
-            if quickCategoryId.isEmpty {
-                quickCategoryId = categories.first?.id ?? ""
-            }
-
-            if !quickCategoryId.isEmpty,
-               !categories.contains(where: { $0.id == quickCategoryId }) {
-                quickCategoryId = categories.first?.id ?? ""
-            }
-
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func quickAddTodo() {
-        let cleanTitle = quickTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        guard !cleanTitle.isEmpty, !quickCategoryId.isEmpty else {
-            return
-        }
-
-        let todo = Todo(
-            categoryId: quickCategoryId,
-            title: cleanTitle,
-            statusId: defaultTodoStatusId,
-            priority: "normal",
-            isBillable: categoryDefaultBillable(categoryId: quickCategoryId)
-        )
-
-        createTodo(todo)
-
-        quickTitle = ""
-    }
-
-    private func categoryDefaultBillable(categoryId: String) -> Bool {
-        categories.first(where: { $0.id == categoryId })?.isBillableDefault ?? true
-    }
-
-    private func createTodo(_ todo: Todo) {
-        do {
-            try todoRepository.insert(todo)
-            loadData()
-            isShowingCreateForm = false
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func updateTodo(_ todo: Todo) {
-        do {
-            try todoRepository.update(todo)
-            loadData()
-            editingTodo = nil
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func moveTodo(_ todo: TodoListItem, to targetStatus: TodoStatus) {
-        guard let index = todos.firstIndex(where: { $0.id == todo.id }) else {
-            return
-        }
-
-        let previousTodo = todos[index]
-
-        guard previousTodo.statusId != targetStatus.id else {
-            return
-        }
-
-        let completedAt: Date?
-        if targetStatus.marksCompleted {
-            completedAt = previousTodo.completedAt ?? Date()
-        } else {
-            completedAt = nil
-        }
-
-        let updatedTodo = makeUpdatedTodo(
-            previousTodo,
-            targetStatus: targetStatus,
-            completedAt: completedAt,
-            activeSessionStartedAt: nil
-        )
-
-        withAnimation(.snappy) {
-            todos[index] = updatedTodo
-        }
-
-        do {
-            if targetStatus.stopsTimer {
-                try timeSessionRepository.stopOpenSession(
-                    todoId: previousTodo.id,
-                    endStatusId: targetStatus.id
-                )
-            }
-
-            try todoRepository.updateStatus(
-                id: previousTodo.id,
-                statusId: targetStatus.id,
-                completedAt: completedAt
-            )
-
-            errorMessage = nil
-
-            if targetStatus.startsTimer {
-                requestStartWorkAfterStatusMove(
-                    todoId: previousTodo.id,
-                    targetStatus: targetStatus
-                )
-            } else {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                    loadData()
-                }
-            }
-        } catch {
-            withAnimation(.snappy) {
-                todos[index] = previousTodo
-            }
-
-            errorMessage = error.localizedDescription
+    private func handleMoveTodo(_ todo: TodoListItem, to targetStatus: TodoStatus) {
+        let result = viewModel.moveTodo(todo, to: targetStatus)
+        if result == .needsWorkStart {
+            requestStartWork(todoId: todo.id, targetStatus: targetStatus)
         }
     }
 
     private func requestStartWork(for todo: TodoListItem) {
-        guard todo.statusStartsTimer else {
-            return
-        }
-
-        guard let status = statuses.first(where: { $0.id == todo.statusId }) else {
-            return
-        }
-
-        requestStartWork(
-            todoId: todo.id,
-            targetStatus: status
-        )
+        guard todo.statusStartsTimer else { return }
+        guard let status = viewModel.statuses.first(where: { $0.id == todo.statusId }) else { return }
+        requestStartWork(todoId: todo.id, targetStatus: status)
     }
 
-    private func requestStartWorkAfterStatusMove(
-        todoId: String,
-        targetStatus: TodoStatus
-    ) {
-        requestStartWork(
-            todoId: todoId,
-            targetStatus: targetStatus
-        )
-    }
-
-    private func requestStartWork(
-        todoId: String,
-        targetStatus: TodoStatus
-    ) {
-        do {
-            if let active = try timeSessionRepository.fetchActiveSession(),
-               active.session.todoId != todoId {
-                pendingWorkStart = PendingWorkStart(
-                    todoId: todoId,
-                    targetStatus: targetStatus,
-                    activeSessionId: active.session.id,
-                    activeTodoTitle: active.todoTitle
-                )
-
-                confirmation = ProWorkConfirmation(
-                    title: settingsStore.localized("workSessions.confirm.activeExists.title", defaultValue: "Devam eden çalışma var"),
-                    message: String(format: settingsStore.localized("workSessions.confirm.activeExists.message", defaultValue: "Şu anda “%@” üzerinde çalışma devam ediyor. Bu çalışmayı durdurup yeni çalışmayı başlatmak ister misiniz?"), active.todoTitle),
-                    confirmTitle: settingsStore.localized("workSessions.confirm.activeExists.confirm", defaultValue: "Durdur ve Başlat"),
-                    cancelTitle: settingsStore.localized("workSessions.confirm.activeExists.cancel", defaultValue: "Mevcut Çalışma Devam Etsin")
-                ) {
-                    confirmPendingWorkStart()
-                }
-
-                return
-            }
-
-            try startWork(
+    private func requestStartWork(todoId: String, targetStatus: TodoStatus) {
+        if let active = viewModel.activeSessionConflicting(with: todoId) {
+            pendingWorkStart = PendingWorkStart(
                 todoId: todoId,
                 targetStatus: targetStatus,
-                stoppingActiveSessionId: nil
+                activeSessionId: active.session.id,
+                activeTodoTitle: active.todoTitle
             )
-        } catch {
-            errorMessage = error.localizedDescription
+
+            confirmation = ProWorkConfirmation(
+                title: settingsStore.localized("workSessions.confirm.activeExists.title", defaultValue: "Devam eden çalışma var"),
+                message: String(format: settingsStore.localized("workSessions.confirm.activeExists.message", defaultValue: "Şu anda “%@” üzerinde çalışma devam ediyor. Bu çalışmayı durdurup yeni çalışmayı başlatmak ister misiniz?"), active.todoTitle),
+                confirmTitle: settingsStore.localized("workSessions.confirm.activeExists.confirm", defaultValue: "Durdur ve Başlat"),
+                cancelTitle: settingsStore.localized("workSessions.confirm.activeExists.cancel", defaultValue: "Mevcut Çalışma Devam Etsin")
+            ) {
+                confirmPendingWorkStart()
+            }
+            return
         }
+
+        viewModel.startWork(
+            todoId: todoId,
+            targetStatus: targetStatus,
+            stoppingActiveSessionId: nil
+        )
     }
 
     private func confirmPendingWorkStart() {
-        guard let pendingWorkStart else {
-            return
-        }
-
-        do {
-            try startWork(
-                todoId: pendingWorkStart.todoId,
-                targetStatus: pendingWorkStart.targetStatus,
-                stoppingActiveSessionId: pendingWorkStart.activeSessionId
-            )
-
-            self.pendingWorkStart = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func startWork(
-        todoId: String,
-        targetStatus: TodoStatus,
-        stoppingActiveSessionId: String?
-    ) throws {
-        if let stoppingActiveSessionId {
-            try timeSessionRepository.stopSession(
-                sessionId: stoppingActiveSessionId,
-                endStatusId: targetStatus.id
-            )
-        }
-
-        try timeSessionRepository.startSession(
-            todoId: todoId,
-            startStatusId: targetStatus.id
+        guard let pendingWorkStart else { return }
+        viewModel.startWork(
+            todoId: pendingWorkStart.todoId,
+            targetStatus: pendingWorkStart.targetStatus,
+            stoppingActiveSessionId: pendingWorkStart.activeSessionId
         )
-
-        if let index = todos.firstIndex(where: { $0.id == todoId }) {
-            var updatedTodo = todos[index]
-            updatedTodo.activeSessionStartedAt = Date()
-            updatedTodo.updatedAt = Date()
-
-            withAnimation(.snappy) {
-                todos[index] = updatedTodo
-            }
-        }
-
-        errorMessage = nil
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            loadData()
-        }
-    }
-
-    private func stopWork(for todo: TodoListItem) {
-        do {
-            try timeSessionRepository.stopOpenSession(
-                todoId: todo.id,
-                endStatusId: todo.statusId
-            )
-
-            if let index = todos.firstIndex(where: { $0.id == todo.id }) {
-                var updatedTodo = todos[index]
-                updatedTodo.activeSessionStartedAt = nil
-                updatedTodo.updatedAt = Date()
-
-                withAnimation(.snappy) {
-                    todos[index] = updatedTodo
-                }
-            }
-
-            errorMessage = nil
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                loadData()
-            }
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func makeUpdatedTodo(
-        _ todo: TodoListItem,
-        targetStatus: TodoStatus,
-        completedAt: Date?,
-        activeSessionStartedAt: Date?
-    ) -> TodoListItem {
-        var updatedTodo = todo
-        updatedTodo.statusId = targetStatus.id
-        updatedTodo.statusName = targetStatus.name
-        updatedTodo.statusColor = targetStatus.color
-        updatedTodo.statusStartsTimer = targetStatus.startsTimer
-        updatedTodo.statusStopsTimer = targetStatus.stopsTimer
-        updatedTodo.statusMarksOpen = targetStatus.marksOpen
-        updatedTodo.statusMarksCompleted = targetStatus.marksCompleted
-        updatedTodo.statusMarksCancelled = targetStatus.marksCancelled
-        updatedTodo.completedAt = completedAt
-        updatedTodo.activeSessionStartedAt = activeSessionStartedAt
-        updatedTodo.updatedAt = Date()
-        return updatedTodo
+        self.pendingWorkStart = nil
     }
 
     private func askDeleteTodo(_ todo: TodoListItem) {
@@ -560,17 +297,7 @@ struct TodosView: View {
             cancelTitle: settingsStore.localized("todos.delete.cancel", defaultValue: "Vazgeç"),
             role: .destructive
         ) {
-            deleteTodo(todo)
-        }
-    }
-
-    private func deleteTodo(_ todo: TodoListItem) {
-        do {
-            try todoRepository.delete(id: todo.id)
-            loadData()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
+            viewModel.delete(id: todo.id)
         }
     }
 }

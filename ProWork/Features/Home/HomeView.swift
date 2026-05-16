@@ -25,13 +25,8 @@ struct HomeView: View {
 
     var onNavigate: (HomeNavigationTarget) -> Void = { _ in }
 
-    @State private var todos: [TodoListItem] = []
-    @State private var sessions: [WorkSessionListItem] = []
-    @State private var errorMessage: String?
+    @StateObject private var viewModel = HomeViewModel()
     @State private var nowTick: Date = Date()
-
-    private let todoRepository = TodoRepository()
-    private let sessionRepository = TodoTimeSessionRepository()
     private let tickTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -64,9 +59,9 @@ struct HomeView: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .proWorkToastNotifications(errorMessage: errorMessage)
+        .proWorkToastNotifications(errorMessage: viewModel.errorMessage)
         .onAppear {
-            loadData()
+            viewModel.loadData()
         }
         .onReceive(tickTimer) { value in
             nowTick = value
@@ -644,7 +639,7 @@ struct HomeView: View {
 
     private var todaySessions: [WorkSessionListItem] {
         let startOfDay = Calendar.current.startOfDay(for: nowTick)
-        return sessions.filter { $0.endedAt != nil && $0.startedAt >= startOfDay }
+        return viewModel.sessions.filter { $0.endedAt != nil && $0.startedAt >= startOfDay }
     }
 
     private var todayTotalSeconds: Int {
@@ -660,13 +655,13 @@ struct HomeView: View {
     }
 
     private var weekTotalSeconds: Int {
-        sessions
+        viewModel.sessions
             .filter { $0.endedAt != nil && $0.startedAt >= weekStart }
             .reduce(0) { $0 + ($1.durationSeconds ?? 0) }
     }
 
     private var ongoingTodos: [TodoListItem] {
-        todos.filter { !$0.statusMarksCompleted && !$0.statusMarksCancelled }
+        viewModel.todos.filter { !$0.statusMarksCompleted && !$0.statusMarksCancelled }
     }
 
     private var ongoingTodosTopFive: [TodoListItem] {
@@ -690,7 +685,7 @@ struct HomeView: View {
     }
 
     private var recentSessionsTopFive: [WorkSessionListItem] {
-        sessions
+        viewModel.sessions
             .filter { $0.endedAt != nil }
             .sorted { $0.startedAt > $1.startedAt }
             .prefix(5)
@@ -710,7 +705,7 @@ struct HomeView: View {
         for offset in (0..<7).reversed() {
             guard let day = calendar.date(byAdding: .day, value: -offset, to: startOfToday) else { continue }
             let nextDay = calendar.date(byAdding: .day, value: 1, to: day) ?? day
-            let total = sessions
+            let total = viewModel.sessions
                 .filter { $0.endedAt != nil && $0.startedAt >= day && $0.startedAt < nextDay }
                 .reduce(0) { $0 + ($1.durationSeconds ?? 0) }
             buckets.append(DayBucket(date: day, seconds: total))
@@ -723,14 +718,14 @@ struct HomeView: View {
     }
 
     private var todoLookup: [String: TodoListItem] {
-        Dictionary(uniqueKeysWithValues: todos.map { ($0.id, $0) })
+        Dictionary(uniqueKeysWithValues: viewModel.todos.map { ($0.id, $0) })
     }
 
     private var currentMonthSessions: [WorkSessionListItem] {
         let calendar = Calendar.current
         let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: nowTick)) ?? nowTick
         let nextMonth = calendar.date(byAdding: .month, value: 1, to: monthStart) ?? nowTick
-        return sessions.filter { session in
+        return viewModel.sessions.filter { session in
             session.endedAt != nil &&
             session.startedAt >= monthStart &&
             session.startedAt < nextMonth
@@ -784,15 +779,4 @@ struct HomeView: View {
         return formatter.string(from: date)
     }
 
-    // MARK: - Data loading
-
-    private func loadData() {
-        do {
-            todos = try todoRepository.fetchAll()
-            sessions = try sessionRepository.fetchAllListItems()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
 }

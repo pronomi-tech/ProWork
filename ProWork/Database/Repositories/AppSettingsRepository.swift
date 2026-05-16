@@ -56,6 +56,10 @@ final class AppSettingsRepository {
             quoteSequenceByYear: Self.codableValue(
                 dictionary["quoteSequenceByYear"],
                 default: AppSettings.defaults.quoteSequenceByYear
+            ),
+            billingDocumentSequenceByYear: Self.codableValue(
+                dictionary["billingDocumentSequenceByYear"],
+                default: AppSettings.defaults.billingDocumentSequenceByYear
             )
         )
     }

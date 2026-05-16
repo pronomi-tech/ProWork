@@ -12,20 +12,13 @@ import SwiftUI
 
 struct TodoReportView: View {
     @EnvironmentObject private var settingsStore: AppSettingsStore
+    @StateObject private var viewModel = TodoReportViewModel()
 
-    @State private var customers: [Customer] = []
     @State private var customerFilter: String = ""
     @State private var period: DateRangeFilter = .thisMonth
     @State private var customStart: Date = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: Date())) ?? Date()
     @State private var customEnd: Date = Date()
     @State private var manualOnly: Bool = false
-
-    @State private var rows: [TodoReportRow] = []
-    @State private var isLoading = false
-    @State private var errorMessage: String?
-
-    private let customerRepository = CustomerRepository()
-    private let computation = BillingComputationService()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -34,7 +27,7 @@ struct TodoReportView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    if isLoading {
+                    if viewModel.isLoading {
                         ProgressView(settingsStore.localized("reports.loading", defaultValue: "Hesaplanıyor…"))
                             .frame(maxWidth: .infinity, minHeight: 200)
                     } else if filteredRows.isEmpty {
@@ -51,16 +44,19 @@ struct TodoReportView: View {
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .proWorkToastNotifications(errorMessage: errorMessage)
-        .onAppear { load() }
-        .onChange(of: customerFilter) { _, _ in compute() }
-        .onChange(of: period) { _, _ in compute() }
-        .onChange(of: customStart) { _, _ in if period == .custom { compute() } }
-        .onChange(of: customEnd) { _, _ in if period == .custom { compute() } }
+        .proWorkToastNotifications(errorMessage: viewModel.errorMessage)
+        .onAppear {
+            viewModel.loadCustomers()
+            recompute()
+        }
+        .onChange(of: customerFilter) { _, _ in recompute() }
+        .onChange(of: period) { _, _ in recompute() }
+        .onChange(of: customStart) { _, _ in if period == .custom { recompute() } }
+        .onChange(of: customEnd) { _, _ in if period == .custom { recompute() } }
     }
 
     private var filteredRows: [TodoReportRow] {
-        manualOnly ? rows.filter { $0.hasManual } : rows
+        manualOnly ? viewModel.rows.filter { $0.hasManual } : viewModel.rows
     }
 
     private var header: some View {
@@ -84,7 +80,7 @@ struct TodoReportView: View {
                         placeholder: settingsStore.localized("dateRange.all", defaultValue: "Tümü"),
                         items: customerOptions,
                         selectedId: $customerFilter,
-                        showsSearch: customers.count > 6,
+                        showsSearch: viewModel.customers.count > 6,
                         systemImage: "person.2",
                         itemTitle: { $0.title },
                         matchesSearch: { $0.title.localizedCaseInsensitiveContains($1) }
@@ -120,7 +116,7 @@ struct TodoReportView: View {
 
     private var customerOptions: [PickerOption] {
         [PickerOption(id: "", title: settingsStore.localized("dateRange.all", defaultValue: "Tümü"))] +
-            customers.map { PickerOption(id: $0.id, title: $0.name) }
+            viewModel.customers.map { PickerOption(id: $0.id, title: $0.name) }
     }
 
     private var summary: some View {
@@ -263,57 +259,13 @@ struct TodoReportView: View {
 
     // MARK: - Actions
 
-    private func load() {
-        do {
-            customers = try customerRepository.fetchAll()
-            compute()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func compute() {
-        isLoading = true
-        errorMessage = nil
-        do {
-            let lines = try computation.computePeriod(
-                from: period.startDate(custom: customStart),
-                to: period.endDate(custom: customEnd)
-            )
-            let filteredLines = customerFilter.isEmpty ? lines : lines.filter { $0.customerId == customerFilter }
-
-            // Todo bazlı grupla
-            let grouped = Dictionary(grouping: filteredLines) { $0.todoId }
-
-            rows = grouped.map { todoId, lines -> TodoReportRow in
-                let first = lines[0]
-                let manualSeconds = lines.filter { $0.isManual }.reduce(0) { $0 + $1.actualSeconds }
-                let manualLines = lines.filter { $0.isManual }.count
-                return TodoReportRow(
-                    id: todoId,
-                    todoId: todoId,
-                    todoTitle: first.todoTitle,
-                    customerId: first.customerId,
-                    customerName: first.customerName,
-                    projectId: first.projectId,
-                    projectName: first.projectName,
-                    categoryName: first.categoryName,
-                    actualSeconds: lines.reduce(0) { $0 + $1.actualSeconds },
-                    billableMinutes: lines.reduce(0) { $0 + $1.billableMinutes },
-                    manualSeconds: manualSeconds,
-                    manualLineCount: manualLines,
-                    subtotalMinor: lines.reduce(0) { $0 + $1.amountMinor },
-                    vatMinor: lines.reduce(0) { $0 + $1.vatMinor },
-                    totalMinor: lines.reduce(0) { $0 + $1.totalMinor },
-                    currency: first.currency
-                )
-            }
-            .sorted { $0.todoTitle.localizedCompare($1.todoTitle) == .orderedAscending }
-        } catch {
-            errorMessage = error.localizedDescription
-            rows = []
-        }
-        isLoading = false
+    private func recompute() {
+        viewModel.compute(
+            period: period,
+            customStart: customStart,
+            customEnd: customEnd,
+            customerFilter: customerFilter
+        )
     }
 }
 

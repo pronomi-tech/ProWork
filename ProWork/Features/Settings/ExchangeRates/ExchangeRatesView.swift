@@ -66,8 +66,8 @@ private enum ExchangeRateImportMode: String, CaseIterable, Identifiable {
 
 struct ExchangeRatesView: View {
     @EnvironmentObject private var settingsStore: AppSettingsStore
+    @StateObject private var viewModel = ExchangeRatesViewModel()
 
-    @State private var rates: [ExchangeRate] = []
     @State private var isShowingNew = false
     @State private var selectedTab: ExchangeRatesTab = .tcmb
     @State private var isShowingFilters = false
@@ -79,16 +79,9 @@ struct ExchangeRatesView: View {
     @State private var isShowingImportModePicker = false
     @State private var importStartDate: Date = Date()
     @State private var importEndDate: Date = Date()
-    @State private var importingSource: ExchangeRateAutoSource?
     @State private var tableViewportWidth: CGFloat = 0
     @State private var editingRate: ExchangeRate?
     @State private var confirmation: ProWorkConfirmation?
-    @State private var errorMessage: String?
-    @State private var savedNotice: String?
-
-    private let repository = ExchangeRateRepository()
-    private let tcmbSyncService = TCMBExchangeRateSyncService()
-    private let globalSyncService = GlobalExchangeRateSyncService()
 
     private var supportedCurrencyCodes: [String] {
         Currency.allCodes.filter { $0 != "TRY" }
@@ -98,24 +91,30 @@ struct ExchangeRatesView: View {
         SettingsScreenScaffold(
             title: settingsStore.localized("exchangeRates.title", defaultValue: "Döviz Kurları"),
             subtitle: settingsStore.localized("exchangeRates.subtitle", defaultValue: "Kayıtları kaynak bazında yönetin, seçili kaynaktan kur çekin ve aynı panel içinde filtreleyin."),
-            errorMessage: errorMessage,
-            savedNotice: savedNotice,
+            errorMessage: viewModel.errorMessage,
+            savedNotice: viewModel.savedNotice,
             contentScrollBehavior: .fixed
         ) {
             mainPanel
         }
         .onAppear {
             selectedTab = settingsStore.settings.preferredExchangeRateSource == .tcmb ? .tcmb : .global
-            load()
+            viewModel.load()
         }
         .sheet(isPresented: $isShowingNew) {
             ExchangeRateFormView(mode: .create) { rate in
-                add(rate)
+                if viewModel.add(rate, notice: settingsStore.localized("exchangeRates.notice.created", defaultValue: "Manuel kur kaydedildi.")) {
+                    isShowingNew = false
+                    scheduleNoticeClear()
+                }
             }
         }
         .sheet(item: $editingRate) { rate in
             ExchangeRateFormView(mode: .edit(rate)) { updated in
-                update(updated)
+                if viewModel.update(updated, notice: settingsStore.localized("exchangeRates.notice.updated", defaultValue: "Kur kaydı güncellendi.")) {
+                    editingRate = nil
+                    scheduleNoticeClear()
+                }
             }
         }
         .proWorkConfirmationDialog($confirmation)
@@ -238,9 +237,9 @@ struct ExchangeRatesView: View {
                 }
 
                 Button {
-                    importRates(from: source)
+                    triggerImport(from: source)
                 } label: {
-                    if importingSource == source {
+                    if viewModel.importingSource == source {
                         ProgressView()
                             .controlSize(.small)
                             .frame(width: 84, height: 32)
@@ -254,7 +253,7 @@ struct ExchangeRatesView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .disabled(importingSource != nil)
+                .disabled(viewModel.importingSource != nil)
             }
 
             Text(source.subtitle)
@@ -528,7 +527,7 @@ struct ExchangeRatesView: View {
     }
 
     private var filteredRates: [ExchangeRate] {
-        rates.filter { rate in
+        viewModel.rates.filter { rate in
             guard rate.source == selectedTab.source,
                   rate.toCurrency == "TRY",
                   supportedCurrencyCodes.contains(rate.fromCurrency) else {
@@ -619,37 +618,6 @@ struct ExchangeRatesView: View {
         tableViewportWidth = normalizedWidth
     }
 
-    private func load() {
-        do {
-            rates = try repository.fetchAll(organizationId: BuiltInOrganizationId.default)
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func add(_ rate: ExchangeRate) {
-        do {
-            try repository.upsert(rate)
-            isShowingNew = false
-            setSavedNotice(settingsStore.localized("exchangeRates.notice.created", defaultValue: "Manuel kur kaydedildi."))
-            load()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func update(_ rate: ExchangeRate) {
-        do {
-            try repository.upsert(rate)
-            editingRate = nil
-            setSavedNotice(settingsStore.localized("exchangeRates.notice.updated", defaultValue: "Kur kaydı güncellendi."))
-            load()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
     private func askDelete(_ rate: ExchangeRate) {
         confirmation = ProWorkConfirmation(
             title: settingsStore.localized("exchangeRates.delete.title", defaultValue: "Kur silinsin mi?"),
@@ -658,52 +626,39 @@ struct ExchangeRatesView: View {
             cancelTitle: settingsStore.localized("exchangeRates.delete.cancel", defaultValue: "Vazgeç"),
             role: .destructive
         ) {
-            delete(rate)
+            viewModel.softDelete(
+                id: rate.id,
+                notice: settingsStore.localized("exchangeRates.notice.deleted", defaultValue: "Kur kaydı silindi.")
+            )
+            scheduleNoticeClear()
         }
     }
 
-    private func delete(_ rate: ExchangeRate) {
-        do {
-            try repository.softDelete(id: rate.id)
-            setSavedNotice(settingsStore.localized("exchangeRates.notice.deleted", defaultValue: "Kur kaydı silindi."))
-            load()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func importRates(from source: ExchangeRateAutoSource) {
-        errorMessage = nil
-        savedNotice = nil
-        importingSource = source
-
+    private func triggerImport(from source: ExchangeRateAutoSource) {
         let startDate = importMode == .today ? Date() : importStartDate
         let endDate = importMode == .today ? Date() : importEndDate
 
         Task { @MainActor in
-            defer { importingSource = nil }
+            if let result = await viewModel.importRates(
+                from: source,
+                startDate: startDate,
+                endDate: endDate,
+                currencies: supportedCurrencyCodes
+            ) {
+                viewModel.savedNotice = makeImportNotice(from: result, source: source)
+                scheduleNoticeClear()
+            }
+        }
+    }
 
-            do {
-                let result: TCMBExchangeRateSyncResult
-                switch source {
-                case .tcmb:
-                    result = try await tcmbSyncService.sync(
-                        from: startDate,
-                        to: endDate,
-                        currencies: supportedCurrencyCodes
-                    )
-                case .global:
-                    result = try await globalSyncService.sync(
-                        from: startDate,
-                        to: endDate,
-                        currencies: supportedCurrencyCodes
-                    )
-                }
-
-                load()
-                setSavedNotice(makeImportNotice(from: result, source: source))
-            } catch {
-                errorMessage = error.localizedDescription
+    /// Notice 2 saniye sonra otomatik temizlensin diye View tarafında
+    /// asyncAfter ile zamanlıyoruz (ViewModel ne SwiftUI Task lifecycle'a
+    /// ne de DispatchQueue.main.asyncAfter'a bu kadar yakın olmalı).
+    private func scheduleNoticeClear() {
+        let snapshot = viewModel.savedNotice
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            if viewModel.savedNotice == snapshot {
+                viewModel.savedNotice = nil
             }
         }
     }
@@ -725,15 +680,6 @@ struct ExchangeRatesView: View {
             result.importedRateCount,
             skippedCount
         )
-    }
-
-    private func setSavedNotice(_ message: String) {
-        savedNotice = message
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            if savedNotice == message {
-                savedNotice = nil
-            }
-        }
     }
 
     private var rateFormatter: NumberFormatter {

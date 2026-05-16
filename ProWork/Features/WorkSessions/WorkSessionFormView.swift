@@ -62,9 +62,7 @@ struct WorkSessionFormView: View {
     @State private var note: String = ""
     @State private var isManual: Bool = true
     @State private var isShowingCreateTodoForm = false
-    @State private var errorMessage: String?
-
-    private let todoRepository = TodoRepository()
+    @StateObject private var viewModel = WorkSessionFormViewModel()
 
     init(
         mode: WorkSessionFormMode,
@@ -119,7 +117,7 @@ struct WorkSessionFormView: View {
             footer
         }
         .proWorkToastNotifications(
-            errorMessage: errorMessage,
+            errorMessage: viewModel.errorMessage,
             warningMessage: isActiveEditMode ? settingsStore.localized("workSessions.form.error.activeEdit", defaultValue: "Aktif çalışma kaydı düzenlenemez. Önce çalışmayı durdurmalısınız.") : nil
         )
         .onAppear {
@@ -593,19 +591,12 @@ struct WorkSessionFormView: View {
     }
 
     private func createTodoFromForm(_ todo: Todo) {
-        do {
-            try todoRepository.insert(todo)
-            let refreshedTodos = try todoRepository.fetchAll()
+        guard let refreshedTodos = viewModel.createTodo(todo) else { return }
 
-            localTodos = refreshedTodos
-            selectedTodoId = todo.id
-            onTodosChanged?(refreshedTodos)
-
-            isShowingCreateTodoForm = false
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        localTodos = refreshedTodos
+        selectedTodoId = todo.id
+        onTodosChanged?(refreshedTodos)
+        isShowingCreateTodoForm = false
     }
 
     private func applyDuration(minutes: Int) {
@@ -688,12 +679,12 @@ struct WorkSessionFormView: View {
 
     private func save() {
         guard canSave else {
-            errorMessage = settingsStore.localized("workSessions.form.error.invalidRange", defaultValue: "Yapılacak iş seçilmeli ve bitiş zamanı başlangıçtan sonra olmalıdır.")
+            viewModel.errorMessage = settingsStore.localized("workSessions.form.error.invalidRange", defaultValue: "Yapılacak iş seçilmeli ve bitiş zamanı başlangıçtan sonra olmalıdır.")
             return
         }
 
         guard !isActiveEditMode else {
-            errorMessage = settingsStore.localized("workSessions.form.error.activeEdit", defaultValue: "Aktif çalışma kaydı düzenlenemez. Önce çalışmayı durdurmalısınız.")
+            viewModel.errorMessage = settingsStore.localized("workSessions.form.error.activeEdit", defaultValue: "Aktif çalışma kaydı düzenlenemez. Önce çalışmayı durdurmalısınız.")
             return
         }
 

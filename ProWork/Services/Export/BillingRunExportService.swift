@@ -6,6 +6,7 @@
 //
 
 import AppKit
+import Compression
 import Foundation
 
 @MainActor
@@ -179,8 +180,20 @@ final class BillingRunExportService {
     }
 
     nonisolated private static func escapeCSVField(_ value: String) -> String {
-        let needsQuotes = value.contains(",") || value.contains("\"") || value.contains("\n")
-        let escaped = value.replacingOccurrences(of: "\"", with: "\"\"")
+        // CSV injection koruması: `=`, `+`, `-`, `@`, TAB veya CR ile başlayan
+        // hücreler Excel / LibreOffice tarafından formül olarak yürütülüyor
+        // (örn. `=cmd|' /C calc'!A0` müşteri başlığında). Başına tek tırnak
+        // ekleyerek hücreyi metin yapıyoruz; Excel açılışta apostrofu gizler.
+        let dangerousLeaders: Set<Character> = ["=", "+", "-", "@", "\t", "\r"]
+        let sanitized: String
+        if let first = value.first, dangerousLeaders.contains(first) {
+            sanitized = "'\(value)"
+        } else {
+            sanitized = value
+        }
+
+        let needsQuotes = sanitized.contains(",") || sanitized.contains("\"") || sanitized.contains("\n")
+        let escaped = sanitized.replacingOccurrences(of: "\"", with: "\"\"")
         return needsQuotes ? "\"\(escaped)\"" : escaped
     }
 
@@ -432,6 +445,24 @@ private enum MinimalXLSXWriter {
 }
 
 private enum ZIPWriter {
+    // PKZIP format imzaları (PK\03\04, PK\01\02, PK\05\06)
+    private static let localFileHeaderSignature: UInt32 = 0x04034b50
+    private static let centralDirectoryHeaderSignature: UInt32 = 0x02014b50
+    private static let endOfCentralDirectorySignature: UInt32 = 0x06054b50
+
+    // ZIP spec: "version needed to extract" / "version made by".
+    // 20 = 2.0 (DEFLATE desteği için minimum).
+    private static let versionNeededToExtract: UInt16 = 20
+    private static let versionMadeBy: UInt16 = 20
+
+    // General purpose bit flag — 0: hiçbir bayrak set değil.
+    private static let generalPurposeBitFlag: UInt16 = 0
+
+    // Compression method kodları (APPNOTE 4.4.5):
+    //   0 = STORE (sıkıştırma yok), 8 = DEFLATE.
+    private static let compressionMethodStore: UInt16 = 0
+    private static let compressionMethodDeflate: UInt16 = 8
+
     static func archive(entries: [(String, Data)]) throws -> Data {
         var fileData = Data()
         var centralDirectory = Data()
@@ -440,39 +471,54 @@ private enum ZIPWriter {
         for (path, data) in entries {
             let pathData = Data(path.utf8)
             let crc = CRC32.checksum(data: data)
-            let compressedSize = UInt32(data.count)
             let uncompressedSize = UInt32(data.count)
 
-            fileData.appendLE(UInt32(0x04034b50))
-            fileData.appendLE(UInt16(20))
-            fileData.appendLE(UInt16(0))
-            fileData.appendLE(UInt16(0))
-            fileData.appendLE(UInt16(0))
-            fileData.appendLE(UInt16(0))
+            // DEFLATE'i dene; küçülmeyen blob'larda STORE'a düş. Boş veri ya
+            // da rastgele/önceden sıkıştırılmış byte'lar için STORE daha küçük
+            // çıkar (header overhead'i nedeniyle).
+            let payload: Data
+            let compressionMethod: UInt16
+            if let deflated = ZIPDeflater.deflate(data), deflated.count < data.count {
+                payload = deflated
+                compressionMethod = compressionMethodDeflate
+            } else {
+                payload = data
+                compressionMethod = compressionMethodStore
+            }
+            let compressedSize = UInt32(payload.count)
+
+            // Local file header
+            fileData.appendLE(localFileHeaderSignature)
+            fileData.appendLE(versionNeededToExtract)
+            fileData.appendLE(generalPurposeBitFlag)
+            fileData.appendLE(compressionMethod)
+            fileData.appendLE(UInt16(0)) // last mod file time (epoch)
+            fileData.appendLE(UInt16(0)) // last mod file date (epoch)
             fileData.appendLE(crc)
             fileData.appendLE(compressedSize)
             fileData.appendLE(uncompressedSize)
             fileData.appendLE(UInt16(pathData.count))
-            fileData.appendLE(UInt16(0))
+            fileData.appendLE(UInt16(0)) // extra field length
             fileData.append(pathData)
-            fileData.append(data)
+            fileData.append(payload)
 
-            centralDirectory.appendLE(UInt32(0x02014b50))
-            centralDirectory.appendLE(UInt16(20))
-            centralDirectory.appendLE(UInt16(20))
-            centralDirectory.appendLE(UInt16(0))
-            centralDirectory.appendLE(UInt16(0))
-            centralDirectory.appendLE(UInt16(0))
-            centralDirectory.appendLE(UInt16(0))
+            // Central directory header
+            centralDirectory.appendLE(centralDirectoryHeaderSignature)
+            centralDirectory.appendLE(versionMadeBy)
+            centralDirectory.appendLE(versionNeededToExtract)
+            centralDirectory.appendLE(generalPurposeBitFlag)
+            centralDirectory.appendLE(compressionMethod)
+            centralDirectory.appendLE(UInt16(0)) // last mod file time
+            centralDirectory.appendLE(UInt16(0)) // last mod file date
             centralDirectory.appendLE(crc)
             centralDirectory.appendLE(compressedSize)
             centralDirectory.appendLE(uncompressedSize)
             centralDirectory.appendLE(UInt16(pathData.count))
-            centralDirectory.appendLE(UInt16(0))
-            centralDirectory.appendLE(UInt16(0))
-            centralDirectory.appendLE(UInt16(0))
-            centralDirectory.appendLE(UInt16(0))
-            centralDirectory.appendLE(UInt32(0))
+            centralDirectory.appendLE(UInt16(0)) // extra field length
+            centralDirectory.appendLE(UInt16(0)) // file comment length
+            centralDirectory.appendLE(UInt16(0)) // disk number start
+            centralDirectory.appendLE(UInt16(0)) // internal file attributes
+            centralDirectory.appendLE(UInt32(0)) // external file attributes
             centralDirectory.appendLE(offset)
             centralDirectory.append(pathData)
 
@@ -482,16 +528,50 @@ private enum ZIPWriter {
         let startOfCentralDirectory = UInt32(fileData.count)
         fileData.append(centralDirectory)
 
-        fileData.appendLE(UInt32(0x06054b50))
-        fileData.appendLE(UInt16(0))
-        fileData.appendLE(UInt16(0))
-        fileData.appendLE(UInt16(entries.count))
-        fileData.appendLE(UInt16(entries.count))
+        // End of central directory record
+        fileData.appendLE(endOfCentralDirectorySignature)
+        fileData.appendLE(UInt16(0)) // number of this disk
+        fileData.appendLE(UInt16(0)) // disk where central directory starts
+        fileData.appendLE(UInt16(entries.count)) // central directory records on this disk
+        fileData.appendLE(UInt16(entries.count)) // total central directory records
         fileData.appendLE(UInt32(centralDirectory.count))
         fileData.appendLE(startOfCentralDirectory)
-        fileData.appendLE(UInt16(0))
+        fileData.appendLE(UInt16(0)) // comment length
 
         return fileData
+    }
+}
+
+private enum ZIPDeflater {
+    /// Raw DEFLATE encoding (zlib header/trailer'sız) — ZIP compression
+    /// method 8 tam olarak bunu bekler. Apple'ın `COMPRESSION_ZLIB` algoritması
+    /// raw DEFLATE üretir; level 5'e karşılık gelir.
+    static func deflate(_ source: Data) -> Data? {
+        guard !source.isEmpty else { return nil }
+
+        // Destination buffer'ın "input + 64 byte" olması güvenli bir üst sınır:
+        // pathological input için DEFLATE çıktısı kaynaktan biraz daha büyük
+        // olabilir; yeterince büyük tampon ayırıyoruz.
+        let destinationCapacity = source.count + 64
+        let destination = UnsafeMutablePointer<UInt8>.allocate(capacity: destinationCapacity)
+        defer { destination.deallocate() }
+
+        let compressedSize = source.withUnsafeBytes { rawBuffer -> Int in
+            guard let sourcePointer = rawBuffer.bindMemory(to: UInt8.self).baseAddress else {
+                return 0
+            }
+            return compression_encode_buffer(
+                destination,
+                destinationCapacity,
+                sourcePointer,
+                source.count,
+                nil,
+                COMPRESSION_ZLIB
+            )
+        }
+
+        guard compressedSize > 0 else { return nil }
+        return Data(bytes: destination, count: compressedSize)
     }
 }
 

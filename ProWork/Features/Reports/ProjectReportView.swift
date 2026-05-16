@@ -12,19 +12,12 @@ import SwiftUI
 
 struct ProjectReportView: View {
     @EnvironmentObject private var settingsStore: AppSettingsStore
+    @StateObject private var viewModel = ProjectReportViewModel()
 
-    @State private var customers: [Customer] = []
     @State private var customerFilter: String = ""
     @State private var period: DateRangeFilter = .thisMonth
     @State private var customStart: Date = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: Date())) ?? Date()
     @State private var customEnd: Date = Date()
-
-    @State private var rows: [ProjectReportRow] = []
-    @State private var isLoading = false
-    @State private var errorMessage: String?
-
-    private let customerRepository = CustomerRepository()
-    private let computation = BillingComputationService()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -33,10 +26,10 @@ struct ProjectReportView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    if isLoading {
+                    if viewModel.isLoading {
                         ProgressView(settingsStore.localized("reports.loading", defaultValue: "Hesaplanıyor…"))
                             .frame(maxWidth: .infinity, minHeight: 200)
-                    } else if rows.isEmpty {
+                    } else if viewModel.rows.isEmpty {
                         emptyState
                     } else {
                         summary
@@ -50,12 +43,15 @@ struct ProjectReportView: View {
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .proWorkToastNotifications(errorMessage: errorMessage)
-        .onAppear { load() }
-        .onChange(of: customerFilter) { _, _ in compute() }
-        .onChange(of: period) { _, _ in compute() }
-        .onChange(of: customStart) { _, _ in if period == .custom { compute() } }
-        .onChange(of: customEnd) { _, _ in if period == .custom { compute() } }
+        .proWorkToastNotifications(errorMessage: viewModel.errorMessage)
+        .onAppear {
+            viewModel.loadCustomers()
+            recompute()
+        }
+        .onChange(of: customerFilter) { _, _ in recompute() }
+        .onChange(of: period) { _, _ in recompute() }
+        .onChange(of: customStart) { _, _ in if period == .custom { recompute() } }
+        .onChange(of: customEnd) { _, _ in if period == .custom { recompute() } }
     }
 
     private var header: some View {
@@ -79,7 +75,7 @@ struct ProjectReportView: View {
                         placeholder: settingsStore.localized("dateRange.all", defaultValue: "Tümü"),
                         items: customerOptions,
                         selectedId: $customerFilter,
-                        showsSearch: customers.count > 6,
+                        showsSearch: viewModel.customers.count > 6,
                         systemImage: "person.2",
                         itemTitle: { $0.title },
                         matchesSearch: { $0.title.localizedCaseInsensitiveContains($1) }
@@ -106,10 +102,11 @@ struct ProjectReportView: View {
 
     private var customerOptions: [PickerOption] {
         [PickerOption(id: "", title: settingsStore.localized("dateRange.all", defaultValue: "Tümü"))] +
-            customers.map { PickerOption(id: $0.id, title: $0.name) }
+            viewModel.customers.map { PickerOption(id: $0.id, title: $0.name) }
     }
 
     private var summary: some View {
+        let rows = viewModel.rows
         let totalActual = rows.reduce(0) { $0 + $1.actualSeconds }
         let totalAmount = rows.reduce(0) { $0 + $1.totalMinor }
         let currency = rows.first?.currency ?? "TRY"
@@ -139,7 +136,7 @@ struct ProjectReportView: View {
         VStack(spacing: 0) {
             tableHeader
             Divider()
-            ForEach(rows) { row in
+            ForEach(viewModel.rows) { row in
                 tableRow(row)
                 Divider()
             }
@@ -199,57 +196,14 @@ struct ProjectReportView: View {
 
     // MARK: - Actions
 
-    private func load() {
-        do {
-            customers = try customerRepository.fetchAll()
-            compute()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func compute() {
-        isLoading = true
-        errorMessage = nil
-        do {
-            let lines = try computation.computePeriod(
-                from: period.startDate(custom: customStart),
-                to: period.endDate(custom: customEnd)
-            )
-            let filteredLines = customerFilter.isEmpty ? lines : lines.filter { $0.customerId == customerFilter }
-
-            // Proje bazlı grupla
-            let grouped = Dictionary(grouping: filteredLines) {
-                "\($0.customerId)|\($0.projectId ?? "_none")"
-            }
-
-            rows = grouped.map { _, lines -> ProjectReportRow in
-                let first = lines[0]
-                return ProjectReportRow(
-                    id: "\(first.customerId)|\(first.projectId ?? "_none")",
-                    customerId: first.customerId,
-                    customerName: first.customerName,
-                    projectId: first.projectId,
-                    projectName: first.projectName ?? settingsStore.localized("reports.project.noProject", defaultValue: "Projesiz"),
-                    actualSeconds: lines.reduce(0) { $0 + $1.actualSeconds },
-                    billableMinutes: lines.reduce(0) { $0 + $1.billableMinutes },
-                    subtotalMinor: lines.reduce(0) { $0 + $1.amountMinor },
-                    vatMinor: lines.reduce(0) { $0 + $1.vatMinor },
-                    totalMinor: lines.reduce(0) { $0 + $1.totalMinor },
-                    currency: first.currency
-                )
-            }
-            .sorted {
-                if $0.customerName != $1.customerName {
-                    return $0.customerName.localizedCompare($1.customerName) == .orderedAscending
-                }
-                return $0.projectName.localizedCompare($1.projectName) == .orderedAscending
-            }
-        } catch {
-            errorMessage = error.localizedDescription
-            rows = []
-        }
-        isLoading = false
+    private func recompute() {
+        viewModel.compute(
+            period: period,
+            customStart: customStart,
+            customEnd: customEnd,
+            customerFilter: customerFilter,
+            noProjectLabel: settingsStore.localized("reports.project.noProject", defaultValue: "Projesiz")
+        )
     }
 }
 

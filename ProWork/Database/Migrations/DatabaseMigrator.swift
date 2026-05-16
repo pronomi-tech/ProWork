@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import os
 
 enum DatabaseMigrator {
     static func migrate(_ database: AppDatabase) throws {
@@ -18,19 +19,30 @@ enum DatabaseMigrator {
                 continue
             }
 
-            print("⬆️ Running migration \(migration.id): \(migration.name)")
+            ProWorkLog.database.info("Running migration \(migration.id, privacy: .public): \(migration.name, privacy: .public)")
 
-            try migration.up(database)
+            // Her migration kendi atomic transaction'unda çalışır; herhangi
+            // bir adımda hata olursa schema yarı kurulu kalmaz. Migration'ların
+            // kendi içinde BEGIN/COMMIT yönetmesi gerekmez (nested transaction
+            // SQLite tarafından desteklenmez); orkestratör tek otoritedir.
+            try database.execute("BEGIN TRANSACTION;")
+            do {
+                try migration.up(database)
+                try insertAppliedMigration(database, migration: migration)
+                try database.execute("COMMIT;")
+            } catch {
+                try? database.execute("ROLLBACK;")
+                throw error
+            }
 
-            try insertAppliedMigration(database, migration: migration)
-
-            print("✅ Migration \(migration.id) completed")
+            ProWorkLog.database.info("Migration \(migration.id, privacy: .public) completed")
         }
     }
 
     private static var allMigrations: [Migration] {
         [
-            Migration001InitialSchema()
+            Migration001InitialSchema(),
+            Migration002BillingDocumentNumber()
         ]
     }
 

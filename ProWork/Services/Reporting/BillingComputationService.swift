@@ -101,12 +101,35 @@ final class BillingComputationService {
             uniqueKeysWithValues: customers.map { ($0.name, $0) }
         )
 
+        // 3. Dönem için gereken todo / session / project / override verisini toplu çek.
+        // Eski akışta her session için 4-6 ayrı sorgu çalışıyordu (todo, session,
+        // project, override, billing rule); 1.000 satırlık dönemlerde N+1 patlaması.
+        let todoIds = Array(Set(periodItems.map { $0.todoId }))
+        let sessionIds = periodItems.map { $0.id }
+
+        let todosById = Dictionary(
+            uniqueKeysWithValues: (try todoRepository.fetch(ids: todoIds)).map { ($0.id, $0) }
+        )
+        let sessionsById = Dictionary(
+            uniqueKeysWithValues: (try sessionRepository.fetch(ids: sessionIds)).map { ($0.id, $0) }
+        )
+        let projectIds = Array(Set(todosById.values.compactMap { $0.projectId }))
+        let projectsById = Dictionary(
+            uniqueKeysWithValues: (try projectRepository.fetch(ids: projectIds)).map { ($0.id, $0) }
+        )
+        let overridesByTodoId = try overrideRepository.fetch(todoIds: todoIds)
+
+        // BillingRule müşteri başına resolve edilir; her session için tekrar
+        // tekrar resolve etmemek için cache'liyoruz. `nil` sentinel'i "bu müşteri
+        // için kural yok" anlamına gelir; her seferinde tekrar denemeyiz.
+        var resolvedRuleByCustomerId: [String: BillingRule?] = [:]
+
         var lines: [BillingReportLine] = []
         var orderIndex = 0
         var calculationItems: [CalculationItem] = []
 
         for item in periodItems {
-            guard let todo = try? todoRepository.fetch(id: item.todoId) else { continue }
+            guard let todo = todosById[item.todoId] else { continue }
 
             // Müşteri/proje çöz
             let customer: Customer? = todo.customerId.flatMap { id in
@@ -115,17 +138,22 @@ final class BillingComputationService {
 
             guard let customer else { continue }
 
-            let project = try? todo.projectId.map { id -> Project? in
-                try projectRepository.fetch(id: id)
-            }.flatMap { $0 }
+            let project = todo.projectId.flatMap { projectsById[$0] }
 
             let category = categories.first(where: { $0.id == todo.categoryId })
 
-            // Müşteriye özel mesai kuralı / tatil
-            let rule = (try? billingRuleRepository.resolve(
-                organizationId: organizationId,
-                customerId: customer.id
-            )) ?? billingRules.first
+            // Müşteriye özel mesai kuralı / tatil (customer başına bir kez resolve)
+            let rule: BillingRule?
+            if let cached = resolvedRuleByCustomerId[customer.id] {
+                rule = cached
+            } else {
+                let resolved = (try? billingRuleRepository.resolve(
+                    organizationId: organizationId,
+                    customerId: customer.id
+                )) ?? billingRules.first
+                resolvedRuleByCustomerId[customer.id] = resolved
+                rule = resolved
+            }
 
             guard let resolvedRule = rule else { continue }
 
@@ -134,19 +162,18 @@ final class BillingComputationService {
                 $0.scope == .global || ($0.scope == .customer && $0.customerId == customer.id)
             }
 
-            // Fiyat resolver context
+            // Fiyat resolver context (override önceden batch fetch edildi)
             let priceContext = makePriceContext(
                 priceLists: priceLists,
                 rowsByListId: rowsByListId,
                 customer: customer,
                 project: project,
                 organizationCurrency: organizationCurrency,
-                todoId: todo.id
+                override: overridesByTodoId[todo.id]
             )
 
-            // Session'ı yükle (gerçek model)
-            let sessions = (try? sessionRepository.fetchSessions(todoId: todo.id)) ?? []
-            guard let session = sessions.first(where: { $0.id == item.id }) else { continue }
+            // Session'ı önceden yüklediğimiz map'ten al
+            guard let session = sessionsById[item.id] else { continue }
             let isOpenSession = session.endedAt == nil
             let calculationSession: TodoTimeSession
             if isPreviewRun, isOpenSession {
@@ -230,7 +257,7 @@ final class BillingComputationService {
         customer: Customer,
         project: Project?,
         organizationCurrency: String,
-        todoId: String
+        override: TodoBillingOverride?
     ) -> PriceResolutionContext {
         let projectLists = priceLists.filter {
             $0.ownerType == .project && $0.ownerId == project?.id
@@ -239,8 +266,6 @@ final class BillingComputationService {
             $0.ownerType == .customer && $0.ownerId == customer.id
         }
         let globalLists = priceLists.filter { $0.ownerType == .global }
-
-        let override = try? overrideRepository.fetch(todoId: todoId)
 
         return PriceResolutionContext(
             todoOverride: override,

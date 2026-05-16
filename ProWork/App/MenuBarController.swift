@@ -12,9 +12,7 @@ import SwiftUI
 final class MenuBarController: NSObject {
     private let popover = NSPopover()
     private var statusItem: NSStatusItem?
-    private var pendingSingleClick: DispatchWorkItem?
     private let isContextMenuEnabled = false
-    private let singleClickDelay: TimeInterval = 0.18
 
     private weak var settingsStore: AppSettingsStore?
     private weak var automationController: WorkAutomationController?
@@ -92,7 +90,6 @@ final class MenuBarController: NSObject {
     private func handleStatusItemInteraction(_ sender: NSStatusBarButton) {
         switch NSApp.currentEvent?.type {
         case .rightMouseUp:
-            cancelPendingSingleClick()
             guard isContextMenuEnabled else { return }
             showContextMenu(from: sender)
         case .leftMouseUp:
@@ -105,28 +102,19 @@ final class MenuBarController: NSObject {
     }
 
     private func handleLeftClick(from button: NSStatusBarButton) {
+        // Single click anında popover aç/kapat (Apple HIG'e uygun).
+        // Daha önce 180 ms `asyncAfter` ile geciktiriliyordu (çift tıklama
+        // tespiti için); kullanıcı her açılışta belirgin bir gecikme
+        // hissediyordu. Şimdi çift tıklama clickCount==2 ile gelen ikinci
+        // event'te yakalanıyor; ilk tıklama popover'ı zaten açmış olur,
+        // ikinci tıklama onu kapatıp ana pencereyi açar.
         if NSApp.currentEvent?.clickCount == 2 {
-            cancelPendingSingleClick()
             popover.performClose(nil)
             openMainWindowFromMenu()
             return
         }
 
-        let workItem = DispatchWorkItem { [weak self, weak button] in
-            guard let self, let button else { return }
-            self.togglePopover(from: button)
-        }
-
-        pendingSingleClick = workItem
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + singleClickDelay,
-            execute: workItem
-        )
-    }
-
-    private func cancelPendingSingleClick() {
-        pendingSingleClick?.cancel()
-        pendingSingleClick = nil
+        togglePopover(from: button)
     }
 
     private func togglePopover(from button: NSStatusBarButton) {

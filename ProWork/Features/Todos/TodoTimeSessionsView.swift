@@ -11,27 +11,15 @@ import Combine
 struct TodoTimeSessionsView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var settingsStore: AppSettingsStore
+    @StateObject private var viewModel = TodoTimeSessionsViewModel()
 
     let todo: TodoListItem
-
-    @State private var sessions: [TodoTimeSession] = []
-    @State private var customers: [Customer] = []
-    @State private var projects: [ProjectListItem] = []
-    @State private var categories: [TaskCategory] = []
-    @State private var statuses: [TodoStatus] = []
 
     @State private var isShowingCreateForm = false
     @State private var editingSession: WorkSessionListItem?
 
     @State private var confirmation: ProWorkConfirmation?
-    @State private var errorMessage: String?
     @State private var now: Date = Date()
-
-    private let sessionRepository = TodoTimeSessionRepository()
-    private let customerRepository = CustomerRepository()
-    private let projectRepository = ProjectRepository()
-    private let categoryRepository = TaskCategoryRepository()
-    private let statusRepository = TodoStatusRepository()
 
     private let timer = Timer.publish(
         every: 30,
@@ -52,12 +40,12 @@ struct TodoTimeSessionsView: View {
         } footer: {
             footer
         }
-        .proWorkToastNotifications(errorMessage: errorMessage)
+        .proWorkToastNotifications(errorMessage: viewModel.errorMessage)
         .onAppear {
-            loadData()
+            viewModel.load(todoId: todo.id)
         }
         .onReceive(timer) { value in
-            guard sessions.contains(where: { $0.endedAt == nil }) else {
+            guard viewModel.sessions.contains(where: { $0.endedAt == nil }) else {
                 return
             }
 
@@ -67,42 +55,46 @@ struct TodoTimeSessionsView: View {
             WorkSessionFormView(
                 mode: .create,
                 todos: [todo],
-                customers: customers,
-                projects: projects,
-                categories: categories,
-                statuses: statuses,
+                customers: viewModel.customers,
+                projects: viewModel.projects,
+                categories: viewModel.categories,
+                statuses: viewModel.statuses,
                 fixedTodo: todo
             ) { _, todoId, startedAt, endedAt, note, _ in
-                createManualSession(
+                if viewModel.createManualSession(
                     todoId: todoId,
                     startedAt: startedAt,
                     endedAt: endedAt,
                     note: note
-                )
+                ) {
+                    isShowingCreateForm = false
+                }
             }
         }
         .sheet(item: $editingSession) { session in
             WorkSessionFormView(
                 mode: .edit(session),
                 todos: [todo],
-                customers: customers,
-                projects: projects,
-                categories: categories,
-                statuses: statuses,
+                customers: viewModel.customers,
+                projects: viewModel.projects,
+                categories: viewModel.categories,
+                statuses: viewModel.statuses,
                 fixedTodo: todo
             ) { sessionId, todoId, startedAt, endedAt, note, isManual in
                 guard let sessionId else {
                     return
                 }
 
-                updateSession(
+                if viewModel.updateSession(
                     id: sessionId,
                     todoId: todoId,
                     startedAt: startedAt,
                     endedAt: endedAt,
                     note: note,
                     isManual: isManual
-                )
+                ) {
+                    editingSession = nil
+                }
             }
         }
         .proWorkConfirmationDialog($confirmation)
@@ -119,13 +111,13 @@ struct TodoTimeSessionsView: View {
 
                 summaryCard(
                     title: settingsStore.localized("workSessions.summary.count", defaultValue: "Kayıt Sayısı"),
-                    value: "\(sessions.count)",
+                    value: "\(viewModel.sessions.count)",
                     systemImage: "list.bullet.rectangle"
                 )
 
                 summaryCard(
                     title: settingsStore.localized("workSessions.source.manual", defaultValue: "Manuel"),
-                    value: "\(sessions.filter { $0.isManual }.count)",
+                    value: "\(viewModel.sessions.filter { $0.isManual }.count)",
                     systemImage: "hand.point.up.left"
                 )
             }
@@ -170,12 +162,12 @@ struct TodoTimeSessionsView: View {
 
             Divider()
 
-            if sessions.isEmpty {
+            if viewModel.sessions.isEmpty {
                 emptyState
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(sessions) { session in
+                        ForEach(viewModel.sessions) { session in
                             sessionRow(session)
 
                             Divider()
@@ -331,7 +323,7 @@ struct TodoTimeSessionsView: View {
             .buttonStyle(.borderedProminent)
 
             Button {
-                loadData()
+                viewModel.load(todoId: todo.id)
             } label: {
                 ProWorkButtonLabel(
                     title: settingsStore.localized("common.refresh", defaultValue: "Yenile"),
@@ -358,11 +350,11 @@ struct TodoTimeSessionsView: View {
     }
 
     private var hasActiveSession: Bool {
-        sessions.contains { $0.endedAt == nil }
+        viewModel.sessions.contains { $0.endedAt == nil }
     }
 
     private var totalSessionSeconds: Int {
-        sessions.reduce(0) { total, session in
+        viewModel.sessions.reduce(0) { total, session in
             total + durationSeconds(session)
         }
     }
@@ -387,67 +379,6 @@ struct TodoTimeSessionsView: View {
         return settingsStore.formatDateTime(endedAt)
     }
 
-    private func loadData() {
-        do {
-            sessions = try sessionRepository.fetchSessions(todoId: todo.id)
-            customers = try customerRepository.fetchAll()
-            projects = try projectRepository.fetchAll()
-            categories = try categoryRepository.fetchAll()
-            statuses = try statusRepository.fetchAll()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func createManualSession(
-        todoId: String,
-        startedAt: Date,
-        endedAt: Date,
-        note: String?
-    ) {
-        do {
-            try sessionRepository.insertManualSession(
-                todoId: todoId,
-                startedAt: startedAt,
-                endedAt: endedAt,
-                note: note
-            )
-
-            loadData()
-            isShowingCreateForm = false
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func updateSession(
-        id: String,
-        todoId: String,
-        startedAt: Date,
-        endedAt: Date,
-        note: String?,
-        isManual: Bool
-    ) {
-        do {
-            try sessionRepository.updateSession(
-                id: id,
-                todoId: todoId,
-                startedAt: startedAt,
-                endedAt: endedAt,
-                note: note,
-                isManual: isManual
-            )
-
-            loadData()
-            editingSession = nil
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
     private func askDeleteSession(_ session: TodoTimeSession) {
         confirmation = ProWorkConfirmation(
             title: settingsStore.localized("workSessions.delete.title", defaultValue: "Çalışma kaydı silinsin mi?"),
@@ -456,17 +387,7 @@ struct TodoTimeSessionsView: View {
             cancelTitle: settingsStore.localized("workSessions.delete.cancel", defaultValue: "Vazgeç"),
             role: .destructive
         ) {
-            deleteSession(session)
-        }
-    }
-
-    private func deleteSession(_ session: TodoTimeSession) {
-        do {
-            try sessionRepository.delete(id: session.id)
-            loadData()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
+            viewModel.deleteSession(id: session.id, refreshFor: todo.id)
         }
     }
 

@@ -7,16 +7,33 @@
 
 import Foundation
 import SQLite3
+import os
 
 final class AppDatabase {
     static let shared = AppDatabase()
 
-    private(set) var db: OpaquePointer?
-    private(set) var databaseURL: URL?
+    // All mutable state below is guarded by `lock`. NSRecursiveLock is used
+    // because reentrancy is required: `configure` triggers migrations that
+    // call back into `execute`/`query`, and `withReconnectRetry` re-enters
+    // `configure` through `reopenCurrentConnection`.
+    private let lock = NSRecursiveLock()
+    private var db: OpaquePointer?
+    private var _databaseURL: URL?
     private var securityScopedDatabaseURL: URL?
     private var securityScopedContainerURL: URL?
     private var isDatabaseSecurityScopeActive = false
     private var isContainerSecurityScopeActive = false
+    /// `configure` ve migrasyonlar çalışırken `withReconnectRetry` reopen
+    /// dalına girmemeli — aksi halde `reopen → configure → runMigrations →
+    /// execute → withReconnectRetry → reopen` sonsuz rekürsiyon doğar
+    /// (Migration002 bunu ortaya çıkardı). Configure süresince true.
+    private var isConfiguring = false
+
+    var databaseURL: URL? {
+        lock.lock()
+        defer { lock.unlock() }
+        return _databaseURL
+    }
 
     private init() {}
 
@@ -48,10 +65,68 @@ private extension AppDatabase {
     }
 
     func configureJournalMode() throws {
-        // Keep journaling in-process so write operations do not depend on
-        // creating sibling -journal/-wal/-shm files in user-selected folders.
-        _ = try query("PRAGMA journal_mode = MEMORY;") { statement in
-            statement.text(at: 0) ?? "unknown"
+        // Durability tercih sırası: WAL → TRUNCATE → MEMORY.
+        //
+        // WAL en güvenli + en hızlı seçim ama yan dosya yaratmayı gerektirir
+        // (`-wal`, `-shm`). macOS güvenlik kapsamlı (security-scoped) klasör
+        // erişimlerinde bu sibling dosyaları yaratılamayabiliyor ve SQLite
+        // ilk yazıda "unable to open database file" döndürüyor. Aynı sorun
+        // TRUNCATE (`-journal`) için de geçerli. Bu durumda MEMORY'ye düşmek
+        // tek çalışan seçenek — bu, orijinal sürümün zaten kullandığı moddu.
+        //
+        // MEMORY trade-off'u: crash anında commit edilmemiş işlemler kaybolur,
+        // güç kesintisinde DB bozulabilir. Bunu kaçınılmaz hale getiren yan
+        // dosya kısıtı için bunu kabul ediyoruz; durability'yi tercih eden
+        // kullanıcılar veri dosyasını sınırsız bir klasörde tutmalı.
+        // Önemli: setJournalMode'un kendisi sandbox kısıtlamalarında SQLite
+        // tarafından "unable to open database file" ile fırlayabilir (WAL için
+        // -wal/-shm yan dosyalarını açamadığında). Bu durumda zinciri kırmak
+        // istemiyoruz — try? ile yutup bir sonraki moda düşüyoruz.
+        if let walMode = try? setJournalMode("WAL"), walMode == "wal", probeWritability() {
+            try execute("PRAGMA synchronous = NORMAL;")
+            ProWorkLog.database.info("Journal mode: WAL")
+            return
+        }
+
+        if let truncateMode = try? setJournalMode("TRUNCATE"), truncateMode == "truncate", probeWritability() {
+            try execute("PRAGMA synchronous = FULL;")
+            ProWorkLog.database.info("Journal mode: TRUNCATE")
+            return
+        }
+
+        // Son çare: MEMORY. Yan dosya yaratmadığı için her zaman çalışmalı.
+        _ = try setJournalMode("MEMORY")
+        try execute("PRAGMA synchronous = NORMAL;")
+        ProWorkLog.database.info("Journal mode: MEMORY (fallback)")
+    }
+
+    private func setJournalMode(_ mode: String) throws -> String {
+        let rows = try query("PRAGMA journal_mode = \(mode);") { statement in
+            (statement.text(at: 0) ?? "").lowercased()
+        }
+        return rows.first ?? ""
+    }
+
+    /// TRUNCATE/DELETE modunda SQLite, `-journal` yan dosyasını sadece **gerçek
+    /// bir veri/şema yazımı** olduğunda yaratır; BEGIN IMMEDIATE tek başına
+    /// yetmiyor. OneDrive gibi CloudStorage klasörlerinde sandbox yan dosya
+    /// yaratımını engelliyor ("Operation not permitted") ve sahte BEGIN/ROLLBACK
+    /// probe'u false-positive dönüyor — sonra migration gerçek yazıda patlıyor.
+    ///
+    /// Bu yüzden probe'a gerçek bir DDL koyuyoruz: geçici tablo oluştur, hemen
+    /// rollback ile geri al. Schema'ya hiçbir kalıcı etki kalmaz ama journal
+    /// dosyası yaratımı gerçekten denenir.
+    private func probeWritability() -> Bool {
+        do {
+            try execute("BEGIN IMMEDIATE TRANSACTION;")
+            try execute("CREATE TABLE _prowork_writability_probe (x INTEGER);")
+            try execute("ROLLBACK;")
+            return true
+        } catch {
+            // Açık transaction kalmasın diye temizle (rollback'in kendisi de
+            // çökerse yutulur — DB zaten kullanılamayacak durumda demektir).
+            try? execute("ROLLBACK;")
+            return false
         }
     }
 
@@ -64,7 +139,7 @@ private extension AppDatabase {
     }
 
     func reopenCurrentConnection() throws {
-        guard let currentDatabaseURL = securityScopedDatabaseURL ?? databaseURL else {
+        guard let currentDatabaseURL = securityScopedDatabaseURL ?? _databaseURL else {
             throw DatabaseError.notOpen
         }
 
@@ -76,10 +151,10 @@ private extension AppDatabase {
     func withReconnectRetry<T>(_ operation: () throws -> T) throws -> T {
         do {
             return try operation()
-        } catch DatabaseError.executionFailed(let message) where shouldRetryOpenFileFailure(message) {
+        } catch DatabaseError.executionFailed(let message) where shouldRetryOpenFileFailure(message) && !isConfiguring {
             try reopenCurrentConnection()
             return try operation()
-        } catch DatabaseError.openFailed(let message) where shouldRetryOpenFileFailure(message) {
+        } catch DatabaseError.openFailed(let message) where shouldRetryOpenFileFailure(message) && !isConfiguring {
             try reopenCurrentConnection()
             return try operation()
         }
@@ -113,25 +188,63 @@ enum DatabaseError: Error, LocalizedError {
     case openFailed(message: String)
     case executionFailed(message: String)
 
+    private func localized(_ key: String, defaultValue: String) -> String {
+        ProWorkLocalizer.shared.string(key, defaultValue: defaultValue)
+    }
+
+    private func humanReadable(_ rawMessage: String) -> String {
+        // SQLite/sandbox üzerinden gelen ham mesajları kullanıcıya dostça çevir.
+        // Tipik durumlar: security-scoped klasörde sibling journal/wal dosyası
+        // yaratılamadığında "unable to open database file" gelir.
+        let lower = rawMessage.lowercased()
+        if lower.contains("unable to open database file") {
+            return localized(
+                "database.error.unableToOpenFile",
+                defaultValue: "Veri dosyasına erişilemiyor. Klasör izinleri değişmiş ya da dosya başka bir yere taşınmış olabilir. Lütfen dosyayı yeniden seçin."
+            )
+        }
+        if lower.contains("database is locked") {
+            return localized(
+                "database.error.locked",
+                defaultValue: "Veri dosyası başka bir işlem tarafından kullanılıyor olabilir. Birkaç saniye sonra yeniden deneyin."
+            )
+        }
+        if lower.contains("disk i/o error") || lower.contains("disk full") {
+            return localized(
+                "database.error.diskIO",
+                defaultValue: "Disk erişiminde bir sorun oluştu. Diskte yeterli alan olduğundan ve dosyanın yazılabilir olduğundan emin olun."
+            )
+        }
+        return rawMessage
+    }
+
     var errorDescription: String? {
         switch self {
         case .notOpen:
-            return "Database is not open."
+            return localized(
+                "database.error.notOpen",
+                defaultValue: "Veri dosyası açık değil."
+            )
         case .openFailed(let message):
-            return "Database open failed: \(message)"
+            return humanReadable(message)
         case .executionFailed(let message):
-            return "Database execution failed: \(message)"
+            return humanReadable(message)
         }
     }
 }
 
 extension AppDatabase {
     var isOpen: Bool {
-        db != nil
+        lock.lock()
+        defer { lock.unlock() }
+        return db != nil
     }
 
     func configure(at url: URL, containerDirectoryURL: URL? = nil) throws {
-        if let databaseURL, databaseURL == url, isOpen {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if let existing = _databaseURL, existing == url, db != nil {
             return
         }
 
@@ -139,6 +252,9 @@ extension AppDatabase {
 
         let didAccessDatabaseSecurityScope = url.startAccessingSecurityScopedResource()
         let didAccessContainerSecurityScope = containerDirectoryURL?.startAccessingSecurityScopedResource() ?? false
+
+        isConfiguring = true
+        defer { isConfiguring = false }
 
         do {
             try prepareParentDirectory(for: url)
@@ -153,7 +269,7 @@ extension AppDatabase {
             }
 
             db = connection
-            databaseURL = url
+            _databaseURL = url
             securityScopedDatabaseURL = url
             securityScopedContainerURL = containerDirectoryURL
             isDatabaseSecurityScopeActive = didAccessDatabaseSecurityScope
@@ -164,13 +280,14 @@ extension AppDatabase {
             try configureJournalMode()
             try runMigrations()
 
-            print("✅ ProWork database ready at: \(url.path)")
+            // DB path kullanıcı dizini içerebileceği için privacy: .private.
+            ProWorkLog.database.info("ProWork database ready at: \(url.path, privacy: .private)")
         } catch {
             if let db {
                 sqlite3_close(db)
                 self.db = nil
             }
-            databaseURL = nil
+            _databaseURL = nil
             if didAccessDatabaseSecurityScope {
                 url.stopAccessingSecurityScopedResource()
             }
@@ -186,12 +303,15 @@ extension AppDatabase {
     }
 
     func close() {
+        lock.lock()
+        defer { lock.unlock() }
+
         if let db {
             sqlite3_close(db)
             self.db = nil
         }
 
-        databaseURL = nil
+        _databaseURL = nil
 
         if isDatabaseSecurityScopeActive {
             securityScopedDatabaseURL?.stopAccessingSecurityScopedResource()
@@ -207,6 +327,9 @@ extension AppDatabase {
     }
 
     func execute(_ sql: String, bind: ((SQLiteStatement) -> Void)? = nil) throws {
+        lock.lock()
+        defer { lock.unlock() }
+
         try withReconnectRetry {
             guard let db else {
                 throw DatabaseError.notOpen
@@ -233,7 +356,10 @@ extension AppDatabase {
     }
 
     func query<T>(_ sql: String, map: (SQLiteStatement) throws -> T) throws -> [T] {
-        try withReconnectRetry {
+        lock.lock()
+        defer { lock.unlock() }
+
+        return try withReconnectRetry {
             guard let db else {
                 throw DatabaseError.notOpen
             }
@@ -265,7 +391,10 @@ extension AppDatabase {
         map: (SQLiteStatement) throws -> T,
         bind: (SQLiteStatement) throws -> Void
     ) throws -> [T] {
-        try withReconnectRetry {
+        lock.lock()
+        defer { lock.unlock() }
+
+        return try withReconnectRetry {
             guard let db else {
                 throw DatabaseError.notOpen
             }
@@ -375,12 +504,8 @@ struct SQLiteStatement {
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
 extension DateFormatter {
-    static let proWorkSQLite: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSXXXXX"
-        return formatter
-    }()
+    /// Tek otoriteli kaynak `AppDateFormatters.sqliteTimestamp`; mevcut 30+
+    /// call site'ı kırmamak için bu alias korunuyor. Yeni kodda doğrudan
+    /// `AppDateFormatters` üzerinden referans verilmeli.
+    static var proWorkSQLite: DateFormatter { AppDateFormatters.sqliteTimestamp }
 }

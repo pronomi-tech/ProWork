@@ -883,6 +883,10 @@
 
 "database.error.lastOpenFailed" = "Son kullanılan veri dosyası açılamadı. Yeni bir dosya seçin veya oluşturun.";
 "database.error.openFailed" = "Seçilen veri dosyası açılamadı.";
+"database.error.notOpen" = "Veri dosyası açık değil.";
+"database.error.unableToOpenFile" = "Veri dosyasına erişilemiyor. Klasör izinleri değişmiş ya da dosya başka bir yere taşınmış olabilir. Lütfen dosyayı yeniden seçin.";
+"database.error.locked" = "Veri dosyası başka bir işlem tarafından kullanılıyor olabilir. Birkaç saniye sonra yeniden deneyin.";
+"database.error.diskIO" = "Disk erişiminde bir sorun oluştu. Diskte yeterli alan olduğundan ve dosyanın yazılabilir olduğundan emin olun.";
 "database.error.createFailed" = "Yeni veri dosyası oluşturulamadı.";
 "database.error.saveFailed" = "Veri dosyası kaydedilemedi:";
 "database.message.changedRelaunching" = "Veri dosyası değişti. Uygulama yeniden başlatılıyor.";

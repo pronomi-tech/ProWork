@@ -25,6 +25,7 @@ struct ProWorkApp: App {
     @StateObject private var sessionController = DatabaseSessionController()
     @StateObject private var automationController = WorkAutomationController()
     @StateObject private var toastStore = ProWorkToastStore.shared
+    @StateObject private var services = AppServices.shared
     @State private var menuBarController = MenuBarController()
 
     var body: some Scene {
@@ -34,6 +35,7 @@ struct ProWorkApp: App {
                 .environmentObject(sessionController)
                 .environmentObject(automationController)
                 .environmentObject(toastStore)
+                .environmentObject(services)
                 .environment(\.locale, settingsStore.locale)
                 .proWorkFontScale(settingsStore.settings.fontSize.scale)
                 .proWorkToastOverlay()

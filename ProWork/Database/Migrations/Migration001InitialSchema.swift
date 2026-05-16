@@ -574,38 +574,32 @@ struct Migration001InitialSchema: Migration {
 
 private extension Migration001InitialSchema {
     func applyBillingAndMultiTenantSchema(_ database: AppDatabase) throws {
-        try database.execute("BEGIN TRANSACTION;")
+        // Transaction sarmalama orkestratör (DatabaseMigrator) tarafından yapılıyor;
+        // burada nested BEGIN/COMMIT açmıyoruz (SQLite nested transaction'ı
+        // desteklemez).
+        try createUsersTable(database)
+        try createOrganizationsTable(database)
 
-        do {
-            try createUsersTable(database)
-            try createOrganizationsTable(database)
+        try seedDefaultOwnerAndOrganization(database)
 
-            try seedDefaultOwnerAndOrganization(database)
+        try createCompanyProfileTable(database)
+        try createBillingRulesTable(database)
+        try createHolidaysTable(database)
+        try createExchangeRatesTable(database)
+        try createVatRatesTable(database)
 
-            try createCompanyProfileTable(database)
-            try createBillingRulesTable(database)
-            try createHolidaysTable(database)
-            try createExchangeRatesTable(database)
-            try createVatRatesTable(database)
+        try createPriceListsTable(database)
+        try createPriceListRowsTable(database)
+        try createTodoBillingOverridesTable(database)
 
-            try createPriceListsTable(database)
-            try createPriceListRowsTable(database)
-            try createTodoBillingOverridesTable(database)
+        try createBillingReportRunsTable(database)
+        try createBillingReportLinesTable(database)
+        try createPaymentsTable(database)
 
-            try createBillingReportRunsTable(database)
-            try createBillingReportLinesTable(database)
-            try createPaymentsTable(database)
-
-            try seedDefaultCompanyProfile(database)
-            try seedDefaultBillingRule(database)
-            try seedDefaultVatRates(database)
-            try seedTurkishHolidays(database)
-
-            try database.execute("COMMIT;")
-        } catch {
-            try? database.execute("ROLLBACK;")
-            throw error
-        }
+        try seedDefaultCompanyProfile(database)
+        try seedDefaultBillingRule(database)
+        try seedDefaultVatRates(database)
+        try seedTurkishHolidays(database)
     }
 
     func createUsersTable(_ database: AppDatabase) throws {

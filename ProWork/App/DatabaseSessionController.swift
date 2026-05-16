@@ -10,6 +10,7 @@ import Combine
 import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
+import os
 
 @MainActor
 final class DatabaseSessionController: ObservableObject {
@@ -124,6 +125,18 @@ final class DatabaseSessionController: ObservableObject {
             at: location.databaseURL,
             containerDirectoryURL: location.containerDirectoryURL
         )
+
+        // Migration001 dini bayramları 2024-2030 için hardcoded ekledi.
+        // 2031+ için boşluk kalmasın diye generator'ı çalıştırıp eksik
+        // satırları doldur. Mevcut satırlara dokunmaz; bu yüzden her açılışta
+        // güvenle çağrılabilir.
+        do {
+            try IslamicHolidayBootstrap().ensurePopulated(
+                currentYear: AppCalendar.istanbul.component(.year, from: Date())
+            )
+        } catch {
+            ProWorkLog.app.error("Islamic holiday bootstrap failed: \(error.localizedDescription, privacy: .public)")
+        }
 
         let resolvedLocation: ResolvedDatabaseLocation
         if persistSelection {
@@ -277,18 +290,21 @@ private final class DatabaseLocationStore {
 
 private enum AppRelauncher {
     static func relaunch() {
-        let bundlePath = Bundle.main.bundlePath.replacingOccurrences(of: "\"", with: "\\\"")
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        process.arguments = [
-            "-c",
-            "sleep 0.5; open -n \"\(bundlePath)\""
-        ]
+        // Doğrudan `/usr/bin/open` çalıştırıyoruz; shell aradan çıktığı için
+        // bundle path'inde geçebilecek $, `, \, " gibi karakterler için
+        // herhangi bir interpolation riski kalmıyor.
+        let bundleURL = Bundle.main.bundleURL
 
-        do {
-            try process.run()
-        } catch {
-            print("App relaunch failed:", error.localizedDescription)
+        Task.detached {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            process.arguments = ["-n", bundleURL.path]
+            do {
+                try process.run()
+            } catch {
+                ProWorkLog.app.error("App relaunch failed: \(error.localizedDescription, privacy: .public)")
+            }
         }
 
         NSApp.terminate(nil)

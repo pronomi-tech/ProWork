@@ -53,6 +53,10 @@ struct BillingReportRun: Identifiable, Hashable {
     var status: BillingRunStatus
     var title: String?
     var invoiceNumber: String?
+    /// Resmi belge numarası (örn. "HD-2026-000123"). Finalize anında yıl bazlı
+    /// `AppSettings.billingDocumentSequenceByYear` sayacından tüketilir; draft
+    /// halindeyken nil kalır.
+    var documentNumber: String?
     var currency: String
     var subtotalMinor: Int
     var vatMinor: Int
@@ -85,6 +89,7 @@ struct BillingReportRun: Identifiable, Hashable {
         status: BillingRunStatus = .draft,
         title: String? = nil,
         invoiceNumber: String? = nil,
+        documentNumber: String? = nil,
         currency: String = "TRY",
         subtotalMinor: Int = 0,
         vatMinor: Int = 0,
@@ -115,6 +120,7 @@ struct BillingReportRun: Identifiable, Hashable {
         self.status = status
         self.title = title
         self.invoiceNumber = invoiceNumber
+        self.documentNumber = documentNumber
         self.currency = currency.uppercased()
         self.subtotalMinor = subtotalMinor
         self.vatMinor = vatMinor

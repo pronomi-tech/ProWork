@@ -9,9 +9,7 @@ import SwiftUI
 
 struct GeneralSettingsView: View {
     @EnvironmentObject private var settingsStore: AppSettingsStore
-    @State private var statuses: [TodoStatus] = []
-
-    private let statusRepository = TodoStatusRepository()
+    @StateObject private var viewModel = GeneralSettingsViewModel()
 
     var body: some View {
         SettingsScreenScaffold(
@@ -21,7 +19,7 @@ struct GeneralSettingsView: View {
             settingsCard
             previewCard
         }
-        .onAppear(perform: loadStatuses)
+        .onAppear { viewModel.loadTimerStartingStatuses() }
     }
 
     private var settingsCard: some View {
@@ -213,7 +211,7 @@ struct GeneralSettingsView: View {
                         .proWorkTextStyle(.caption)
                         .foregroundStyle(.secondary)
 
-                    if statuses.isEmpty {
+                    if viewModel.timerStartingStatuses.isEmpty {
                         Text(settingsStore.localized("general.row.menuBarStatuses.empty", defaultValue: "Aktif statü bulunamadı."))
                             .proWorkTextStyle(.caption)
                             .foregroundStyle(.secondary)
@@ -225,7 +223,7 @@ struct GeneralSettingsView: View {
                             alignment: .leading,
                             spacing: ProWorkLayout.scaled(8, using: settingsStore)
                         ) {
-                            ForEach(statuses) { status in
+                            ForEach(viewModel.timerStartingStatuses) { status in
                                 ProWorkCheckbox(
                                     status.name,
                                     isOn: menuBarStatusBinding(for: status.id)
@@ -490,10 +488,4 @@ struct GeneralSettingsView: View {
         )
     }
 
-    private func loadStatuses() {
-        let loadedStatuses = (try? statusRepository.fetchAll()) ?? []
-        statuses = loadedStatuses
-            .filter { $0.isActive && $0.startsTimer }
-            .sorted { $0.sortOrder < $1.sortOrder }
-    }
 }

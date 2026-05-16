@@ -8,20 +8,13 @@
 import SwiftUI
 
 struct CustomersView: View {
-    @State private var customers: [Customer] = []
-    @State private var customerCurrencies: [String: String] = [:]
-    @State private var vatLabelsById: [String: String] = [:]
+    @EnvironmentObject private var settingsStore: AppSettingsStore
+    @StateObject private var viewModel = CustomersViewModel()
+
     @State private var isShowingCreateForm = false
     @State private var editingCustomer: Customer?
     @State private var pricingCustomer: Customer?
     @State private var confirmation: ProWorkConfirmation?
-    @State private var errorMessage: String?
-    @EnvironmentObject private var settingsStore: AppSettingsStore
-
-    private let repository = CustomerRepository()
-    private let priceListRepository = PriceListRepository()
-    private let organizationRepository = OrganizationRepository()
-    private let vatRateRepository = VatRateRepository()
 
     var body: some View {
         VStack(alignment: .leading, spacing: ProWorkLayout.scaled(16, using: settingsStore)) {
@@ -30,18 +23,22 @@ struct CustomersView: View {
         }
         .padding(ProWorkLayout.scaled(24, using: settingsStore))
         .proWorkFrame(minWidth: 860, minHeight: 560)
-        .proWorkToastNotifications(errorMessage: errorMessage)
+        .proWorkToastNotifications(errorMessage: viewModel.errorMessage)
         .onAppear {
-            loadCustomers()
+            viewModel.load(settingsStore: settingsStore)
         }
         .sheet(isPresented: $isShowingCreateForm) {
             CustomerFormView(mode: .create) { customer in
-                createCustomer(customer)
+                if viewModel.create(customer, settingsStore: settingsStore) {
+                    isShowingCreateForm = false
+                }
             }
         }
         .sheet(item: $editingCustomer) { customer in
             CustomerFormView(mode: .edit(customer)) { updatedCustomer in
-                updateCustomer(updatedCustomer)
+                if viewModel.update(updatedCustomer, settingsStore: settingsStore) {
+                    editingCustomer = nil
+                }
             }
         }
         .sheet(item: $pricingCustomer) { customer in
@@ -49,9 +46,9 @@ struct CustomersView: View {
                 ownerType: .customer,
                 ownerId: customer.id,
                 ownerLabel: customer.name,
-                defaultCurrency: customerCurrencies[customer.id] ?? "TRY",
+                defaultCurrency: viewModel.customerCurrencies[customer.id] ?? "TRY",
                 onListsChanged: {
-                    loadCustomers()
+                    viewModel.load(settingsStore: settingsStore)
                 }
             )
         }
@@ -83,16 +80,16 @@ struct CustomersView: View {
 
     private var customerList: some View {
         ZStack {
-            if customers.isEmpty {
+            if viewModel.customers.isEmpty {
                 emptyState
             } else {
                 ScrollView {
                     LazyVStack(spacing: ProWorkLayout.scaled(12, using: settingsStore)) {
-                        ForEach(customers) { customer in
+                        ForEach(viewModel.customers) { customer in
                             CustomerRowView(
                                 customer: customer,
-                                effectiveCurrency: customerCurrencies[customer.id] ?? "TRY",
-                                vatLabel: customer.vatRateId.flatMap { vatLabelsById[$0] },
+                                effectiveCurrency: viewModel.customerCurrencies[customer.id] ?? "TRY",
+                                vatLabel: customer.vatRateId.flatMap { viewModel.vatLabelsById[$0] },
                                 onEdit: {
                                     editingCustomer = customer
                                 },
@@ -128,56 +125,6 @@ struct CustomersView: View {
         .proWorkFrame(maxWidth: 420)
     }
 
-    private func loadCustomers() {
-        do {
-            customers = try repository.fetchAll()
-            let organizationCurrency = try organizationRepository.fetchDefault()?.masterCurrency ?? "TRY"
-            let priceLists = try priceListRepository.fetchAll(organizationId: BuiltInOrganizationId.default)
-            let vatRates = try vatRateRepository.fetchAll(organizationId: BuiltInOrganizationId.default)
-            customerCurrencies = Dictionary(
-                uniqueKeysWithValues: customers.map { customer in
-                    (
-                        customer.id,
-                        PricingCurrencyResolver.resolveCustomerCurrency(
-                            customer: customer,
-                            priceLists: priceLists,
-                            organizationCurrency: organizationCurrency
-                        )
-                    )
-                }
-            )
-            vatLabelsById = VatRateLabel.nonDefaultSelectionLabels(
-                rates: vatRates,
-                settingsStore: settingsStore
-            )
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func createCustomer(_ customer: Customer) {
-        do {
-            try repository.insert(customer)
-            loadCustomers()
-            isShowingCreateForm = false
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func updateCustomer(_ customer: Customer) {
-        do {
-            try repository.update(customer)
-            loadCustomers()
-            editingCustomer = nil
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-    
     private func askDeleteCustomer(_ customer: Customer) {
         confirmation = ProWorkConfirmation(
             title: settingsStore.localized("customers.delete.title", defaultValue: "Müşteri silinsin mi?"),
@@ -186,17 +133,7 @@ struct CustomersView: View {
             cancelTitle: settingsStore.localized("customers.delete.cancel", defaultValue: "Vazgeç"),
             role: .destructive
         ) {
-            deleteCustomer(customer)
-        }
-    }
-    
-    private func deleteCustomer(_ customer: Customer) {
-        do {
-            try repository.delete(id: customer.id)
-            loadCustomers()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
+            viewModel.delete(id: customer.id, settingsStore: settingsStore)
         }
     }
 }

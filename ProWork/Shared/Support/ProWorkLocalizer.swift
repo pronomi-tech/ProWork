@@ -12,12 +12,18 @@ final class ProWorkLocalizer {
 
     private let lock = NSLock()
     private var storedLanguage: AppLanguage = .turkish
+    // Bundle çözümlemesi her `localized(...)` çağrısında diskten path arıyor
+    // ve yeni Bundle instance'ı yaratıyordu; SwiftUI body içinde frame başına
+    // yüzlerce çağrı olur, ciddi bir overhead. Dil başına bir kez resolve edip
+    // saklıyoruz; `update(language:)` cache'i geçersiz kılar.
+    private var cachedBundles: [AppLanguage: [Bundle]] = [:]
 
     private init() {}
 
     func update(language: AppLanguage) {
         lock.lock()
         storedLanguage = language
+        cachedBundles.removeAll(keepingCapacity: true)
         lock.unlock()
     }
 
@@ -29,7 +35,7 @@ final class ProWorkLocalizer {
     }
 
     func string(_ key: String, defaultValue: String) -> String {
-        for bundle in candidateBundles {
+        for bundle in candidateBundles() {
             let value = bundle.localizedString(forKey: key, value: key, table: nil)
             if value != key {
                 return value
@@ -39,10 +45,14 @@ final class ProWorkLocalizer {
         return defaultValue
     }
 
-    private var candidateBundles: [Bundle] {
+    private func candidateBundles() -> [Bundle] {
         lock.lock()
+        defer { lock.unlock() }
+
         let currentLanguage = storedLanguage
-        lock.unlock()
+        if let cached = cachedBundles[currentLanguage] {
+            return cached
+        }
 
         let fallbacks: [AppLanguage] = {
             var languages: [AppLanguage] = [currentLanguage]
@@ -63,6 +73,8 @@ final class ProWorkLocalizer {
             return Bundle(path: path)
         }
 
-        return bundles.isEmpty ? [.main] : bundles
+        let resolved = bundles.isEmpty ? [.main] : bundles
+        cachedBundles[currentLanguage] = resolved
+        return resolved
     }
 }

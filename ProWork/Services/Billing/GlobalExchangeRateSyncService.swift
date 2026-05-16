@@ -55,16 +55,34 @@ final class GlobalExchangeRateSyncService {
     private let userId: String
     private let session: URLSession
 
+    /// Frankfurter ECB referans kurları üzerinden çalışır; ECB hafta sonu /
+    /// resmi tatil yayımlamaz. Bir önceki yayımlanan günün kurunu en fazla
+    /// 7 gün geriye doğru arayarak "ileri taşıyoruz".
+    private static let carryForwardLookbackDays = 7
+
+    private static let retryDelaysNanoseconds: [UInt64] = [
+        1_000_000_000,
+        2_000_000_000,
+        4_000_000_000
+    ]
+
     init(
         repository: ExchangeRateRepository? = nil,
         organizationId: String? = nil,
         userId: String? = nil,
-        session: URLSession = .shared
+        session: URLSession? = nil
     ) {
         self.repository = repository ?? ExchangeRateRepository()
         self.organizationId = organizationId ?? BuiltInOrganizationId.default
         self.userId = userId ?? BuiltInUserId.defaultOwner
-        self.session = session
+        if let session {
+            self.session = session
+        } else {
+            let configuration = URLSessionConfiguration.default
+            configuration.timeoutIntervalForRequest = 15
+            configuration.timeoutIntervalForResource = 30
+            self.session = URLSession(configuration: configuration)
+        }
     }
 
     func sync(day: Date, currencies: [String]? = nil) async throws -> TCMBExchangeRateSyncResult {
@@ -94,10 +112,17 @@ final class GlobalExchangeRateSyncService {
         var cursor = normalizedStart
 
         while cursor <= normalizedEnd {
-            let dayString = Self.storageFormatter.string(from: cursor)
+            let dayString = AppDateFormatters.sqliteDay.string(from: cursor)
             do {
-                let quotes = try await fetchPublishedTRYRates(for: cursor, currencies: requestedCurrencies)
-                try persistPublishedRates(quotes, on: dayString)
+                let (quotes, carriedFromDate) = try await fetchRatesWithCarryForward(
+                    for: cursor,
+                    currencies: requestedCurrencies
+                )
+                try persistPublishedRates(
+                    quotes,
+                    on: dayString,
+                    carriedFromDate: carriedFromDate
+                )
                 importedDayCount += 1
                 importedRateCount += quotes.count
             } catch GlobalExchangeRateSyncError.ratesNotPublished {
@@ -114,18 +139,49 @@ final class GlobalExchangeRateSyncService {
         )
     }
 
+    private func fetchRatesWithCarryForward(
+        for date: Date,
+        currencies: Set<String>
+    ) async throws -> ([String: ExchangeRateQuote], carriedFromDate: String?) {
+        do {
+            let rates = try await fetchPublishedTRYRates(for: date, currencies: currencies)
+            return (rates, nil)
+        } catch GlobalExchangeRateSyncError.ratesNotPublished {
+            // ECB tatil/hafta sonu — geriye doğru en yakın yayımlanmış gün.
+        }
+
+        var probe = date
+        for _ in 1...Self.carryForwardLookbackDays {
+            guard let previous = Calendar.current.date(byAdding: .day, value: -1, to: probe) else {
+                break
+            }
+            probe = previous
+            do {
+                let rates = try await fetchPublishedTRYRates(for: probe, currencies: currencies)
+                let carriedFromDate = AppDateFormatters.sqliteDay.string(from: probe)
+                return (rates, carriedFromDate)
+            } catch GlobalExchangeRateSyncError.ratesNotPublished {
+                continue
+            }
+        }
+
+        throw GlobalExchangeRateSyncError.ratesNotPublished(
+            date: AppDateFormatters.sqliteDay.string(from: date)
+        )
+    }
+
     private func fetchPublishedTRYRates(
         for date: Date,
         currencies: Set<String>
     ) async throws -> [String: ExchangeRateQuote] {
-        let requestedDay = Self.storageFormatter.string(from: date)
+        let requestedDay = AppDateFormatters.sqliteDay.string(from: date)
         let candidateURLs = makeURLs(for: date)
         var lastError: Error?
         var responsePayload: (Data, URLResponse)?
 
         for url in candidateURLs {
             do {
-                responsePayload = try await session.data(from: url)
+                responsePayload = try await fetchWithRetry(url: url)
                 lastError = nil
                 break
             } catch {
@@ -187,12 +243,37 @@ final class GlobalExchangeRateSyncService {
         return filtered
     }
 
-    private func persistPublishedRates(_ rates: [String: ExchangeRateQuote], on dayString: String) throws {
+    private func persistPublishedRates(
+        _ rates: [String: ExchangeRateQuote],
+        on dayString: String,
+        carriedFromDate: String?
+    ) throws {
         let now = Date()
+        let carryForwardNote: String? = carriedFromDate.map { source in
+            String(
+                format: ProWorkLocalizer.shared.string(
+                    "globalRates.note.carriedForward",
+                    defaultValue: "%@ tarihinde yayımlanan global referans kur, kur yayımlanmamış güne taşındı."
+                ),
+                source
+            )
+        }
 
         for (currency, quote) in rates.sorted(by: { $0.key < $1.key }) {
             guard let operationalRate = quote.operationalRate, operationalRate > 0 else {
                 continue
+            }
+
+            let combinedNote: String?
+            switch (carryForwardNote, quote.note) {
+            case let (carry?, original?):
+                combinedNote = "\(carry) (\(original))"
+            case let (carry?, nil):
+                combinedNote = carry
+            case let (nil, original?):
+                combinedNote = original
+            default:
+                combinedNote = nil
             }
 
             let rate = ExchangeRate(
@@ -206,7 +287,7 @@ final class GlobalExchangeRateSyncService {
                 rateDate: dayString,
                 source: .global,
                 fetchedAt: now,
-                note: quote.note,
+                note: combinedNote,
                 organizationId: organizationId,
                 createdByUserId: userId,
                 updatedByUserId: userId,
@@ -217,8 +298,38 @@ final class GlobalExchangeRateSyncService {
         }
     }
 
+    private func fetchWithRetry(url: URL) async throws -> (Data, URLResponse) {
+        var attempt = 0
+        while true {
+            do {
+                return try await session.data(from: url)
+            } catch {
+                attempt += 1
+                guard attempt <= Self.retryDelaysNanoseconds.count,
+                      Self.shouldRetry(error: error) else {
+                    throw error
+                }
+                try? await Task.sleep(nanoseconds: Self.retryDelaysNanoseconds[attempt - 1])
+            }
+        }
+    }
+
+    private static func shouldRetry(error: Error) -> Bool {
+        guard let urlError = error as? URLError else { return false }
+        switch urlError.code {
+        case .timedOut,
+             .networkConnectionLost,
+             .cannotConnectToHost,
+             .dnsLookupFailed,
+             .notConnectedToInternet:
+            return true
+        default:
+            return false
+        }
+    }
+
     private func makeURLs(for date: Date) -> [URL] {
-        let requestedDay = Self.storageFormatter.string(from: date)
+        let requestedDay = AppDateFormatters.sqliteDay.string(from: date)
         var components = URLComponents()
         components.scheme = "https"
         components.host = "api.frankfurter.dev"
@@ -262,13 +373,6 @@ final class GlobalExchangeRateSyncService {
         }
     }
 
-    private static let storageFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter
-    }()
 }
 
 private struct FrankfurterRatesPayload: Decodable {

@@ -73,16 +73,39 @@ final class TCMBExchangeRateSyncService {
     private let userId: String
     private let session: URLSession
 
+    /// 404 sonrası kuru "ileri taşımak" için en fazla geriye gidilecek gün
+    /// sayısı. TCMB hafta sonu ve resmi tatillerde kur yayımlamaz; pratik
+    /// olarak bir önceki iş gününün kuru kullanılır. 7 gün, art arda gelen
+    /// resmi tatil + hafta sonu kombinasyonlarını rahatlıkla karşılar.
+    private static let carryForwardLookbackDays = 7
+
+    /// Geçici ağ hataları için exponential backoff: 1s, 2s, 4s.
+    private static let retryDelaysNanoseconds: [UInt64] = [
+        1_000_000_000,
+        2_000_000_000,
+        4_000_000_000
+    ]
+
     init(
         repository: ExchangeRateRepository? = nil,
         organizationId: String? = nil,
         userId: String? = nil,
-        session: URLSession = .shared
+        session: URLSession? = nil
     ) {
         self.repository = repository ?? ExchangeRateRepository()
         self.organizationId = organizationId ?? BuiltInOrganizationId.default
         self.userId = userId ?? BuiltInUserId.defaultOwner
-        self.session = session
+        // Varsayılan URLSession.shared timeout'u 60s. Yıllık sync ~365 istek
+        // demek; tek bir hata 6+ saat bekleme yaratabiliyor. 15s istek / 30s
+        // resource limitiyle hızlı başarısızlık + retry akışına geçiyoruz.
+        if let session {
+            self.session = session
+        } else {
+            let configuration = URLSessionConfiguration.default
+            configuration.timeoutIntervalForRequest = 15
+            configuration.timeoutIntervalForResource = 30
+            self.session = URLSession(configuration: configuration)
+        }
     }
 
     func sync(day: Date, currencies: [String]? = nil) async throws -> TCMBExchangeRateSyncResult {
@@ -112,12 +135,22 @@ final class TCMBExchangeRateSyncService {
         var cursor = normalizedStart
 
         while cursor <= normalizedEnd {
-            let dayString = Self.storageFormatter.string(from: cursor)
+            let dayString = AppDateFormatters.sqliteDay.string(from: cursor)
             do {
-                let publishedRates = try await fetchPublishedTRYRates(for: cursor, currencies: requestedCurrencies)
-                try persistPublishedRates(publishedRates, on: dayString)
+                // Önce talep edilen güne dene; 404 ise N gün geriye doğru
+                // yürüyüp ilk yayımlanmış kuru "ileri taşı". Bu, TCMB'nin
+                // hafta sonu / tatil davranışını uygulama tarafında simüle eder.
+                let (rates, carriedFromDate) = try await fetchRatesWithCarryForward(
+                    for: cursor,
+                    currencies: requestedCurrencies
+                )
+                try persistPublishedRates(
+                    rates,
+                    on: dayString,
+                    carriedFromDate: carriedFromDate
+                )
                 importedDayCount += 1
-                importedRateCount += publishedRates.count
+                importedRateCount += rates.count
             } catch TCMBExchangeRateSyncError.ratesNotPublished {
                 skippedDates.append(dayString)
             }
@@ -132,18 +165,53 @@ final class TCMBExchangeRateSyncService {
         )
     }
 
+    /// Önce talep edilen tarihi dener. 404 ile karşılaşırsa
+    /// `carryForwardLookbackDays` kadar geriye yürüyüp ilk yayımlanmış kuru
+    /// döner. Hiçbir gün yayımlanmamışsa `.ratesNotPublished` fırlatır.
+    /// İkinci tuple elemanı, kur "ileri taşındıysa" kaynak tarihtir.
+    private func fetchRatesWithCarryForward(
+        for date: Date,
+        currencies: Set<String>
+    ) async throws -> ([String: ExchangeRateQuote], carriedFromDate: String?) {
+        do {
+            let rates = try await fetchPublishedTRYRates(for: date, currencies: currencies)
+            return (rates, nil)
+        } catch TCMBExchangeRateSyncError.ratesNotPublished {
+            // Hafta sonu / tatil — geriye doğru en yakın iş gününü bul.
+        }
+
+        var probe = date
+        for _ in 1...Self.carryForwardLookbackDays {
+            guard let previous = Calendar.current.date(byAdding: .day, value: -1, to: probe) else {
+                break
+            }
+            probe = previous
+            do {
+                let rates = try await fetchPublishedTRYRates(for: probe, currencies: currencies)
+                let carriedFromDate = AppDateFormatters.sqliteDay.string(from: probe)
+                return (rates, carriedFromDate)
+            } catch TCMBExchangeRateSyncError.ratesNotPublished {
+                continue
+            }
+        }
+
+        throw TCMBExchangeRateSyncError.ratesNotPublished(
+            date: AppDateFormatters.sqliteDay.string(from: date)
+        )
+    }
+
     private func fetchPublishedTRYRates(
         for date: Date,
         currencies: Set<String>
     ) async throws -> [String: ExchangeRateQuote] {
-        let dayString = Self.storageFormatter.string(from: date)
+        let dayString = AppDateFormatters.sqliteDay.string(from: date)
         let candidateURLs = makeURLs(for: date)
         var lastError: Error?
         var responsePayload: (Data, URLResponse)?
 
         for url in candidateURLs {
             do {
-                responsePayload = try await session.data(from: url)
+                responsePayload = try await fetchWithRetry(url: url)
                 lastError = nil
                 break
             } catch {
@@ -188,12 +256,39 @@ final class TCMBExchangeRateSyncService {
         return filtered
     }
 
-    private func persistPublishedRates(_ rates: [String: ExchangeRateQuote], on dayString: String) throws {
+    private func persistPublishedRates(
+        _ rates: [String: ExchangeRateQuote],
+        on dayString: String,
+        carriedFromDate: String?
+    ) throws {
         let now = Date()
+        let carryForwardNote: String? = carriedFromDate.map { source in
+            String(
+                format: ProWorkLocalizer.shared.string(
+                    "tcmb.note.carriedForward",
+                    defaultValue: "%@ tarihinde yayımlanan kur, kur yayımlanmamış güne taşındı."
+                ),
+                source
+            )
+        }
 
         for (currency, quote) in rates.sorted(by: { $0.key < $1.key }) {
             guard let operationalRate = quote.operationalRate, operationalRate > 0 else {
                 continue
+            }
+
+            // Carry-forward durumunda hem kaynak hem de TCMB'nin orijinal
+            // notunu kullanıcıya gösterebilmek için birleştiriyoruz.
+            let combinedNote: String?
+            switch (carryForwardNote, quote.note) {
+            case let (carry?, original?):
+                combinedNote = "\(carry) (\(original))"
+            case let (carry?, nil):
+                combinedNote = carry
+            case let (nil, original?):
+                combinedNote = original
+            default:
+                combinedNote = nil
             }
 
             let direct = ExchangeRate(
@@ -207,7 +302,7 @@ final class TCMBExchangeRateSyncService {
                 rateDate: dayString,
                 source: .tcmb,
                 fetchedAt: now,
-                note: quote.note,
+                note: combinedNote,
                 organizationId: organizationId,
                 createdByUserId: userId,
                 updatedByUserId: userId,
@@ -215,6 +310,39 @@ final class TCMBExchangeRateSyncService {
                 updatedAt: now
             )
             try repository.upsert(direct)
+        }
+    }
+
+    /// Geçici ağ hatalarında 1s → 2s → 4s backoff ile en fazla 3 kez tekrar
+    /// dener. Persistent hatalar (404 vb. HTTP cevapları) retry'a sokulmaz;
+    /// onları çağıran katman zaten skip'liyor.
+    private func fetchWithRetry(url: URL) async throws -> (Data, URLResponse) {
+        var attempt = 0
+        while true {
+            do {
+                return try await session.data(from: url)
+            } catch {
+                attempt += 1
+                guard attempt <= Self.retryDelaysNanoseconds.count,
+                      Self.shouldRetry(error: error) else {
+                    throw error
+                }
+                try? await Task.sleep(nanoseconds: Self.retryDelaysNanoseconds[attempt - 1])
+            }
+        }
+    }
+
+    private static func shouldRetry(error: Error) -> Bool {
+        guard let urlError = error as? URLError else { return false }
+        switch urlError.code {
+        case .timedOut,
+             .networkConnectionLost,
+             .cannotConnectToHost,
+             .dnsLookupFailed,
+             .notConnectedToInternet:
+            return true
+        default:
+            return false
         }
     }
 
@@ -249,13 +377,6 @@ final class TCMBExchangeRateSyncService {
         }
     }
 
-    private static let storageFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter
-    }()
 
     private static let monthFolderFormatter: DateFormatter = {
         let formatter = DateFormatter()

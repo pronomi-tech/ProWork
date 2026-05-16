@@ -12,14 +12,11 @@ import SwiftUI
 
 struct VatRatesView: View {
     @EnvironmentObject private var settingsStore: AppSettingsStore
+    @StateObject private var viewModel = VatRatesViewModel()
 
-    @State private var rates: [VatRate] = []
     @State private var isShowingNew = false
     @State private var editingRate: VatRate?
     @State private var confirmation: ProWorkConfirmation?
-    @State private var errorMessage: String?
-
-    private let repository = VatRateRepository()
 
     var body: some View {
         SettingsScreenScaffold(
@@ -28,7 +25,7 @@ struct VatRatesView: View {
                 "vat.subtitle",
                 defaultValue: "KDV oranlarını burada tanımlayın; müşteri, proje veya kategoriye atayın. Atama yoksa varsayılan oran uygulanır."
             ),
-            errorMessage: errorMessage,
+            errorMessage: viewModel.errorMessage,
             toolbar: {
                 Button {
                     isShowingNew = true
@@ -43,7 +40,7 @@ struct VatRatesView: View {
                 .controlSize(.large)
             }
         ) {
-            if rates.isEmpty {
+            if viewModel.rates.isEmpty {
                 SettingsCard {
                     SettingsEmptyState(
                         systemImage: "percent",
@@ -58,15 +55,19 @@ struct VatRatesView: View {
                 table
             }
         }
-        .onAppear { load() }
+        .onAppear { viewModel.load() }
         .sheet(isPresented: $isShowingNew) {
             VatRateFormView(mode: .create) { rate in
-                add(rate)
+                if viewModel.create(rate) {
+                    isShowingNew = false
+                }
             }
         }
         .sheet(item: $editingRate) { rate in
             VatRateFormView(mode: .edit(rate)) { updated in
-                update(updated)
+                if viewModel.update(updated) {
+                    editingRate = nil
+                }
             }
         }
         .proWorkConfirmationDialog($confirmation)
@@ -76,7 +77,7 @@ struct VatRatesView: View {
         SettingsTableContainer {
             tableHeader
             Divider()
-            ForEach(rates) { rate in
+            ForEach(viewModel.rates) { rate in
                 row(rate)
                 Divider()
             }
@@ -162,35 +163,6 @@ struct VatRatesView: View {
 
     // MARK: - Actions
 
-    private func load() {
-        do {
-            rates = try repository.fetchAll(organizationId: BuiltInOrganizationId.default)
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func add(_ rate: VatRate) {
-        do {
-            try repository.insert(rate)
-            isShowingNew = false
-            load()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func update(_ rate: VatRate) {
-        do {
-            try repository.update(rate)
-            editingRate = nil
-            load()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
     private func askDelete(_ rate: VatRate) {
         confirmation = ProWorkConfirmation(
             title: settingsStore.localized("vat.delete.title", defaultValue: "KDV tanımı silinsin mi?"),
@@ -202,16 +174,7 @@ struct VatRatesView: View {
             cancelTitle: settingsStore.localized("vat.delete.cancel", defaultValue: "Vazgeç"),
             role: .destructive
         ) {
-            delete(rate)
-        }
-    }
-
-    private func delete(_ rate: VatRate) {
-        do {
-            try repository.softDelete(id: rate.id)
-            load()
-        } catch {
-            errorMessage = error.localizedDescription
+            viewModel.softDelete(id: rate.id)
         }
     }
 }

@@ -7,6 +7,7 @@
 
 import SwiftUI
 import Combine
+import os
 
 @MainActor
 final class AppSettingsStore: ObservableObject {
@@ -35,7 +36,7 @@ final class AppSettingsStore: ObservableObject {
         } catch {
             settings = .defaults
             ProWorkLocalizer.shared.update(language: .turkish)
-            print("AppSettings load error:", error.localizedDescription)
+            ProWorkLog.settings.error("AppSettings load error: \(error.localizedDescription, privacy: .private)")
         }
     }
 
@@ -65,7 +66,7 @@ final class AppSettingsStore: ObservableObject {
             try repository.update(key: "launchAtLoginEnabled", value: value ? "1" : "0")
             settings = try repository.fetch()
         } catch {
-            print("LaunchAtLogin update error:", error.localizedDescription)
+            ProWorkLog.settings.error("LaunchAtLogin update error: \(error.localizedDescription, privacy: .private)")
             load()
         }
     }
@@ -102,7 +103,7 @@ final class AppSettingsStore: ObservableObject {
             try repository.update(key: "serviceDocumentTemplateSettings", value: json)
             settings = try repository.fetch()
         } catch {
-            print("ServiceDocumentTemplateSettings update error:", error.localizedDescription)
+            ProWorkLog.settings.error("ServiceDocumentTemplateSettings update error: \(error.localizedDescription, privacy: .private)")
         }
     }
 
@@ -114,7 +115,7 @@ final class AppSettingsStore: ObservableObject {
             try repository.update(key: "priceListQuoteTemplateSettings", value: json)
             settings = try repository.fetch()
         } catch {
-            print("PriceListQuoteTemplateSettings update error:", error.localizedDescription)
+            ProWorkLog.settings.error("PriceListQuoteTemplateSettings update error: \(error.localizedDescription, privacy: .private)")
         }
     }
 
@@ -142,7 +143,7 @@ final class AppSettingsStore: ObservableObject {
             try repository.update(key: "quoteSequenceByYear", value: json)
             settings = try repository.fetch()
         } catch {
-            print("quoteSequenceByYear update error:", error.localizedDescription)
+            ProWorkLog.settings.error("quoteSequenceByYear update error: \(error.localizedDescription, privacy: .private)")
         }
     }
 
@@ -184,7 +185,7 @@ final class AppSettingsStore: ObservableObject {
             settings = try repository.fetch()
             ProWorkLocalizer.shared.update(language: settings.language)
         } catch {
-            print("AppSettings update error:", error.localizedDescription)
+            ProWorkLog.settings.error("AppSettings update error: \(error.localizedDescription, privacy: .private)")
         }
     }
 

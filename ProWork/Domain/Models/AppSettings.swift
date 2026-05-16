@@ -24,6 +24,9 @@ struct AppSettings: Hashable {
     var priceListQuoteTemplateSettings: PriceListQuoteTemplateSettings
     /// Yıl bazlı son kullanılan teklif numarası sayacı. Anahtar: 4 haneli yıl (örn. "2026").
     var quoteSequenceByYear: [String: Int]
+    /// Yıl bazlı son kullanılan hizmet dökümü (billing run) belge numarası sayacı.
+    /// Anahtar: 4 haneli yıl. Finalize anında tüketilir.
+    var billingDocumentSequenceByYear: [String: Int]
 
     static let defaults = AppSettings(
         language: .turkish,
@@ -40,6 +43,7 @@ struct AppSettings: Hashable {
         preferredExchangeRateSource: .tcmb,
         serviceDocumentTemplateSettings: .defaultTemplate,
         priceListQuoteTemplateSettings: .defaultTemplate,
-        quoteSequenceByYear: [:]
+        quoteSequenceByYear: [:],
+        billingDocumentSequenceByYear: [:]
     )
 }

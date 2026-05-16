@@ -9,12 +9,7 @@ import SwiftUI
 
 struct ReportsDashboardView: View {
     @EnvironmentObject private var settingsStore: AppSettingsStore
-
-    @State private var sessions: [WorkSessionListItem] = []
-    @State private var todos: [TodoListItem] = []
-    @State private var customers: [Customer] = []
-    @State private var projects: [ProjectListItem] = []
-    @State private var errorMessage: String?
+    @StateObject private var viewModel = ReportsDashboardViewModel()
 
     @State private var filterRange: DateRangeFilter = .thisMonth
     @State private var filterStartDate: Date = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: Date())) ?? Date()
@@ -22,11 +17,6 @@ struct ReportsDashboardView: View {
     @State private var filterCustomerId: String = ""
     @State private var filterProjectId: String = ""
     @State private var isShowingFilters: Bool = false
-
-    private let sessionRepository = TodoTimeSessionRepository()
-    private let todoRepository = TodoRepository()
-    private let customerRepository = CustomerRepository()
-    private let projectRepository = ProjectRepository()
 
     var body: some View {
         VStack(alignment: .leading, spacing: ProWorkLayout.scaled(16, using: settingsStore)) {
@@ -60,16 +50,16 @@ struct ReportsDashboardView: View {
         }
         .padding(ProWorkLayout.scaled(24, using: settingsStore))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .proWorkToastNotifications(errorMessage: errorMessage)
+        .proWorkToastNotifications(errorMessage: viewModel.errorMessage)
         .onAppear {
-            loadData()
+            viewModel.loadData()
         }
     }
 
     // MARK: - Filtered Sessions
 
     private var filteredSessions: [WorkSessionListItem] {
-        return sessions.filter { session in
+        return viewModel.sessions.filter { session in
             let matchesRange = filterRange.contains(
                 session.startedAt,
                 customStart: filterStartDate,
@@ -78,13 +68,13 @@ struct ReportsDashboardView: View {
 
             let matchesCustomer: Bool = {
                 guard !filterCustomerId.isEmpty else { return true }
-                guard let name = customers.first(where: { $0.id == filterCustomerId })?.name else { return false }
+                guard let name = viewModel.customers.first(where: { $0.id == filterCustomerId })?.name else { return false }
                 return session.customerName == name
             }()
 
             let matchesProject: Bool = {
                 guard !filterProjectId.isEmpty else { return true }
-                guard let name = projects.first(where: { $0.id == filterProjectId })?.name else { return false }
+                guard let name = viewModel.projects.first(where: { $0.id == filterProjectId })?.name else { return false }
                 return session.projectName == name
             }()
 
@@ -189,13 +179,13 @@ struct ReportsDashboardView: View {
 
     private var customerFilterOptions: [FilterOption] {
         [FilterOption(id: "", title: settingsStore.localized("dateRange.all", defaultValue: "Tümü"))] +
-        customers.map { FilterOption(id: $0.id, title: $0.name) }
+        viewModel.customers.map { FilterOption(id: $0.id, title: $0.name) }
     }
 
     private var projectFilterOptions: [FilterOption] {
         let filtered = filterCustomerId.isEmpty
-            ? projects
-            : projects.filter { $0.customerId == filterCustomerId }
+            ? viewModel.projects
+            : viewModel.projects.filter { $0.customerId == filterCustomerId }
         return [FilterOption(id: "", title: settingsStore.localized("dateRange.all", defaultValue: "Tümü"))] +
             filtered.map { FilterOption(id: $0.id, title: $0.name) }
     }
@@ -209,7 +199,7 @@ struct ReportsDashboardView: View {
                         items: customerFilterOptions,
                         selectedId: $filterCustomerId,
                         isDisabled: false,
-                        showsSearch: customers.count > 8,
+                        showsSearch: viewModel.customers.count > 8,
                         systemImage: "person.2",
                         itemTitle: { $0.title },
                         matchesSearch: { item, text in item.title.localizedCaseInsensitiveContains(text) }
@@ -363,7 +353,7 @@ struct ReportsDashboardView: View {
     // MARK: - Customer Breakdown
 
     private var todoLookup: [String: TodoListItem] {
-        Dictionary(uniqueKeysWithValues: todos.map { ($0.id, $0) })
+        Dictionary(uniqueKeysWithValues: viewModel.todos.map { ($0.id, $0) })
     }
 
     private var categoryBreakdownRows: [DonutBreakdownRow] {
@@ -601,19 +591,6 @@ struct ReportsDashboardView: View {
         .padding(.vertical, ProWorkLayout.scaled(10, using: settingsStore))
     }
 
-    // MARK: - Data
-
-    private func loadData() {
-        do {
-            sessions = try sessionRepository.fetchAllListItems()
-            todos = try todoRepository.fetchAll()
-            customers = try customerRepository.fetchAll()
-            projects = try projectRepository.fetchAll()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
 }
 
 private struct FilterOption: Identifiable {

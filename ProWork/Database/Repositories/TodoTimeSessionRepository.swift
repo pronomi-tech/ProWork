@@ -97,6 +97,37 @@ final class TodoTimeSessionRepository {
         }
     }
 
+    /// Belirli session id'leri için toplu fetch (raporlama / faturalandırma için).
+    /// `SQLITE_MAX_VARIABLE_NUMBER` limitini aşmamak için 500'lük parçalara bölünür.
+    func fetch(ids: [String]) throws -> [TodoTimeSession] {
+        guard !ids.isEmpty else { return [] }
+
+        var results: [TodoTimeSession] = []
+        results.reserveCapacity(ids.count)
+
+        let chunkSize = 500
+        for chunkStart in stride(from: 0, to: ids.count, by: chunkSize) {
+            let chunk = Array(ids[chunkStart..<min(chunkStart + chunkSize, ids.count)])
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let sql = Self.selectAllColumnsSQL + """
+             WHERE id IN (\(placeholders)) AND deletedAt IS NULL;
+            """
+
+            let rows = try database.query(
+                sql,
+                map: { statement in Self.mapSession(statement) },
+                bind: { statement in
+                    for (offset, id) in chunk.enumerated() {
+                        statement.bindText(id, at: Int32(offset + 1))
+                    }
+                }
+            )
+            results.append(contentsOf: rows)
+        }
+
+        return results
+    }
+
     func fetchSessions(todoId: String) throws -> [TodoTimeSession] {
         let sql = Self.selectAllColumnsSQL + """
          WHERE todoId = ? AND deletedAt IS NULL

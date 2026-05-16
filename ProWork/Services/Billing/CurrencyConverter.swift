@@ -40,6 +40,14 @@ final class CurrencyConverter {
     private let masterCurrency: String
     private let sourcePriority: [ExchangeRateSource]
 
+    private struct RateCacheKey: Hashable {
+        let from: String
+        let to: String
+        let date: String
+    }
+
+    private var rateCache: [RateCacheKey: Decimal] = [:]
+
     init(
         rateRepository: ExchangeRateRepository? = nil,
         organizationId: String,
@@ -48,7 +56,11 @@ final class CurrencyConverter {
     ) {
         self.rateRepository = rateRepository ?? ExchangeRateRepository()
         self.organizationId = organizationId
-        self.masterCurrency = masterCurrency.uppercased()
+        // Boş bir masterCurrency, master üzerinden zincirleme dalında sonsuz
+        // rekürsiyona yol açıyordu (f != "" && t != "" hep doğru). "TRY"'ye
+        // düşmek hem güvenli hem de uygulamanın default'u.
+        let normalizedMaster = masterCurrency.uppercased()
+        self.masterCurrency = normalizedMaster.isEmpty ? "TRY" : normalizedMaster
         let resolvedPreferredSource = preferredAutoSource
             ?? (try? AppSettingsRepository().fetch().preferredExchangeRateSource)
             ?? .tcmb
@@ -94,6 +106,21 @@ final class CurrencyConverter {
         let t = to.uppercased()
         if f == t { return 1 }
 
+        // Aynı (from, to, date) üçlüsü dönem hesabında yüzlerce kez sorulabiliyor;
+        // her seferinde DB sorgusu + (gerekirse) master üzerinden zincirleme bedeli
+        // ödememek için sonuçları memoize ediyoruz. DB'de exchange_rate satırları
+        // append-only akışta yazıldığından converter ömrü boyunca sabit kabul edilebilir.
+        let cacheKey = RateCacheKey(from: f, to: t, date: date)
+        if let cached = rateCache[cacheKey] {
+            return cached
+        }
+
+        let resolved = try computeRate(from: f, to: t, on: date)
+        rateCache[cacheKey] = resolved
+        return resolved
+    }
+
+    private func computeRate(from f: String, to t: String, on date: String) throws -> Decimal {
         // 1. Doğrudan
         if let direct = try? rateRepository.fetchLatest(
             organizationId: organizationId,

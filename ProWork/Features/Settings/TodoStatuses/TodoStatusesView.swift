@@ -8,20 +8,18 @@
 import SwiftUI
 
 struct TodoStatusesView: View {
-    @State private var statuses: [TodoStatus] = []
+    @EnvironmentObject private var settingsStore: AppSettingsStore
+    @StateObject private var viewModel = TodoStatusesViewModel()
+
     @State private var isShowingCreateForm = false
     @State private var editingStatus: TodoStatus?
     @State private var confirmation: ProWorkConfirmation?
-    @State private var errorMessage: String?
-    @EnvironmentObject private var settingsStore: AppSettingsStore
-
-    private let repository = TodoStatusRepository()
 
     var body: some View {
         SettingsScreenScaffold(
             title: settingsStore.localized("todoStatuses.title", defaultValue: "İş Akışı Statüleri"),
             subtitle: settingsStore.localized("todoStatuses.subtitle", defaultValue: "Yapılacak listesi kolonları, görünürlük ve süre başlatma/durdurma davranışlarını yönetin."),
-            errorMessage: errorMessage,
+            errorMessage: viewModel.errorMessage,
             toolbar: {
                 Button {
                     isShowingCreateForm = true
@@ -35,16 +33,20 @@ struct TodoStatusesView: View {
             statusTable
         }
         .onAppear {
-            loadStatuses()
+            viewModel.load()
         }
         .sheet(isPresented: $isShowingCreateForm) {
             TodoStatusFormView(mode: .create) { status in
-                createStatus(status)
+                if viewModel.create(status) {
+                    isShowingCreateForm = false
+                }
             }
         }
         .sheet(item: $editingStatus) { status in
             TodoStatusFormView(mode: .edit(status)) { updatedStatus in
-                updateStatus(updatedStatus)
+                if viewModel.update(updatedStatus) {
+                    editingStatus = nil
+                }
             }
         }
         .proWorkConfirmationDialog($confirmation)
@@ -56,12 +58,12 @@ struct TodoStatusesView: View {
 
             Divider()
 
-            if statuses.isEmpty {
+            if viewModel.statuses.isEmpty {
                 emptyState
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(statuses) { status in
+                        ForEach(viewModel.statuses) { status in
                             TodoStatusCompactRowView(
                                 status: status,
                                 onEdit: {
@@ -123,41 +125,8 @@ struct TodoStatusesView: View {
         .proWorkFrame(minHeight: 220, maxWidth: .infinity)
     }
 
-    private func loadStatuses() {
-        do {
-            statuses = try repository.fetchAll()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func createStatus(_ status: TodoStatus) {
-        do {
-            try repository.insert(status)
-            loadStatuses()
-            isShowingCreateForm = false
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func updateStatus(_ status: TodoStatus) {
-        do {
-            try repository.update(status)
-            loadStatuses()
-            editingStatus = nil
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
     private func askDeleteStatus(_ status: TodoStatus) {
-        guard !status.isSystem else {
-            return
-        }
+        guard !status.isSystem else { return }
 
         confirmation = ProWorkConfirmation(
             title: settingsStore.localized("todoStatuses.delete.title", defaultValue: "İş akışı statüsü silinsin mi?"),
@@ -166,17 +135,7 @@ struct TodoStatusesView: View {
             cancelTitle: settingsStore.localized("todoStatuses.delete.cancel", defaultValue: "Vazgeç"),
             role: .destructive
         ) {
-            deleteStatus(status)
-        }
-    }
-
-    private func deleteStatus(_ status: TodoStatus) {
-        do {
-            try repository.delete(id: status.id)
-            loadStatuses()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
+            viewModel.delete(id: status.id)
         }
     }
 }

@@ -59,6 +59,43 @@ final class ProjectRepository {
         }
     }
 
+    /// Birden çok id için toplu fetch (raporlama / faturalandırma için).
+    /// `SQLITE_MAX_VARIABLE_NUMBER` limitini aşmamak için 500'lük parçalara bölünür.
+    func fetch(ids: [String]) throws -> [Project] {
+        guard !ids.isEmpty else { return [] }
+
+        var results: [Project] = []
+        results.reserveCapacity(ids.count)
+
+        let chunkSize = 500
+        for chunkStart in stride(from: 0, to: ids.count, by: chunkSize) {
+            let chunk = Array(ids[chunkStart..<min(chunkStart + chunkSize, ids.count)])
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let sql = """
+            SELECT
+                id, customerId, name, code, status,
+                defaultServiceType, defaultMinBillingMinutes, billingWindowMode,
+                vatRateId, notes,
+                \(RecordMetadataSQL.columns)
+            FROM projects
+            WHERE id IN (\(placeholders)) AND deletedAt IS NULL;
+            """
+
+            let rows = try database.query(
+                sql,
+                map: { ProjectRepository.makeProject(from: $0) },
+                bind: { statement in
+                    for (offset, id) in chunk.enumerated() {
+                        statement.bindText(id, at: Int32(offset + 1))
+                    }
+                }
+            )
+            results.append(contentsOf: rows)
+        }
+
+        return results
+    }
+
     /// Düzenleme için tek proje (tüm metadata ile).
     func fetch(id: String) throws -> Project? {
         let sql = """
