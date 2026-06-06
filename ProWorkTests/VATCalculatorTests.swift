@@ -1,10 +1,7 @@
-//
 //  VATCalculatorTests.swift
 //  ProWorkTests
-//
 //  Adlandırılmış VatRate çözümü:
 //    project > customer > category > default; isExempt → %0 + "Muaf".
-//
 
 import XCTest
 @testable import ProWork
@@ -27,7 +24,8 @@ final class VATCalculatorTests: XCTestCase {
             subtotalMinor: 100_000,
             customerVatRateId: nil,
             projectVatRateId: nil,
-            categoryVatRateId: nil
+            categoryVatRateId: nil,
+            dateString: ""
         )
         XCTAssertEqual(result.vatMinor, 20_000)
         XCTAssertEqual(result.totalMinor, 120_000)
@@ -44,7 +42,8 @@ final class VATCalculatorTests: XCTestCase {
             subtotalMinor: 100_000,
             customerVatRateId: nil,
             projectVatRateId: nil,
-            categoryVatRateId: "edu"
+            categoryVatRateId: "edu",
+            dateString: ""
         )
         XCTAssertEqual(result.vatMinor, 10_000)
         XCTAssertEqual(result.origin, .category)
@@ -60,7 +59,8 @@ final class VATCalculatorTests: XCTestCase {
             subtotalMinor: 100_000,
             customerVatRateId: "cust",
             projectVatRateId: nil,
-            categoryVatRateId: "edu"
+            categoryVatRateId: "edu",
+            dateString: ""
         )
         XCTAssertEqual(result.vatMinor, 18_000)
         XCTAssertEqual(result.origin, .customer)
@@ -76,7 +76,8 @@ final class VATCalculatorTests: XCTestCase {
             subtotalMinor: 100_000,
             customerVatRateId: "cust",
             projectVatRateId: "proj",
-            categoryVatRateId: nil
+            categoryVatRateId: nil,
+            dateString: ""
         )
         XCTAssertEqual(result.vatMinor, 8_000)
         XCTAssertEqual(result.origin, .project)
@@ -92,7 +93,8 @@ final class VATCalculatorTests: XCTestCase {
             subtotalMinor: 100_000,
             customerVatRateId: "muaf",
             projectVatRateId: nil,
-            categoryVatRateId: nil
+            categoryVatRateId: nil,
+            dateString: ""
         )
         XCTAssertEqual(result.vatMinor, 0)
         XCTAssertEqual(result.totalMinor, 100_000)
@@ -106,7 +108,8 @@ final class VATCalculatorTests: XCTestCase {
             subtotalMinor: 100_000,
             customerVatRateId: nil,
             projectVatRateId: nil,
-            categoryVatRateId: nil
+            categoryVatRateId: nil,
+            dateString: ""
         )
         XCTAssertEqual(result.vatMinor, 0)
         XCTAssertEqual(result.origin, .none)

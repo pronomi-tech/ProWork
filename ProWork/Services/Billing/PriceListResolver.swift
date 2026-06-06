@@ -1,41 +1,36 @@
-//
 //  PriceListResolver.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
-//  Spec §3 — Fiyat öncelik sırası:
-//      1. Task özel fiyat / override varsa onu kullan (TodoBillingOverride)
-//      2. Proje özel fiyat listesi varsa onu kullan
-//      3. Müşteri fiyat listesi varsa onu kullan
-//      4. Genel varsayılan fiyat listesine düş
-//
-//  Bir oturum + segment için doğru `PriceListRow`'u çözer.
-//
+//  Spec §3 — Price priority order:
+//      1. If a task-specific price / override exists, use it (TodoBillingOverride)
+//      2. Otherwise, use a project-specific price list if present
+//      3. Otherwise, use a customer-specific price list if present
+//      4. Otherwise, fall back to the global default price list
+//  Resolves the correct `PriceListRow` for a session + segment.
 
 import Foundation
 
-/// Çözümleme sonucu.
+/// Resolution result.
 enum PriceResolution: Hashable {
-    /// Bir fiyat satırı bulundu — saatlik ücret üzerinden hesaplanır.
+    /// A price row was found — computed from the hourly rate.
     case row(PriceListRow, ownerType: PriceListOwnerType)
-    /// Todo'da `unitPrice` override var — fiyat satırını yerine geçer.
+    /// The todo has a `unitPrice` override — replaces the price row.
     case todoUnitPriceOverride(unitPriceMinor: Int, currency: String)
-    /// Todo'da sabit fee override var — süre ne olursa olsun bu tutar.
+    /// The todo has a fixed-fee override — this amount regardless of duration.
     case todoFixedFee(amountMinor: Int, currency: String)
-    /// Eşleşen fiyat bulunamadı.
+    /// No matching price found.
     case noMatch
 }
 
-/// Çözümleme kaynaklarını gruplayan input.
+/// Input grouping the resolution sources.
 struct PriceResolutionContext {
     var todoOverride: TodoBillingOverride?
-    var projectPriceLists: [PriceList]    // Proje sahipli aktif listeler
-    var customerPriceLists: [PriceList]   // Müşteri sahipli aktif listeler
-    var globalPriceLists: [PriceList]     // Genel aktif listeler
+    var projectPriceLists: [PriceList]    // Active project-owned lists
+    var customerPriceLists: [PriceList]   // Active customer-owned lists
+    var globalPriceLists: [PriceList]     // Active global lists
     var customerDefaultPriceListId: String?
     var organizationCurrency: String
-    /// Liste ID → o listeye ait aktif satırlar.
+    /// List ID → active rows belonging to that list.
     var rowsByListId: [String: [PriceListRow]]
 
     func effectiveCurrency(dateString: String? = nil) -> String {
@@ -50,6 +45,19 @@ struct PriceResolutionContext {
     }
 }
 
+/// Currency resolver for customers/projects.
+///
+/// Note: — this type exposes **both** instance methods
+///   (`resolveCustomerCurrency(_:)`, `resolveProjectCurrency(_:)`)
+///   and static counterparts (`PricingCurrencyResolver.resolveCustomerCurrency(...)`
+///   below). The static variants short-circuit when the caller already
+///   has the relevant repositories loaded (e.g. billing computation
+///   batches); the instance variants are the canonical API for ViewModels
+///   that go through `AppServices.pricingCurrencyResolver`. Both surfaces
+///   exist intentionally but DO NOT drift independently — every behaviour
+///   change MUST update both. New API additions should land on the
+///   instance side and only be lifted to a static helper when a
+///   stateless caller actually needs it.
 struct PricingCurrencyResolver {
     private let organizationRepository: OrganizationRepository
     private let customerRepository: CustomerRepository
@@ -69,7 +77,7 @@ struct PricingCurrencyResolver {
         customerId: String,
         organizationId: String = BuiltInOrganizationId.default
     ) throws -> String {
-        let organizationCurrency = try organizationRepository.fetch(id: organizationId)?.masterCurrency ?? "TRY"
+        let organizationCurrency = try organizationRepository.fetch(id: organizationId)?.masterCurrency ?? BillingDefaults.fallbackCurrency
         let customer = try customerRepository.fetch(id: customerId)
         let customerLists = try priceListRepository.fetchOwned(
             organizationId: organizationId,
@@ -95,7 +103,7 @@ struct PricingCurrencyResolver {
         customerId: String,
         organizationId: String = BuiltInOrganizationId.default
     ) throws -> String {
-        let organizationCurrency = try organizationRepository.fetch(id: organizationId)?.masterCurrency ?? "TRY"
+        let organizationCurrency = try organizationRepository.fetch(id: organizationId)?.masterCurrency ?? BillingDefaults.fallbackCurrency
         let customer = try customerRepository.fetch(id: customerId)
         let projectLists = try priceListRepository.fetchOwned(
             organizationId: organizationId,
@@ -205,6 +213,14 @@ struct PricingCurrencyResolver {
             ?? organizationCurrency
     }
 
+    /// `preferredEffectiveCurrency` and `preferredCustomerLevel` both
+    /// implement the "if the customer has a `defaultPriceListId`, find
+    /// the matching entry in the customer + global lists" logic
+    /// separately. They aren't merged into a shared helper
+    /// (`preferredPriceList(in:matching:)`) because the two sides need
+    /// different side checks (currency needs an `isWithin` date check,
+    /// level needs the owner of the chosen list). The logical pairing
+    /// is documented here so the two stay in sync as either changes.
     private static func preferredEffectiveCurrency(
         customerDefaultPriceListId: String?,
         customerLists: [PriceList],
@@ -254,15 +270,15 @@ struct PricingCurrencyResolver {
 }
 
 enum PriceListResolver {
-    /// §3'teki önceliğe göre tek bir fiyat satırı/override döner.
+    /// Returns a single price row / override per §3 priority.
     /// - Parameters:
-    ///   - context: Tüm potansiyel kaynaklar (caller veritabanından önceden çekmiş olur).
-    ///   - serviceType: Aranan hizmet tipi (uzaktan/yerinde).
-    ///   - timeType: Aranan zaman tipi (regular/afterHours/weekend/holiday).
-    ///   - categoryId: Aranan kategori (nil = kategori filtresi yok).
-    ///   - weekday: Hangi haftagünü için (weekdayMask filtresi).
-    ///   - timeOfDay: Hangi saat (startTime/endTime filtresi).
-    ///   - dateString: "yyyy-MM-dd" — fiyat satırının validFrom/validTo aralığı.
+    ///   - context: Every potential source (caller pre-fetches them from the DB).
+    ///   - serviceType: Requested service type (remote/onsite).
+    ///   - timeType: Requested time type (regular/afterHours/weekend/holiday).
+    ///   - categoryId: Requested category (nil = no category filter).
+    ///   - weekday: Which weekday (weekdayMask filter).
+    ///   - timeOfDay: Which hour (startTime/endTime filter).
+    ///   - dateString: "yyyy-MM-dd" — for the price row's validFrom/validTo range.
     static func resolve(
         context: PriceResolutionContext,
         serviceType: ServiceType,
@@ -289,12 +305,16 @@ enum PriceListResolver {
             }
         }
 
-        // 2-4. Liste seviyeleri (project → customer → global)
+        // 2-4. List levels (project → customer → global)
+        // (DRY): the "exclude the preferred default" filter
+        // was inlined twice with the same predicate. Extract a single
+        // helper so adding a new level can't drift.
+        let preferredId = context.customerDefaultPriceListId
         let levels: [(lists: [PriceList], owner: PriceListOwnerType)] = [
             (context.projectPriceLists, .project),
             preferredCustomerLevel(from: context),
-            (context.customerPriceLists.filter { $0.id != context.customerDefaultPriceListId }, .customer),
-            (context.globalPriceLists.filter { $0.id != context.customerDefaultPriceListId }, .global)
+            (excludingPreferredId(context.customerPriceLists, preferredId: preferredId), .customer),
+            (excludingPreferredId(context.globalPriceLists, preferredId: preferredId), .global)
         ]
 
         for level in levels {
@@ -326,8 +346,27 @@ enum PriceListResolver {
         return ([preferred], preferred.ownerType)
     }
 
-    // MARK: - Liste seviyesi içinde en iyi satırı bul
+    /// DRY helper for the "exclude the preferred customer-default list at
+    /// this level so we don't try it twice" filter.
+    private static func excludingPreferredId(
+        _ lists: [PriceList],
+        preferredId: String?
+    ) -> [PriceList] {
+        guard let preferredId else { return lists }
+        return lists.filter { $0.id != preferredId }
+    }
 
+    // MARK: - Find the best row within a list level
+
+    /// The fallback outer loop runs over `timeType`, the inner loop runs
+    /// over `activeLists`. Preserving the **list order** for the same
+    /// timeType, we first scan the most specific bucket (holiday) across
+    /// every list, then fall back to the next general bucket (weekend).
+    /// This ordering produces the behaviour
+    /// "if both a customer-specific list and a global list are applicable,
+    /// customer-specific holiday → global holiday → customer-specific
+    /// weekend → global weekend …"; since the caller orders `lists` by
+    /// this priority, the intuitive result is returned.
     private static func bestRow(
         in lists: [PriceList],
         rowsByListId: [String: [PriceListRow]],
@@ -338,13 +377,13 @@ enum PriceListResolver {
         timeOfDay: TimeOfDay,
         dateString: String
     ) -> PriceListRow? {
-        // Aktif listeleri tara — geçerlilik tarihi içinde olanları al
+        // Scan active lists — keep those within the validity date range
         let activeLists = lists.filter {
             $0.isActive && $0.deletedAt == nil &&
             isWithin(date: dateString, from: $0.validFrom, to: $0.validTo)
         }
 
-        // timeType fallback (holiday → weekend → afterHours → regular)
+        // TimeType fallback (holiday → weekend → afterHours → regular)
         for fallback in timeType.fallbackOrder {
             for list in activeLists {
                 guard let rows = rowsByListId[list.id] else { continue }
@@ -364,8 +403,8 @@ enum PriceListResolver {
         return nil
     }
 
-    /// Bir liste içindeki satırlardan, eşleşmeye en spesifik olanı seçer.
-    /// Skorlama: kategori eşleşmesi > weekdayMask spesifikliği > saat aralığı spesifikliği.
+    /// Picks the most specific matching row from the rows in a list.
+    /// Scoring: category match > weekdayMask specificity > time-range specificity.
     private static func pickRow(
         from rows: [PriceListRow],
         serviceType: ServiceType,
@@ -380,17 +419,17 @@ enum PriceListResolver {
             guard row.serviceType == serviceType else { return false }
             guard row.timeType == timeType else { return false }
 
-            // Kategori filtresi: row.categoryId nil ise tüm kategoriler için geçerli
+            // Category filter: if row.categoryId is nil it applies to every category
             if let rowCat = row.categoryId, rowCat != categoryId { return false }
 
             // Weekday mask
             if !row.appliesTo(weekday: weekday) { return false }
 
-            // Saat aralığı
+            // Time range
             if let start = row.startTime, timeOfDay < start { return false }
             if let end = row.endTime, timeOfDay >= end { return false }
 
-            // Geçerlilik tarihi
+            // Validity date
             if !isWithin(date: dateString, from: row.validFrom, to: row.validTo) {
                 return false
             }
@@ -398,7 +437,7 @@ enum PriceListResolver {
             return true
         }
 
-        // En spesifik satırı seç — eşitlikte daha düşük sortOrder kazanır
+        // Pick the most specific row — on ties, the lower sortOrder wins
         let sorted = candidates.sorted { lhs, rhs in
             let lhsScore = specificity(lhs, categoryId: categoryId)
             let rhsScore = specificity(rhs, categoryId: categoryId)
@@ -408,7 +447,7 @@ enum PriceListResolver {
         return sorted.first
     }
 
-    /// Daha yüksek skor = daha spesifik eşleşme.
+    /// Higher score = more specific match.
     private static func specificity(_ row: PriceListRow, categoryId: String?) -> Int {
         var score = 0
         if let rowCat = row.categoryId, rowCat == categoryId { score += 8 }
@@ -419,9 +458,33 @@ enum PriceListResolver {
 
     // MARK: - Tarih helper
 
+    /// Previously this used plain `<` / `>` on String, which
+    /// is technically correct for ISO 8601 "yyyy-MM-dd" because that format
+    /// is lexicographically sortable. The hazard is silent — a future change
+    /// to the persisted format (e.g. switching to localized "dd.MM.yyyy")
+    /// would compile fine but produce nonsense comparisons. Lock the contract
+    /// behind a precondition so a malformed input fails loudly in DEBUG.
     static func isWithin(date: String, from: String?, to: String?) -> Bool {
-        if let from, date < from { return false }
-        if let to, date > to { return false }
+        assert(isIsoDay(date), "isWithin expects yyyy-MM-dd; got \(date)")
+        if let from {
+            assert(isIsoDay(from), "isWithin lower bound expects yyyy-MM-dd; got \(from)")
+            if date < from { return false }
+        }
+        if let to {
+            assert(isIsoDay(to), "isWithin upper bound expects yyyy-MM-dd; got \(to)")
+            if date > to { return false }
+        }
         return true
+    }
+
+    /// Cheap "looks like yyyy-MM-dd" check — does not validate calendar
+    /// semantics, just shape. Reused by `isWithin` for debug assertions.
+    private static func isIsoDay(_ value: String) -> Bool {
+        guard value.count == 10 else { return false }
+        let chars = Array(value)
+        guard chars[4] == "-" && chars[7] == "-" else { return false }
+        return chars.indices.allSatisfy { idx in
+            idx == 4 || idx == 7 ? true : chars[idx].isNumber
+        }
     }
 }

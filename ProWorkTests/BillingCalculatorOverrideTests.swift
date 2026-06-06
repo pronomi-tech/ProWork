@@ -1,37 +1,20 @@
-//
 //  BillingCalculatorOverrideTests.swift
 //  ProWorkTests
-//
 //  TodoBillingOverride akışları: fixedFee ve unitPriceOverride senaryoları.
-//
 
 import XCTest
 @testable import ProWork
 
 final class BillingCalculatorOverrideTests: XCTestCase {
 
-    private let calendar = TimeWindowSplitter.istanbulCalendar
+    private let calendar = BillingFixtures.calendar
 
     private func date(_ y: Int, _ m: Int, _ d: Int, _ h: Int, _ mi: Int) -> Date {
-        var c = DateComponents()
-        c.year = y; c.month = m; c.day = d; c.hour = h; c.minute = mi
-        c.timeZone = TimeZone(identifier: "Europe/Istanbul")
-        return calendar.date(from: c)!
+        BillingFixtures.date(y, m, d, h, mi)
     }
 
     private func standardRule() -> BillingRule {
-        let workHours = DailyWorkHours(
-            start: TimeOfDay(hour: 9, minute: 0),
-            end: TimeOfDay(hour: 18, minute: 0)
-        )
-        return BillingRule(
-            scope: .global,
-            weekdayHours: [
-                .monday: workHours, .tuesday: workHours, .wednesday: workHours,
-                .thursday: workHours, .friday: workHours
-            ],
-            weekendDays: [.saturday, .sunday]
-        )
+        BillingFixtures.standardRule()
     }
 
     // MARK: - Fixed fee override

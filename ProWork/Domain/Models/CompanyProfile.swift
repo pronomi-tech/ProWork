@@ -1,13 +1,10 @@
-//
 //  CompanyProfile.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 
-/// Bir organization'ın resmi/fatura kimliği — PDF/Excel raporlarda başlıkta yer alır.
+/// An organization's official/invoice identity — appears in PDF/Excel report headers.
 struct CompanyProfile: Identifiable, Hashable {
     let id: String
     var legalName: String
@@ -53,7 +50,7 @@ struct CompanyProfile: Identifiable, Hashable {
         rowVersion: Int = 0,
         syncStatus: SyncStatus = .local,
         lastSyncedAt: Date? = nil,
-        originDeviceId: String? = nil
+        originDeviceId: String? = DeviceIdentity.current
     ) {
         self.id = id
         self.legalName = legalName

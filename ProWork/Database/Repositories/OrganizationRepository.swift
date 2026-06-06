@@ -1,9 +1,6 @@
-//
 //  OrganizationRepository.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 import SQLite3
@@ -27,7 +24,7 @@ final class OrganizationRepository {
         ORDER BY name COLLATE NOCASE ASC;
         """
 
-        return try database.query(sql) { Self.makeOrganization(from: $0) }
+        return try database.query(sql) { try Self.makeOrganization(from: $0) }
     }
 
     func fetch(id: String) throws -> Organization? {
@@ -44,7 +41,7 @@ final class OrganizationRepository {
 
         return try database.query(
             sql,
-            map: { Self.makeOrganization(from: $0) },
+            map: { try Self.makeOrganization(from: $0) },
             bind: { $0.bindText(id, at: 1) }
         ).first
     }
@@ -106,40 +103,36 @@ final class OrganizationRepository {
         }
     }
 
-    func softDelete(id: String, by userId: String = BuiltInUserId.defaultOwner) throws {
-        let sql = """
-        UPDATE organizations
-        SET deletedAt = ?, updatedAt = ?, updatedByUserId = ?,
-            rowVersion = rowVersion + 1, syncStatus = 'local'
-        WHERE id = ? AND deletedAt IS NULL;
-        """
-
-        try database.execute(sql) { statement in
-            let now = DateFormatter.proWorkSQLite.string(from: Date())
-            statement.bindText(now, at: 1)
-            statement.bindText(now, at: 2)
-            statement.bindText(userId, at: 3)
-            statement.bindText(id, at: 4)
-        }
+    func softDelete(id: String, by userId: String) throws {
+        // Delegate to the central helper.
+        try database.softDelete(table: "organizations", id: id, by: userId)
     }
 
-    private static func makeOrganization(from statement: SQLiteStatement) -> Organization {
-        Organization(
+    /// Centralised metadata reader picks up throw-on-corruption
+    /// discipline (organizationId NOT NULL, syncStatus must parse,
+    /// dates may not be present-but-unparseable). Organizations table
+    /// is the org root, so no organizationId column to read.
+    private static func makeOrganization(from statement: SQLiteStatement) throws -> Organization {
+        let meta = try statement.readMetadataWithoutOrgId(
+            organizationId: "",
+            startingAt: 6
+        )
+        return Organization(
             id: statement.text(at: 0) ?? UUID().uuidString,
             name: statement.text(at: 1) ?? "",
             slug: statement.text(at: 2),
             masterCurrency: statement.text(at: 3) ?? "TRY",
             billingWindowMode: BillingWindowMode(rawValue: statement.text(at: 4) ?? "") ?? .timeline,
             isActive: statement.int(at: 5) == 1,
-            createdByUserId: statement.text(at: 6),
-            updatedByUserId: statement.text(at: 7),
-            createdAt: DateFormatter.proWorkSQLite.date(from: statement.text(at: 8) ?? "") ?? Date(),
-            updatedAt: DateFormatter.proWorkSQLite.date(from: statement.text(at: 9) ?? "") ?? Date(),
-            deletedAt: statement.text(at: 10).flatMap(DateFormatter.proWorkSQLite.date(from:)),
-            rowVersion: statement.int(at: 11),
-            syncStatus: SyncStatus(rawValue: statement.text(at: 12) ?? "") ?? .local,
-            lastSyncedAt: statement.text(at: 13).flatMap(DateFormatter.proWorkSQLite.date(from:)),
-            originDeviceId: statement.text(at: 14)
+            createdByUserId: meta.createdByUserId,
+            updatedByUserId: meta.updatedByUserId,
+            createdAt: meta.createdAt,
+            updatedAt: meta.updatedAt,
+            deletedAt: meta.deletedAt,
+            rowVersion: meta.rowVersion,
+            syncStatus: meta.syncStatus,
+            lastSyncedAt: meta.lastSyncedAt,
+            originDeviceId: meta.originDeviceId
         )
     }
 }

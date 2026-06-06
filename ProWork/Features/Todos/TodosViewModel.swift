@@ -1,17 +1,13 @@
-//
 //  TodosViewModel.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
-//  TodosView için domain state ve repository orkestrasyonu.
-//  Pattern (Madde 7 — Mimari Refactor):
-//    - Repository erişimi View'dan tamamen kalkıyor; View yalnızca UI state
-//      (sheet açık mı, hangi confirmation dialog gösteriliyor) tutar.
-//    - Domain state ve mutasyonlar `@ObservableObject` ViewModel'e taşındı.
-//    - Bağımlılıklar `AppServices` üzerinden inject ediliyor; testte alternatif
-//      AppServices instance'ı verilebilir.
-//
+//  Domain state and repository orchestration for TodosView.
+//  Pattern (Item 7 — Architectural Refactor):
+//    - Repository access is removed from the View entirely; the View only
+//      holds UI state (is the sheet open, which confirmation dialog is shown).
+//    - Domain state and mutations were moved to an `@ObservableObject` ViewModel.
+//    - Dependencies are injected via `AppServices`; tests can provide an
+//      alternative AppServices instance.
 
 import Combine
 import Foundation
@@ -109,7 +105,7 @@ final class TodosViewModel: ObservableObject {
         create(todo)
     }
 
-    /// `create` başarılıysa `true` döner; View dialog'u kapatma kararını buna göre verir.
+    /// Returns `true` if `create` succeeded; the View uses this to decide whether to dismiss the dialog.
     @discardableResult
     func create(_ todo: Todo) -> Bool {
         do {
@@ -138,10 +134,10 @@ final class TodosViewModel: ObservableObject {
 
     func delete(id: String) {
         do {
-            // Soft delete kullanıyoruz: kaydın açık çalışma session'ı veya
-            // finalize edilmiş billing line'ları varsa hard delete yetim satır
-            // bırakırdı. `softDelete` `deletedAt` damgalar; raporlar etkilenmez.
-            try todoRepository.softDelete(id: id)
+            // We use soft delete: if the record has an open work session or
+            // finalized billing lines, a hard delete would leave orphan rows.
+            // `softDelete` stamps `deletedAt`; reports are not affected.
+            try todoRepository.softDelete(id: id, by: AppServices.currentUserId)
             load()
             errorMessage = nil
         } catch {
@@ -151,9 +147,9 @@ final class TodosViewModel: ObservableObject {
 
     // MARK: - Status moves
 
-    /// Kullanıcı board'da bir todo'yu farklı statüye sürüklediğinde çağrılır.
-    /// `targetStatus.startsTimer` ise View, bir confirmation flow başlatmalı;
-    /// bu metod sadece DB tarafını yürütür.
+    /// Called when the user drags a todo to a different status on the board.
+    /// If `targetStatus.startsTimer`, the View must start a confirmation flow;
+    /// this method only executes the DB side.
     func moveTodo(
         _ todo: TodoListItem,
         to targetStatus: TodoStatus
@@ -183,19 +179,26 @@ final class TodosViewModel: ObservableObject {
 
         todos[index] = updatedTodo
 
+        // Wrap the two repository writes in a single
+        // `inWriteTransaction` so a failed `updateStatus` rolls back
+        // the `stopOpenSession` side effect. Previously the UI rolled
+        // back its `todos[index] = updatedTodo` cache but the DB was
+        // left in a stopped-session + open-status state.
         do {
-            if targetStatus.stopsTimer {
-                try timeSessionRepository.stopOpenSession(
-                    todoId: previousTodo.id,
-                    endStatusId: targetStatus.id
+            try timeSessionRepository.transactionally {
+                if targetStatus.stopsTimer {
+                    try timeSessionRepository.stopOpenSession(
+                        todoId: previousTodo.id,
+                        endStatusId: targetStatus.id
+                    )
+                }
+
+                try todoRepository.updateStatus(
+                    id: previousTodo.id,
+                    statusId: targetStatus.id,
+                    completedAt: completedAt
                 )
             }
-
-            try todoRepository.updateStatus(
-                id: previousTodo.id,
-                statusId: targetStatus.id,
-                completedAt: completedAt
-            )
 
             errorMessage = nil
             return targetStatus.startsTimer ? .needsWorkStart : .moved
@@ -215,8 +218,8 @@ final class TodosViewModel: ObservableObject {
 
     // MARK: - Work session control
 
-    /// Aktif (paused olmayan) ve farklı bir todo üzerinde çalışan session varsa döner.
-    /// View bunu confirmation dialog tetiklemek için kullanır.
+    /// Returns the active (non-paused) session if one is running on a different todo.
+    /// The View uses this to trigger a confirmation dialog.
     func activeSessionConflicting(with todoId: String) -> ActiveTodoTimeSession? {
         do {
             if let active = try timeSessionRepository.fetchActiveSession(),
@@ -229,23 +232,29 @@ final class TodosViewModel: ObservableObject {
         return nil
     }
 
+    /// Stop-then-start sequence runs in one write transaction.
+    /// Otherwise a `startSession` failure leaves the previous session
+    /// closed with no replacement open — measurable time disappears
+    /// and the user must manually create a "lost work" session.
     func startWork(
         todoId: String,
         targetStatus: TodoStatus,
         stoppingActiveSessionId: String?
     ) {
         do {
-            if let stoppingActiveSessionId {
-                try timeSessionRepository.stopSession(
-                    sessionId: stoppingActiveSessionId,
-                    endStatusId: targetStatus.id
+            try timeSessionRepository.transactionally {
+                if let stoppingActiveSessionId {
+                    try timeSessionRepository.stopSession(
+                        sessionId: stoppingActiveSessionId,
+                        endStatusId: targetStatus.id
+                    )
+                }
+
+                try timeSessionRepository.startSession(
+                    todoId: todoId,
+                    startStatusId: targetStatus.id
                 )
             }
-
-            try timeSessionRepository.startSession(
-                todoId: todoId,
-                startStatusId: targetStatus.id
-            )
 
             if let index = todos.firstIndex(where: { $0.id == todoId }) {
                 var updatedTodo = todos[index]
@@ -255,7 +264,6 @@ final class TodosViewModel: ObservableObject {
             }
 
             errorMessage = nil
-            scheduleReload()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -276,23 +284,12 @@ final class TodosViewModel: ObservableObject {
             }
 
             errorMessage = nil
-            scheduleReload()
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
     // MARK: - Helpers
-
-    /// Status değiştirme / start work sonrası kısa bir gecikme ile listeyi yenile.
-    /// DB tarafı güncellendikten sonra UI özet alanları (active session etc.) için
-    /// yeniden çekim gerekiyor.
-    private func scheduleReload() {
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 150_000_000)
-            self.load()
-        }
-    }
 
     private func makeUpdatedTodo(
         _ todo: TodoListItem,

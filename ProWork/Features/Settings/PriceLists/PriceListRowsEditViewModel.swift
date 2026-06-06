@@ -1,18 +1,23 @@
-//
 //  PriceListRowsEditViewModel.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Combine
 import Foundation
+import os
 
 @MainActor
 final class PriceListRowsEditViewModel: ObservableObject {
     @Published private(set) var rows: [PriceListRow] = []
     @Published private(set) var categories: [TaskCategory] = []
-    @Published var errorMessage: String?
+    /// Views push errors through `reportError(_:)` rather
+    /// than mutating this property directly so the encapsulation is
+    /// enforced at the type level.
+    @Published private(set) var errorMessage: String?
+
+    func reportError(_ message: String?) {
+        errorMessage = message
+    }
 
     private let rowRepository: PriceListRowRepository
     private let categoryRepository: TaskCategoryRepository
@@ -64,7 +69,7 @@ final class PriceListRowsEditViewModel: ObservableObject {
 
     func softDelete(id: String, priceListId: String) {
         do {
-            try rowRepository.softDelete(id: id)
+            try rowRepository.softDelete(id: id, by: AppServices.currentUserId)
             load(priceListId: priceListId)
             errorMessage = nil
         } catch {
@@ -74,25 +79,47 @@ final class PriceListRowsEditViewModel: ObservableObject {
 
     // MARK: - Quote helpers
 
-    /// Quote sheet recipient picker'ı için müşteri listesi.
+    /// Customer list for the quote sheet recipient picker.
+    /// On fetch failure the list comes back empty but the error is
+    /// written to `errorMessage`, so even an empty picker doesn't hide
+    /// the silent failure from the user.
     func loadCustomers() -> [Customer] {
-        (try? customerRepository.fetchAll()) ?? []
+        do {
+            return try customerRepository.fetchAll()
+        } catch {
+            errorMessage = error.localizedDescription
+            return []
+        }
     }
 
-    /// Quote PDF üretiminde gereken company profile + customer çözümlemesi.
+    /// Company profile + customer resolution needed for quote PDF generation.
+    /// Customer fetch also logs (the old `try?` silent drop wasn't reported).
     func loadQuoteContext(
         organizationId: String,
         ownerType: PriceListOwnerType,
         ownerId: String?
     ) throws -> (companyProfile: CompanyProfile?, customer: Customer?) {
         let profile = try companyProfileRepository.fetch(organizationId: organizationId)
-        let customer: Customer? = {
-            guard ownerType == .customer, let ownerId else { return nil }
-            return try? customerRepository.fetch(id: ownerId)
-        }()
+        let customer: Customer?
+        if ownerType == .customer, let ownerId {
+            do {
+                customer = try customerRepository.fetch(id: ownerId)
+            } catch {
+                ProWorkLog.app.error(
+                    "PriceListRowsEditViewModel.loadQuoteContext customer fetch failed for id=\(ownerId, privacy: .public): \(error.localizedDescription, privacy: .private)"
+                )
+                customer = nil
+            }
+        } else {
+            customer = nil
+        }
         return (profile, customer)
     }
 
+    /// O(1) category-name lookup. With M categories and N rows
+    /// the sort comparator was O(N log N × M) — visible jank on a
+    /// price list with ~50 rows / ~10 categories. Pre-building the
+    /// name dict once per sort call collapses M to a constant.
     private func rowSortOrder(_ lhs: PriceListRow, _ rhs: PriceListRow) -> Bool {
         if lhs.serviceType.sortOrder != rhs.serviceType.sortOrder {
             return lhs.serviceType.sortOrder < rhs.serviceType.sortOrder
@@ -100,14 +127,12 @@ final class PriceListRowsEditViewModel: ObservableObject {
         if lhs.timeType.sortOrder != rhs.timeType.sortOrder {
             return lhs.timeType.sortOrder < rhs.timeType.sortOrder
         }
-
-        let lhsCategory = lhs.categoryId.flatMap { id in
-            categories.first(where: { $0.id == id })?.name
-        } ?? ""
-        let rhsCategory = rhs.categoryId.flatMap { id in
-            categories.first(where: { $0.id == id })?.name
-        } ?? ""
-
+        let lhsCategory = lhs.categoryId.flatMap { categoryNamesById[$0] } ?? ""
+        let rhsCategory = rhs.categoryId.flatMap { categoryNamesById[$0] } ?? ""
         return lhsCategory.localizedStandardCompare(rhsCategory) == .orderedAscending
+    }
+
+    private var categoryNamesById: [String: String] {
+        Dictionary(uniqueKeysWithValues: categories.map { ($0.id, $0.name) })
     }
 }

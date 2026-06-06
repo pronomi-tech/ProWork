@@ -1,9 +1,6 @@
-//
 //  SettingsView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
@@ -130,17 +127,24 @@ struct SettingsView: View {
 
     // MARK: - Detail
 
+    /// Same pattern; the four settings children
+    /// stay alive so their @StateObject VMs (and pending DB writes)
+    /// survive tab switches.
     @ViewBuilder
     private var selectedContent: some View {
-        switch selectedTab {
-        case .general:
+        ZStack {
             GeneralSettingsView()
-        case .exchangeRates:
+                .opacity(selectedTab == .general ? 1 : 0)
+                .allowsHitTesting(selectedTab == .general)
             ExchangeRatesView()
-        case .dataBackup:
+                .opacity(selectedTab == .exchangeRates ? 1 : 0)
+                .allowsHitTesting(selectedTab == .exchangeRates)
             DataBackupSettingsView()
-        case .corporate:
+                .opacity(selectedTab == .dataBackup ? 1 : 0)
+                .allowsHitTesting(selectedTab == .dataBackup)
             CorporateSettingsView()
+                .opacity(selectedTab == .corporate ? 1 : 0)
+                .allowsHitTesting(selectedTab == .corporate)
         }
     }
 }
@@ -210,7 +214,7 @@ struct CorporateSettingsView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 18)
 
-                ForEach(CorporateSettingsPanel.groups, id: \.title) { group in
+                ForEach(CorporateSettingsPanel.groups, id: \.id) { group in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(group.title(using: settingsStore).uppercased())
                             .proWorkFont(size: 11, weight: .semibold)
@@ -336,35 +340,48 @@ private enum CorporateSettingsPanel: String, CaseIterable, Identifiable {
 
     static let groups: [CorporateSettingsGroup] = [
         CorporateSettingsGroup(
-            title: "Genel",
+            id: .general,
             panels: [.companyProfile]
         ),
         CorporateSettingsGroup(
-            title: "Operasyon",
+            id: .operations,
             panels: [.workCalendar, .holidays]
         ),
         CorporateSettingsGroup(
-            title: "Finans",
+            id: .finance,
             panels: [.priceLists, .vat, .documentTemplate]
         )
     ]
 }
 
+/// Previously the group identity was a TR display string
+/// that was reverse-looked-up in `title(using:)` to localize. That fell
+/// apart in any non-TR locale because the case match relied on the raw
+/// Turkish text. Promote the identity to a real enum so addition of a new
+/// group can't silently default-fall-through.
+private enum CorporateSettingsGroupID {
+    case general
+    case operations
+    case finance
+
+    func localizedTitle(using settingsStore: AppSettingsStore) -> String {
+        switch self {
+        case .general:
+            return settingsStore.localized("settings.corporate.group.general", defaultValue: "Genel")
+        case .operations:
+            return settingsStore.localized("settings.corporate.group.operations", defaultValue: "Operasyon")
+        case .finance:
+            return settingsStore.localized("settings.corporate.group.finance", defaultValue: "Finans")
+        }
+    }
+}
+
 private struct CorporateSettingsGroup {
-    let title: String
+    let id: CorporateSettingsGroupID
     let panels: [CorporateSettingsPanel]
 
     func title(using settingsStore: AppSettingsStore) -> String {
-        switch title {
-        case "Genel":
-            return settingsStore.localized("settings.corporate.group.general", defaultValue: "Genel")
-        case "Operasyon":
-            return settingsStore.localized("settings.corporate.group.operations", defaultValue: "Operasyon")
-        case "Finans":
-            return settingsStore.localized("settings.corporate.group.finance", defaultValue: "Finans")
-        default:
-            return title
-        }
+        id.localizedTitle(using: settingsStore)
     }
 }
 

@@ -1,36 +1,48 @@
-//
 //  BillingReportBuilder.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
-//  Spec §10–14 — Müşteri / proje / todo bazlı raporlamaların toplama servisi.
-//  BillingCalculator'dan gelen satırları gruplayıp özetler üretir.
-//
+//  Spec §10–14 — Aggregation service for customer / project / todo reports.
+//  Groups the lines coming from BillingCalculator and produces summaries.
 
 import Foundation
+import os
 
-// MARK: - Çıktı yapıları
+// MARK: - Unit-tagged aliases
+
+/// Wall-clock duration in seconds. Used for "how long was the session"
+/// metrics that have no rounding policy attached.
+typealias ActualSeconds = Int
+
+/// Billable duration in whole minutes after the billing-window rounding
+/// rules have been applied. Different scale than ActualSeconds — never
+/// add them together without going through BillingCalculator.
+typealias BillableMinutes = Int
+
+/// Monetary amount in the smallest currency unit (kuruş, cent, fils).
+/// Pairing this with the currency string yields a Money value.
+typealias MinorUnits = Int
+
+// MARK: - Output structures
 
 struct BillingPeriodSummary: Hashable {
-    let totalActualSeconds: Int
-    let billableMinutes: Int
-    let nonBillableSeconds: Int
+    let totalActualSeconds: ActualSeconds
+    let billableMinutes: BillableMinutes
+    let nonBillableSeconds: ActualSeconds
 
-    let manualSeconds: Int
-    let automaticSeconds: Int
+    let manualSeconds: ActualSeconds
+    let automaticSeconds: ActualSeconds
 
-    let remoteSeconds: Int
-    let onsiteSeconds: Int
+    let remoteSeconds: ActualSeconds
+    let onsiteSeconds: ActualSeconds
 
-    let regularSeconds: Int
-    let afterHoursSeconds: Int
-    let weekendSeconds: Int
-    let holidaySeconds: Int
+    let regularSeconds: ActualSeconds
+    let afterHoursSeconds: ActualSeconds
+    let weekendSeconds: ActualSeconds
+    let holidaySeconds: ActualSeconds
 
-    let subtotalMinor: Int
-    let vatMinor: Int
-    let totalMinor: Int
+    let subtotalMinor: MinorUnits
+    let vatMinor: MinorUnits
+    let totalMinor: MinorUnits
     let currency: String
 
     let lineCount: Int
@@ -61,7 +73,7 @@ struct TodoBreakdown: Hashable {
 // MARK: - Builder
 
 enum BillingReportBuilder {
-    /// Verilen satırlardan müşteri kırılımı üretir (tek müşteri için).
+    /// Produces a customer breakdown from the given lines (for a single customer).
     static func buildCustomerReport(
         customerId: String,
         customerName: String,
@@ -71,7 +83,7 @@ enum BillingReportBuilder {
         let customerLines = lines.filter { $0.customerId == customerId }
         let summary = summarize(lines: customerLines, currency: currency)
 
-        // Proje kırılımı
+        // Project breakdown
         let projectGroups = Dictionary(grouping: customerLines) { $0.projectId ?? "" }
         let projectBreakdown = projectGroups.map { (key, projectLines) -> ProjectBreakdown in
             let projectName = projectLines.first?.projectName ?? ProWorkLocalizer.shared.string("reports.project.noProject", defaultValue: "Projesiz")
@@ -94,9 +106,15 @@ enum BillingReportBuilder {
     }
 
     private static func buildTodoBreakdown(lines: [BillingReportLine], currency: String) -> [TodoBreakdown] {
+        // Localized fallbacks; the silent "" used to leak into
+        // PDF/CSV exports as a blank row that looked like a data bug.
+        let fallbackTitle = ProWorkLocalizer.shared.string(
+            "billingReport.fallback.todoTitle",
+            defaultValue: "İsimsiz iş"
+        )
         let todoGroups = Dictionary(grouping: lines) { $0.todoId }
         return todoGroups.map { (todoId, todoLines) -> TodoBreakdown in
-            let title = todoLines.first?.todoTitle ?? ""
+            let title = todoLines.first?.todoTitle ?? fallbackTitle
             let categoryName = todoLines.first?.categoryName
             return TodoBreakdown(
                 todoId: todoId,
@@ -108,16 +126,20 @@ enum BillingReportBuilder {
         .sorted { $0.todoTitle.localizedCaseInsensitiveCompare($1.todoTitle) == .orderedAscending }
     }
 
-    /// Birden fazla müşteri için kırılım — Faturalandırma Özeti ekranı için.
+    /// Breakdown across multiple customers — for the Billing Summary screen.
     static func buildOrganizationReport(
         lines: [BillingReportLine],
         masterCurrency: String
     ) -> [CustomerReport] {
+        let fallbackName = ProWorkLocalizer.shared.string(
+            "billingReport.fallback.customerName",
+            defaultValue: "İsimsiz müşteri"
+        )
         let customerGroups = Dictionary(grouping: lines) { $0.customerId }
         return customerGroups.map { (customerId, customerLines) -> CustomerReport in
             buildCustomerReport(
                 customerId: customerId,
-                customerName: customerLines.first?.customerName ?? "",
+                customerName: customerLines.first?.customerName ?? fallbackName,
                 lines: customerLines,
                 currency: customerLines.first?.currency ?? masterCurrency
             )
@@ -127,7 +149,23 @@ enum BillingReportBuilder {
 
     // MARK: - Summarize
 
+    /// Aggregates a set of `BillingReportLine` into a `BillingPeriodSummary`.
+    ///
+    /// - Important: This summary treats the `minorAmount` columns as
+    ///   additive in a single currency. Callers MUST pass lines that all
+    ///   share `currency` (or be intentionally summing within one). If
+    ///   the input mixes currencies, the totals are nonsense (you can't
+    ///   sum TRY kuruş with USD cent). Heterogeneous mixes are logged
+    ///   loudly so the bug surfaces during diagnosis — matching the
+    ///   discipline `BillingRunLifecycleService.summarize` already
+    /// enforces.
     private static func summarize(lines: [BillingReportLine], currency: String) -> BillingPeriodSummary {
+        let distinctCurrencies = Set(lines.map(\.currency))
+        if distinctCurrencies.count > 1 {
+            ProWorkLog.billing.error(
+                "BillingReportBuilder.summarize: heterogeneous currency mix \(distinctCurrencies.sorted().joined(separator: ","), privacy: .public); minor unit totals will be nonsensical. Bundle the input into per-currency groups before summarising."
+            )
+        }
         var totalActual = 0
         var billable = 0
         var nonBillableSeconds = 0

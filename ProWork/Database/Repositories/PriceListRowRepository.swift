@@ -1,9 +1,6 @@
-//
 //  PriceListRowRepository.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 import SQLite3
@@ -29,9 +26,51 @@ final class PriceListRowRepository {
 
         return try database.query(
             sql,
-            map: { Self.makeRow(from: $0) },
+            map: { try Self.makeRow(from: $0) },
             bind: { $0.bindText(priceListId, at: 1) }
         )
+    }
+
+    /// Bulk variant that fetches every row belonging to any of
+    /// `priceListIds` in one SQL pass and groups them client-side. The
+    /// caller-side loop (`computePeriodInternal`) used to call
+    /// `fetchAll(priceListId:)` N times — for an org with dozens of price
+    /// lists that's an N+1 storm on every report. Chunks the IN list to
+    /// stay under SQLITE_MAX_VARIABLE_NUMBER (same pattern as
+    /// `TodoTimeSessionRepository.fetch(ids:)`).
+    func fetchAll(priceListIds: [String]) throws -> [String: [PriceListRow]] {
+        guard !priceListIds.isEmpty else { return [:] }
+
+        var grouped: [String: [PriceListRow]] = [:]
+        let chunkSize = SQLiteParameterLimit.inClauseChunk
+        for chunkStart in stride(from: 0, to: priceListIds.count, by: chunkSize) {
+            let chunk = Array(priceListIds[chunkStart..<min(chunkStart + chunkSize, priceListIds.count)])
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let sql = """
+            SELECT
+                id, priceListId, serviceType, timeType, categoryId, weekdayMask,
+                startTime, endTime, unitPriceMinor, currency, minimumWindowMinutes,
+                validFrom, validTo, isActive, sortOrder, notes,
+                \(RecordMetadataSQL.columns)
+            FROM price_list_rows
+            WHERE priceListId IN (\(placeholders)) AND deletedAt IS NULL
+            ORDER BY sortOrder ASC, serviceType ASC, timeType ASC;
+            """
+
+            let rows = try database.query(
+                sql,
+                map: { try Self.makeRow(from: $0) },
+                bind: { stmt in
+                    for (offset, id) in chunk.enumerated() {
+                        stmt.bindText(id, at: Int32(offset + 1))
+                    }
+                }
+            )
+            for row in rows {
+                grouped[row.priceListId, default: []].append(row)
+            }
+        }
+        return grouped
     }
 
     func fetchActive(priceListId: String, on date: String) throws -> [PriceListRow] {
@@ -50,7 +89,7 @@ final class PriceListRowRepository {
 
         return try database.query(
             sql,
-            map: { Self.makeRow(from: $0) },
+            map: { try Self.makeRow(from: $0) },
             bind: { stmt in
                 stmt.bindText(priceListId, at: 1)
                 stmt.bindText(date, at: 2)
@@ -124,24 +163,12 @@ final class PriceListRowRepository {
         }
     }
 
-    func softDelete(id: String, by userId: String = BuiltInUserId.defaultOwner) throws {
-        let sql = """
-        UPDATE price_list_rows
-        SET deletedAt = ?, updatedAt = ?, updatedByUserId = ?,
-            rowVersion = rowVersion + 1, syncStatus = 'local'
-        WHERE id = ? AND deletedAt IS NULL;
-        """
-
-        try database.execute(sql) { stmt in
-            let now = DateFormatter.proWorkSQLite.string(from: Date())
-            stmt.bindText(now, at: 1)
-            stmt.bindText(now, at: 2)
-            stmt.bindText(userId, at: 3)
-            stmt.bindText(id, at: 4)
-        }
+    func softDelete(id: String, by userId: String) throws {
+        // Delegate to the central helper.
+        try database.softDelete(table: "price_list_rows", id: id, by: userId)
     }
 
-    private static func makeRow(from statement: SQLiteStatement) -> PriceListRow {
+    private static func makeRow(from statement: SQLiteStatement) throws -> PriceListRow {
         PriceListRow(
             id: statement.text(at: 0) ?? UUID().uuidString,
             priceListId: statement.text(at: 1) ?? "",
@@ -159,12 +186,21 @@ final class PriceListRowRepository {
             isActive: statement.int(at: 13) == 1,
             sortOrder: statement.int(at: 14),
             notes: statement.text(at: 15),
-            meta: statement.readMetadata(startingAt: 16)
+            meta: try statement.readMetadata(startingAt: 16)
         )
     }
 }
 
 // MARK: - Convenience init from RecordMetadata
+//
+// This pattern (flat-field model + extension init that unpacks
+// a RecordMetadata) only exists for PriceListRow today, so it's
+// documented here as the canonical recipe rather than promoted to a
+// generic protocol. Other models either carry `meta` directly (no
+// init needed) or store metadata as flat fields and accept them at
+// init time. If a third repository ever needs the same shape, factor
+// into a `MetadataInitializable` protocol; one occurrence isn't
+// enough to justify the abstraction.
 
 extension PriceListRow {
     init(

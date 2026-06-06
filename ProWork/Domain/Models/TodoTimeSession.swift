@@ -1,9 +1,6 @@
-//
 //  TodoTimeSession.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 
@@ -53,7 +50,7 @@ struct TodoTimeSession: Identifiable, Hashable {
         rowVersion: Int = 0,
         syncStatus: SyncStatus = .local,
         lastSyncedAt: Date? = nil,
-        originDeviceId: String? = nil
+        originDeviceId: String? = DeviceIdentity.current
     ) {
         self.id = id
         self.todoId = todoId

@@ -1,9 +1,6 @@
-//
 //  ProWorkSearchPickerField.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
@@ -113,21 +110,14 @@ struct ProWorkSearchPickerField<Item: Identifiable>: View where Item.ID == Strin
                 .proWorkFont(size: 12)
                 .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, ProWorkLayout.scaled(12, using: settingsStore))
-        .padding(.vertical, ProWorkLayout.scaled(6, using: settingsStore))
-        .frame(
-            maxWidth: .infinity,
-            minHeight: ProWorkLayout.scaled(40, using: settingsStore),
-            alignment: .leading
-        )
-        .background(.background.opacity(isDisabled ? 0.35 : 0.70))
-        .clipShape(RoundedRectangle(cornerRadius: ProWorkLayout.scaled(10, using: settingsStore)))
-        .overlay(
-            RoundedRectangle(cornerRadius: ProWorkLayout.scaled(10, using: settingsStore))
-                .stroke(
-                    isShowingPicker ? Color.accentColor : Color.secondary.opacity(0.18),
-                    lineWidth: isShowingPicker ? 1.4 : 1
-                )
+        .proWorkFieldContainer(
+            backgroundOpacity: isDisabled ? 0.35 : 0.70,
+            alignment: .leading,
+            fillsWidth: true,
+            strokeColor: AnyShapeStyle(
+                isShowingPicker ? Color.accentColor : Color.secondary.opacity(0.18)
+            ),
+            strokeLineWidth: isShowingPicker ? 1.4 : 1
         )
     }
 

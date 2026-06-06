@@ -1,9 +1,6 @@
-//
 //  ServiceDocumentTemplateSettingsView.swift
 //  ProWork
-//
 //   Created by Pronomi.
-//
 
 import AppKit
 import SwiftUI
@@ -11,8 +8,21 @@ import SwiftUI
 struct ServiceDocumentTemplateSettingsView: View {
     @EnvironmentObject private var settingsStore: AppSettingsStore
 
+    /// Pulse trigger UUIDs from the parent DocumentTemplatesView.
+    /// Save/Reset buttons live in the parent toolbar; on click the
+    /// parent emits a new UUID, this view catches it via `.onChange`
+    /// and calls `save()`/`reset()`. The UUID approach is safer than
+    /// closure binding — compatible with struct value semantics, does
+    /// not cause @State capture issues.
+    let savePulse: UUID
+    let resetPulse: UUID
+
     @State private var draftSettings: ServiceDocumentTemplateSettings = .defaultTemplate
-    @State private var savedNotice: String?
+    /// `savedNotice` is now read by the parent scaffold through a
+    /// `Binding<String?>` — the outer scaffold shows a single savedNotice.
+    @Binding var savedNotice: String?
+    /// Shared notice scheduler.
+    @State private var savedNoticeScheduler = NoticeScheduler()
 
     private let accentPresets = [
         "#1F4E79",
@@ -24,31 +34,11 @@ struct ServiceDocumentTemplateSettingsView: View {
     ]
 
     var body: some View {
-        SettingsScreenScaffold(
-            title: settingsStore.localized("documentTemplate.title", defaultValue: "PDF Şablonu"),
-            subtitle: settingsStore.localized("documentTemplate.subtitle", defaultValue: "Hizmet dökümü PDF çıktısının başlık, renk, bölüm ve kolon görünümünü yönetin."),
-            savedNotice: savedNotice,
-            toolbar: {
-                HStack(spacing: 10) {
-                    Button {
-                        draftSettings = localizedDefaultTemplate
-                        save()
-                    } label: {
-                        ProWorkButtonLabel(title: settingsStore.localized("documentTemplate.reset", defaultValue: "Sıfırla"), systemImage: "arrow.counterclockwise", minHeight: 32)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
-
-                    Button {
-                        save()
-                    } label: {
-                        ProWorkButtonLabel(title: settingsStore.localized("common.save", defaultValue: "Kaydet"), systemImage: "checkmark", minHeight: 32)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                }
-            }
-        ) {
+        // This view no longer wraps its own scaffold — the parent
+        // DocumentTemplatesView tek bir outer SettingsScreenScaffold'da
+        // renders the title + picker + toolbar. The content below
+        // is placed directly into that scaffold's body.
+        VStack(alignment: .leading, spacing: ProWorkLayout.scaled(20, using: settingsStore)) {
             SettingsCard {
                 Text(settingsStore.localized("documentTemplate.section.general", defaultValue: "Genel Görünüm"))
                     .proWorkTextStyle(.headline)
@@ -122,12 +112,24 @@ struct ServiceDocumentTemplateSettingsView: View {
                 Text(settingsStore.localized("documentTemplate.section.footer", defaultValue: "Belge Alt Notu"))
                     .proWorkTextStyle(.headline)
 
+                // `TextEditor` is vertically greedy; without a maxHeight inside
+                // a ScrollView it balloons. We pin it to the 90-120 pt range.
                 ProWorkTextEditor(text: $draftSettings.footerNote, minHeight: 90)
-                    .frame(maxWidth: 760)
+                    .frame(maxWidth: 760, maxHeight: 120)
             }
         }
         .onAppear {
             draftSettings = localizedTemplate(from: settingsStore.settings.serviceDocumentTemplateSettings)
+        }
+        // Parent toolbar'dan gelen pulse trigger'lar — aktif tab buysa
+        // save/reset is applied. UUID changes are detected via `.onChange`;
+        // independent of closure-binding's struct value-semantics pitfalls.
+        .onChange(of: savePulse) { _, _ in
+            save()
+        }
+        .onChange(of: resetPulse) { _, _ in
+            draftSettings = localizedDefaultTemplate
+            save()
         }
     }
 
@@ -143,11 +145,8 @@ struct ServiceDocumentTemplateSettingsView: View {
     }
 
     private func setSavedNotice(_ message: String) {
-        savedNotice = message
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            if savedNotice == message {
-                savedNotice = nil
-            }
+        savedNoticeScheduler.show(message) { value in
+            savedNotice = value
         }
     }
 
@@ -171,6 +170,10 @@ struct ServiceDocumentTemplateSettingsView: View {
         }
     }
 
+    /// Route through `PDFDrawingPrimitives.nsColor(fromHex:)`
+    /// which (after ) accepts #RGB / #RRGGBB / #RRGGBBAA. The
+    /// previous hand-rolled parser was 6-char only and silently
+    /// fell back to accentColor on a 3-char user input.
     private func color(for hex: String) -> Color {
         let normalized = ServiceDocumentTemplateSettings(
             title: "",
@@ -183,16 +186,10 @@ struct ServiceDocumentTemplateSettingsView: View {
             accentHexColor: hex,
             footerNote: ""
         ).normalizedAccentHexColor
-
-        let cleaned = normalized.replacingOccurrences(of: "#", with: "")
-        guard let value = UInt64(cleaned, radix: 16) else {
+        guard let nsColor = PDFDrawingPrimitives.nsColor(fromHex: normalized) else {
             return .accentColor
         }
-
-        let red = Double((value & 0xFF0000) >> 16) / 255.0
-        let green = Double((value & 0x00FF00) >> 8) / 255.0
-        let blue = Double(value & 0x0000FF) / 255.0
-        return Color(nsColor: NSColor(red: red, green: green, blue: blue, alpha: 1))
+        return Color(nsColor: nsColor)
     }
 
     private var localizedDefaultTemplate: ServiceDocumentTemplateSettings {

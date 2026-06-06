@@ -1,9 +1,6 @@
-//
 //  PriceListQuoteTemplateSettingsView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import AppKit
 import SwiftUI
@@ -11,8 +8,16 @@ import SwiftUI
 struct PriceListQuoteTemplateSettingsView: View {
     @EnvironmentObject private var settingsStore: AppSettingsStore
 
+    /// Parent'tan gelen pulse trigger'lar — bkz. ServiceDocumentTemplate
+    /// Explanation shown in SettingsView.
+    let savePulse: UUID
+    let resetPulse: UUID
+
     @State private var draft: PriceListQuoteTemplateSettings = .defaultTemplate
-    @State private var savedNotice: String?
+    /// The parent scaffold shows a single savedNotice; both views share the same binding.
+    @Binding var savedNotice: String?
+    /// Shared notice scheduler.
+    @State private var savedNoticeScheduler = NoticeScheduler()
 
     private let accentPresets = [
         "#1F4E79",
@@ -24,31 +29,8 @@ struct PriceListQuoteTemplateSettingsView: View {
     ]
 
     var body: some View {
-        SettingsScreenScaffold(
-            title: settingsStore.localized("quoteTemplate.title", defaultValue: "Teklif Şablonu"),
-            subtitle: settingsStore.localized("quoteTemplate.subtitle", defaultValue: "Fiyat listesinden üretilen Teklif PDF'inin yapısı, metinleri ve renkleri."),
-            savedNotice: savedNotice,
-            toolbar: {
-                HStack(spacing: 10) {
-                    Button {
-                        draft = .defaultTemplate
-                        save()
-                    } label: {
-                        ProWorkButtonLabel(title: settingsStore.localized("documentTemplate.reset", defaultValue: "Sıfırla"), systemImage: "arrow.counterclockwise", minHeight: 32)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
-
-                    Button {
-                        save()
-                    } label: {
-                        ProWorkButtonLabel(title: settingsStore.localized("common.save", defaultValue: "Kaydet"), systemImage: "checkmark", minHeight: 32)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                }
-            }
-        ) {
+        // Scaffold wrapping is in the parent DocumentTemplatesView; this view is content only.
+        VStack(alignment: .leading, spacing: ProWorkLayout.scaled(20, using: settingsStore)) {
             SettingsCard {
                 Text(settingsStore.localized("quoteTemplate.section.general", defaultValue: "Belge Bilgileri"))
                     .proWorkTextStyle(.headline)
@@ -187,6 +169,15 @@ struct PriceListQuoteTemplateSettingsView: View {
         .onAppear {
             draft = settingsStore.settings.priceListQuoteTemplateSettings
         }
+        // Parent pulse triggers — save/reset when this is the active tab.
+        .onChange(of: savePulse) { _, _ in
+            save()
+        }
+        .onChange(of: resetPulse) { _, _ in
+            // Language-appropriate factory.
+            draft = .defaultTemplate(for: settingsStore.settings.language)
+            save()
+        }
     }
 
     private func bulletListEditor(items: Binding<[String]>) -> some View {
@@ -243,11 +234,8 @@ struct PriceListQuoteTemplateSettingsView: View {
     }
 
     private func setSavedNotice(_ message: String) {
-        savedNotice = message
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            if savedNotice == message {
-                savedNotice = nil
-            }
+        savedNoticeScheduler.show(message) { value in
+            savedNotice = value
         }
     }
 
@@ -271,12 +259,12 @@ struct PriceListQuoteTemplateSettingsView: View {
         }
     }
 
+    /// Shared hex parser supports #RGB / #RRGGBB / #RRGGBBAA
+    /// since widened `PDFDrawingPrimitives.nsColor(fromHex:)`.
     private func color(for hex: String) -> Color {
-        let cleaned = hex.replacingOccurrences(of: "#", with: "")
-        guard cleaned.count == 6, let value = UInt64(cleaned, radix: 16) else { return .accentColor }
-        let r = Double((value & 0xFF0000) >> 16) / 255
-        let g = Double((value & 0x00FF00) >> 8) / 255
-        let b = Double(value & 0x0000FF) / 255
-        return Color(nsColor: NSColor(red: r, green: g, blue: b, alpha: 1))
+        guard let nsColor = PDFDrawingPrimitives.nsColor(fromHex: hex) else {
+            return .accentColor
+        }
+        return Color(nsColor: nsColor)
     }
 }

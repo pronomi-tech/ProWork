@@ -1,11 +1,7 @@
-//
 //  TodoTimeSessionsViewModel.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
-//  TodoTimeSessionsView için domain state ve repository orkestrasyonu.
-//
+//  Domain state and repository orchestration for TodoTimeSessionsView.
 
 import Combine
 import Foundation
@@ -98,7 +94,7 @@ final class TodoTimeSessionsViewModel: ObservableObject {
 
     func deleteSession(id: String, refreshFor todoId: String) {
         do {
-            try sessionRepository.delete(id: id)
+            try sessionRepository.softDelete(id: id, by: AppServices.currentUserId)
             load(todoId: todoId)
             errorMessage = nil
         } catch {

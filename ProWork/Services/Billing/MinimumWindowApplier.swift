@@ -1,27 +1,26 @@
-//
 //  MinimumWindowApplier.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
-//  Spec §4 — Minimum ücretlendirme penceresi.
-//  Pencere işin başladığı andan itibaren hesaplanır:
-//      Pencere = 60 dk, başlangıç 10:30 → pencereler 10:30–11:30, 11:30–12:30, ...
-//
-//  Formül:
-//      ücretlendirilecek_dakika = ceil(gerçek_dakika / pencere_dakika) * pencere_dakika
-//
-//  Saf fonksiyon. Tüm hesap mantığı tek yerde. UI ve repository'ler bunu çağırır.
-//
+//  Spec §4 — Minimum billing window.
+//  The previous comment used the term "sliding window", but the
+//  implementation does ceil division. The difference: a true sliding
+//  window shifts bands based on the session start time (a job that
+//  starts at 10:30 sees the 11:30, 12:30 bands), while this formula
+//  only rounds the total minutes up to a multiple of the window — it
+//  computes "how many windows' worth of duration", not "how many bands".
+//  There is no alignment or start-time concept.
+//  Formula:
+//      billable_minutes = ceil(actual_minutes / window_minutes) * window_minutes
+//  Pure function. All computation logic in one place. UI and repositories call this.
 
 import Foundation
 
 enum MinimumWindowApplier {
-    /// Verilen gerçek süreyi minimum pencere kuralına göre yukarı yuvarlar.
+    /// Rounds the given actual duration up to the minimum-window rule.
     /// - Parameters:
-    ///   - actualMinutes: Çalışmanın gerçek süresi (dakika).
-    ///   - windowMinutes: Minimum pencere genişliği (dakika). 0 veya negatif ise yuvarlama yapılmaz.
-    /// - Returns: Ücretlendirilecek süre (dakika).
+    ///   - actualMinutes: Actual work duration (minutes).
+    ///   - windowMinutes: Minimum window width (minutes). No rounding if 0 or negative.
+    /// - Returns: Billable duration (minutes).
     static func apply(actualMinutes: Int, windowMinutes: Int?) -> Int {
         guard let window = windowMinutes, window > 0 else {
             return max(0, actualMinutes)
@@ -31,10 +30,10 @@ enum MinimumWindowApplier {
         return nWindows * window
     }
 
-    /// Saniye cinsinden gerçek süre alıp dakika olarak ücretlendirilecek süreyi döner.
+    /// Takes actual duration in seconds and returns the billable duration in minutes.
     static func applySeconds(actualSeconds: Int, windowMinutes: Int?) -> Int {
         guard actualSeconds > 0 else { return 0 }
-        // Saniyeyi dakikaya çevirirken yukarı yuvarla (1 saniye bile 1 dakika sayılır)
+        // Round seconds up when converting to minutes (even 1 second counts as 1 minute)
         let actualMinutes = (actualSeconds + 59) / 60
         return apply(actualMinutes: actualMinutes, windowMinutes: windowMinutes)
     }

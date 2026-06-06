@@ -1,15 +1,12 @@
-//
 //  BillingReportRun.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 
 enum BillingRunStatus: String, CaseIterable, Identifiable, Hashable {
-    case draft       // canlı hesap, fiyat değişirse yeniden hesaplanır
-    case final       // kesinleşmiş, snapshot kilitli
+    case draft       // live calculation; recomputed when prices change
+    case final       // finalized; snapshot locked
     case cancelled
 
     var id: String { rawValue }
@@ -41,21 +38,25 @@ enum PaymentStatus: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
-/// Bir müşteri için bir dönemin faturalandırma raporu.
-/// `draft` halindeyken canlı hesaplanır; `final` olunca `snapshotJson` kilitlenir
-/// ve `BillingReportLine` tablosundaki satırlar doğruluk kaynağı olur.
+/// Billing report for a customer over a given period.
+/// While `draft`, it is recalculated live; once `final`, `snapshotJson` is locked
+/// and the rows in the `BillingReportLine` table become the source of truth.
 struct BillingReportRun: Identifiable, Hashable {
     let id: String
     var customerId: String
-    /// "yyyy-MM-dd"
+    /// `YYYY-MM-DD` (Istanbul business day). The single format for date-only fields.
+    /// Use lexicographic string comparison instead of the SQL `date(...)`
+    /// function; this format sorts correctly and holiday/due-date checks
+    /// don't depend on format-sensitive `date()` calls (Y15 + K10).
     var periodStart: String
+    /// `YYYY-MM-DD` (Istanbul business day). See `periodStart`.
     var periodEnd: String
     var status: BillingRunStatus
     var title: String?
     var invoiceNumber: String?
-    /// Resmi belge numarası (örn. "HD-2026-000123"). Finalize anında yıl bazlı
-    /// `AppSettings.billingDocumentSequenceByYear` sayacından tüketilir; draft
-    /// halindeyken nil kalır.
+    /// Official document number (e.g. "HD-2026-000123"). Consumed from the
+    /// per-year `AppSettings.billingDocumentSequenceByYear` counter at finalize
+    /// time; stays nil while draft.
     var documentNumber: String?
     var currency: String
     var subtotalMinor: Int
@@ -64,9 +65,14 @@ struct BillingReportRun: Identifiable, Hashable {
     var paidMinor: Int
     var balanceMinor: Int
     var paymentStatus: PaymentStatus
+    /// `YYYY-MM-DD` (Istanbul). See `periodStart`. K10's overdue
+    /// comparison relies on this invariant.
     var dueDate: String?
     var snapshotJson: String?
     var notes: String?
+    /// Instant (ISO timestamp via `DateFormatter.proWorkSQLite`). All Date
+    /// columns that need a point-in-time (rather than a date-only) value
+    /// use this format.
     var finalizedAt: Date?
     var finalizedByUserId: String?
 
@@ -111,7 +117,7 @@ struct BillingReportRun: Identifiable, Hashable {
         rowVersion: Int = 0,
         syncStatus: SyncStatus = .local,
         lastSyncedAt: Date? = nil,
-        originDeviceId: String? = nil
+        originDeviceId: String? = DeviceIdentity.current
     ) {
         self.id = id
         self.customerId = customerId

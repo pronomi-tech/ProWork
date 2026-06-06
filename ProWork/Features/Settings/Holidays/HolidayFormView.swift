@@ -1,11 +1,9 @@
-//
 //  HolidayFormView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
+import os
 
 enum HolidayFormMode: Hashable {
     case create
@@ -39,8 +37,8 @@ struct HolidayFormView: View {
             title: mode.title(using: settingsStore),
             subtitle: settingsStore.localized("holidays.form.subtitle", defaultValue: "Tatil günü tanımı"),
             systemImage: "calendar",
-            width: 560,
-            height: 500
+            width: FormSheetSize.holidayForm.width,
+            height: FormSheetSize.holidayForm.height
         ) {
             VStack(alignment: .leading, spacing: ProWorkLayout.formScaled(14, using: settingsStore)) {
                 SettingsFormError(message: errorMessage)
@@ -93,8 +91,24 @@ struct HolidayFormView: View {
     private func applyMode() {
         if case .edit(let holiday) = mode {
             existingId = holiday.id
+            // previously a parse failure silently left the
+            // date field on its initial Date(), so a corrupt dateString in
+            // the DB would let the user accidentally save "today" over the
+            // intended holiday date. Log loudly so an admin can repair the
+            // stored value; keep the visible date unchanged.
             if let parsed = Holiday.dateFormatter.date(from: holiday.dateString) {
                 date = parsed
+            } else {
+                ProWorkLog.app.error(
+                    "HolidayFormView.applyMode: failed to parse stored dateString \(holiday.dateString, privacy: .public) for holiday \(holiday.id, privacy: .public)"
+                )
+                ProWorkToastStore.shared.show(
+                    settingsStore.localized(
+                        "holidays.form.error.invalidStoredDate",
+                        defaultValue: "Bayram tarihi okunamadı; lütfen kontrol edin."
+                    ),
+                    style: .warning
+                )
             }
             name = holiday.name
             isHalfDay = holiday.isHalfDay

@@ -1,9 +1,6 @@
-//
 //  ProWorkDonutBreakdown.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
@@ -303,7 +300,11 @@ enum SessionBreakdownBuilder {
         }
     }
 
-    private static var customerPalette: [Color] {
+    /// `static let` instead of `static var` (computed). The
+    /// previous declaration re-allocated the 8-color array on every
+    /// access; the donut redraws this once per render of every
+    /// breakdown card, so the allocations added up. The palette is
+    /// constant; a static let exposes the same instance.
+    private static let customerPalette: [Color] =
         [.blue, .green, .orange, .purple, .cyan, .indigo, .mint, .pink]
-    }
 }

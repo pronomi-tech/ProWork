@@ -1,9 +1,6 @@
-//
 //  ProWorkTimeField.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 import AppKit
@@ -233,8 +230,11 @@ struct ProWorkTimeField: View {
         focusedUnit = nil
     }
 
+    /// The 50 ms `asyncAfter` was used to wait for SwiftUI to finish the
+    /// focus transfer — in practice, dispatching to the next runloop tick
+    /// is enough and removes the magic literal delay.
     private func selectAllText() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        RunLoop.main.perform {
             NSApp.sendAction(
                 #selector(NSText.selectAll(_:)),
                 to: nil,
@@ -248,13 +248,13 @@ struct ProWorkTimeField: View {
             return
         }
 
-        let calendar = Calendar.current
+        let calendar = AppCalendar.istanbul
         hour = calendar.component(.hour, from: date)
         minute = calendar.component(.minute, from: date)
     }
 
     private func syncToDate() {
-        var components = Calendar.current.dateComponents(
+        var components = AppCalendar.istanbul.dateComponents(
             [.year, .month, .day],
             from: date
         )
@@ -263,7 +263,7 @@ struct ProWorkTimeField: View {
         components.minute = minute
         components.second = 0
 
-        if let newDate = Calendar.current.date(from: components) {
+        if let newDate = AppCalendar.istanbul.date(from: components) {
             date = newDate
         }
     }

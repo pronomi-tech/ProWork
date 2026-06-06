@@ -1,9 +1,6 @@
-//
 //  AppSettings.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 
@@ -22,10 +19,10 @@ struct AppSettings: Hashable {
     var preferredExchangeRateSource: ExchangeRateAutoSource
     var serviceDocumentTemplateSettings: ServiceDocumentTemplateSettings
     var priceListQuoteTemplateSettings: PriceListQuoteTemplateSettings
-    /// Yıl bazlı son kullanılan teklif numarası sayacı. Anahtar: 4 haneli yıl (örn. "2026").
+    /// Last-used quote number counter by year. Key: 4-digit year (e.g. "2026").
     var quoteSequenceByYear: [String: Int]
-    /// Yıl bazlı son kullanılan hizmet dökümü (billing run) belge numarası sayacı.
-    /// Anahtar: 4 haneli yıl. Finalize anında tüketilir.
+    /// Last-used billing-run document number counter by year.
+    /// Key: 4-digit year. Consumed at finalize time.
     var billingDocumentSequenceByYear: [String: Int]
 
     static let defaults = AppSettings(

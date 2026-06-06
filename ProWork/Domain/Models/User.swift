@@ -1,13 +1,10 @@
-//
 //  User.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 
-/// Sistem kullanıcısı. Auth devreye girene kadar tek bir default Owner kullanılır.
+/// System user. Until auth is wired up, a single default Owner is used.
 struct User: Identifiable, Hashable {
     let id: String
     var email: String?
@@ -15,7 +12,7 @@ struct User: Identifiable, Hashable {
     var avatarColor: String?
     var isActive: Bool
 
-    // Sync metadata (organizationId / createdBy yok — kullanıcılar global)
+    // Sync metadata (no organizationId / createdBy — users are global)
     var createdAt: Date
     var updatedAt: Date
     var deletedAt: Date?
@@ -36,7 +33,7 @@ struct User: Identifiable, Hashable {
         rowVersion: Int = 0,
         syncStatus: SyncStatus = .local,
         lastSyncedAt: Date? = nil,
-        originDeviceId: String? = nil
+        originDeviceId: String? = DeviceIdentity.current
     ) {
         self.id = id
         self.email = email

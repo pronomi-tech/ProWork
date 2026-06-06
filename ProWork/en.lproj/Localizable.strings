@@ -1125,7 +1125,7 @@
 "pdf.column.no" = "No";
 "pdf.column.serviceDescription" = "Service / Task Description";
 "pdf.column.unitPrice" = "Unit Price";
-"pdf.summary.vatRate" = "VAT (%%%@)";
+"pdf.summary.vatRate" = "VAT (%@)";
 "pdf.summary.vatExempt" = "VAT (Exempt)";
 "pdf.summary.collected" = "Collected";
 "pdf.summary.balance" = "Outstanding Balance";

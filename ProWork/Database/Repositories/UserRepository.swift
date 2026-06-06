@@ -1,12 +1,20 @@
-//
 //  UserRepository.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 import SQLite3
+
+enum UserRepositoryError: Error, LocalizedError {
+    case cannotDeleteDefaultOwner
+
+    var errorDescription: String? {
+        switch self {
+        case .cannotDeleteDefaultOwner:
+            return "The default owner user is the audit-trail anchor and cannot be deleted."
+        }
+    }
+}
 
 final class UserRepository {
     private let database: AppDatabase
@@ -28,7 +36,7 @@ final class UserRepository {
         """
 
         return try database.query(sql) { statement in
-            Self.makeUser(from: statement)
+            try Self.makeUser(from: statement)
         }
     }
 
@@ -45,12 +53,12 @@ final class UserRepository {
 
         return try database.query(
             sql,
-            map: { Self.makeUser(from: $0) },
+            map: { try Self.makeUser(from: $0) },
             bind: { $0.bindText(id, at: 1) }
         ).first
     }
 
-    /// Varsayılan sahip kullanıcısını döner.
+    /// Returns the default owner user.
     func fetchDefaultOwner() throws -> User? {
         try fetch(id: BuiltInUserId.defaultOwner)
     }
@@ -102,7 +110,14 @@ final class UserRepository {
         }
     }
 
+    /// Soft-deleting `BuiltInUserId.defaultOwner` breaks audit-trail
+    /// references on every legacy row that points at it via
+    /// `createdByUserId` / `updatedByUserId`. Refuse the call so a
+    /// misclick in the UI can't orphan history.
     func softDelete(id: String) throws {
+        guard id != BuiltInUserId.defaultOwner else {
+            throw UserRepositoryError.cannotDeleteDefaultOwner
+        }
         let sql = """
         UPDATE users
         SET
@@ -119,19 +134,54 @@ final class UserRepository {
         }
     }
 
-    private static func makeUser(from statement: SQLiteStatement) -> User {
-        User(
+    /// `users` table omits createdByUserId/updatedByUserId so it doesn't
+    /// match the full RecordMetadata shape; the discipline
+    /// (throw on present-but-unparseable timestamps, unknown sync state)
+    /// is applied inline instead.
+    private static func makeUser(from statement: SQLiteStatement) throws -> User {
+        guard let createdAtRaw = statement.text(at: 5),
+              let createdAt = SQLitePersistedDate.parse(createdAtRaw) else {
+            throw DatabaseError.executionFailed(message: "users.createdAt missing or unparseable; row is corrupt.")
+        }
+        guard let updatedAtRaw = statement.text(at: 6),
+              let updatedAt = SQLitePersistedDate.parse(updatedAtRaw) else {
+            throw DatabaseError.executionFailed(message: "users.updatedAt missing or unparseable; row is corrupt.")
+        }
+        let deletedAt: Date?
+        if let raw = statement.text(at: 7), !raw.isEmpty {
+            guard let parsed = SQLitePersistedDate.parse(raw) else {
+                throw DatabaseError.executionFailed(message: "users.deletedAt present but unparseable; row is corrupt.")
+            }
+            deletedAt = parsed
+        } else {
+            deletedAt = nil
+        }
+        let syncStatusRaw = statement.text(at: 9) ?? ""
+        guard let syncStatus = SyncStatus(rawValue: syncStatusRaw) else {
+            throw DatabaseError.executionFailed(message: "users.syncStatus '\(syncStatusRaw)' unknown; schema drift or row corruption.")
+        }
+        let lastSyncedAt: Date?
+        if let raw = statement.text(at: 10), !raw.isEmpty {
+            guard let parsed = SQLitePersistedDate.parse(raw) else {
+                throw DatabaseError.executionFailed(message: "users.lastSyncedAt present but unparseable; row is corrupt.")
+            }
+            lastSyncedAt = parsed
+        } else {
+            lastSyncedAt = nil
+        }
+
+        return User(
             id: statement.text(at: 0) ?? UUID().uuidString,
             email: statement.text(at: 1),
             fullName: statement.text(at: 2) ?? "",
             avatarColor: statement.text(at: 3),
             isActive: statement.int(at: 4) == 1,
-            createdAt: DateFormatter.proWorkSQLite.date(from: statement.text(at: 5) ?? "") ?? Date(),
-            updatedAt: DateFormatter.proWorkSQLite.date(from: statement.text(at: 6) ?? "") ?? Date(),
-            deletedAt: statement.text(at: 7).flatMap(DateFormatter.proWorkSQLite.date(from:)),
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            deletedAt: deletedAt,
             rowVersion: statement.int(at: 8),
-            syncStatus: SyncStatus(rawValue: statement.text(at: 9) ?? "") ?? .local,
-            lastSyncedAt: statement.text(at: 10).flatMap(DateFormatter.proWorkSQLite.date(from:)),
+            syncStatus: syncStatus,
+            lastSyncedAt: lastSyncedAt,
             originDeviceId: statement.text(at: 11)
         )
     }

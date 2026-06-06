@@ -1,10 +1,7 @@
-//
 //  Migration001SeedTests.swift
 //  ProWorkTests
-//
 //  Tertemiz DB üzerinde Migration001 sonrası default kullanıcı, organizasyon,
 //  KDV oranları, tatiller ve ayarlar bekleniyor.
-//
 
 import XCTest
 @testable import ProWork

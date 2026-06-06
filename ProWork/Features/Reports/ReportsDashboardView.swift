@@ -1,9 +1,6 @@
-//
 //  ReportsView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
@@ -12,10 +9,13 @@ struct ReportsDashboardView: View {
     @StateObject private var viewModel = ReportsDashboardViewModel()
 
     @State private var filterRange: DateRangeFilter = .thisMonth
-    @State private var filterStartDate: Date = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: Date())) ?? Date()
+    @State private var filterStartDate: Date = AppCalendar.istanbul.date(from: AppCalendar.istanbul.dateComponents([.year, .month], from: Date())) ?? Date()
     @State private var filterEndDate: Date = Date()
     @State private var filterCustomerId: String = ""
     @State private var filterProjectId: String = ""
+    /// Cache backing.
+    @State private var cachedCustomerFilterOptions: [FilterOption] = []
+    @State private var cachedProjectFilterOptions: [FilterOption] = []
     @State private var isShowingFilters: Bool = false
 
     var body: some View {
@@ -53,38 +53,41 @@ struct ReportsDashboardView: View {
         .proWorkToastNotifications(errorMessage: viewModel.errorMessage)
         .onAppear {
             viewModel.loadData()
+            rebuildFilterOptionCaches()
+            recompute()
         }
+        .onChange(of: filterRange) { _, _ in recompute() }
+        .onChange(of: filterStartDate) { _, _ in if filterRange == .custom { recompute() } }
+        .onChange(of: filterEndDate) { _, _ in if filterRange == .custom { recompute() } }
+        .onChange(of: filterCustomerId) { _, _ in
+            rebuildFilterOptionCaches()
+            recompute()
+        }
+        .onChange(of: filterProjectId) { _, _ in recompute() }
+        .onChange(of: viewModel.customers) { _, _ in rebuildFilterOptionCaches() }
+        .onChange(of: viewModel.projects) { _, _ in rebuildFilterOptionCaches() }
     }
 
-    // MARK: - Filtered Sessions
-
-    private var filteredSessions: [WorkSessionListItem] {
-        return viewModel.sessions.filter { session in
-            let matchesRange = filterRange.contains(
-                session.startedAt,
-                customStart: filterStartDate,
-                customEnd: filterEndDate
-            )
-
-            let matchesCustomer: Bool = {
-                guard !filterCustomerId.isEmpty else { return true }
-                guard let name = viewModel.customers.first(where: { $0.id == filterCustomerId })?.name else { return false }
-                return session.customerName == name
-            }()
-
-            let matchesProject: Bool = {
-                guard !filterProjectId.isEmpty else { return true }
-                guard let name = viewModel.projects.first(where: { $0.id == filterProjectId })?.name else { return false }
-                return session.projectName == name
-            }()
-
-            return matchesRange && matchesCustomer && matchesProject
-        }
-        .filter { $0.endedAt != nil }
-    }
-
-    private var totalSeconds: Int {
-        filteredSessions.reduce(0) { $0 + ($1.durationSeconds ?? 0) }
+    /// Re-runs the VM's filtered / breakdown sets whenever a filter or
+    /// the data changes. The view body only reads from the VM's cache,
+    /// so search-picker keystrokes don't re-run O(n·sessions) work.
+    private func recompute() {
+        let labels = ReportsDashboardViewModel.LabelBundle(
+            noCustomerTitle: settingsStore.localized("home.pie.noCustomer", defaultValue: "Müşterisiz"),
+            noProjectFormat: settingsStore.localized("reports.dashboard.project.noProject", defaultValue: "%@ (Proje yok)"),
+            administrativeTitle: settingsStore.localized("todos.administrative", defaultValue: "İdari"),
+            unknownCategoryTitle: settingsStore.localized("home.pie.unknownCategory", defaultValue: "Kategorisiz"),
+            otherTitle: settingsStore.localized("home.pie.other", defaultValue: "Diğer"),
+            billableTitle: settingsStore.localized("reports.dashboard.breakdown.billable", defaultValue: "Faturalandırılabilir")
+        )
+        viewModel.recompute(
+            range: filterRange,
+            customStart: filterStartDate,
+            customEnd: filterEndDate,
+            customerId: filterCustomerId,
+            projectId: filterProjectId,
+            labels: labels
+        )
     }
 
     private var hasActiveFilters: Bool {
@@ -95,7 +98,7 @@ struct ReportsDashboardView: View {
 
     private func clearFilters() {
         filterRange = .thisMonth
-        filterStartDate = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: Date())) ?? Date()
+        filterStartDate = AppCalendar.istanbul.date(from: AppCalendar.istanbul.dateComponents([.year, .month], from: Date())) ?? Date()
         filterEndDate = Date()
         filterCustomerId = ""
         filterProjectId = ""
@@ -169,7 +172,7 @@ struct ReportsDashboardView: View {
 
             Spacer()
 
-            Text(String(format: settingsStore.localized("common.recordCount", defaultValue: "%d kayıt"), filteredSessions.count))
+            Text(String(format: settingsStore.localized("common.recordCount", defaultValue: "%d kayıt"), viewModel.filteredSessions.count))
                 .proWorkTextStyle(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -177,17 +180,30 @@ struct ReportsDashboardView: View {
 
     // MARK: - Filter Panel
 
+    /// Dropdown options now live in @State so they only
+    /// rebuild when their inputs (`customers`, `projects`,
+    /// `filterCustomerId`) actually change. The previous computed
+    /// vars re-ran on every body eval — date-picker drag was
+    /// recomputing the customer options on each render frame.
     private var customerFilterOptions: [FilterOption] {
-        [FilterOption(id: "", title: settingsStore.localized("dateRange.all", defaultValue: "Tümü"))] +
-        viewModel.customers.map { FilterOption(id: $0.id, title: $0.name) }
+        cachedCustomerFilterOptions
     }
 
     private var projectFilterOptions: [FilterOption] {
-        let filtered = filterCustomerId.isEmpty
+        cachedProjectFilterOptions
+    }
+
+    private func rebuildFilterOptionCaches() {
+        let allTitle = settingsStore.localized("dateRange.all", defaultValue: "Tümü")
+        cachedCustomerFilterOptions =
+            [FilterOption(id: "", title: allTitle)]
+            + viewModel.customers.map { FilterOption(id: $0.id, title: $0.name) }
+        let scopedProjects = filterCustomerId.isEmpty
             ? viewModel.projects
             : viewModel.projects.filter { $0.customerId == filterCustomerId }
-        return [FilterOption(id: "", title: settingsStore.localized("dateRange.all", defaultValue: "Tümü"))] +
-            filtered.map { FilterOption(id: $0.id, title: $0.name) }
+        cachedProjectFilterOptions =
+            [FilterOption(id: "", title: allTitle)]
+            + scopedProjects.map { FilterOption(id: $0.id, title: $0.name) }
     }
 
     private var filterPanel: some View {
@@ -255,31 +271,31 @@ struct ReportsDashboardView: View {
             HStack(spacing: ProWorkLayout.scaled(14, using: settingsStore)) {
                 overviewCard(
                     title: settingsStore.localized("workSessions.summary.totalTime", defaultValue: "Toplam Süre"),
-                    value: ProWorkFormatters.durationHHmm(totalSeconds),
-                    subtitle: String(format: settingsStore.localized("common.recordCount", defaultValue: "%d kayıt"), filteredSessions.count),
+                    value: ProWorkFormatters.durationHHmm(viewModel.totalSeconds),
+                    subtitle: String(format: settingsStore.localized("common.recordCount", defaultValue: "%d kayıt"), viewModel.filteredSessions.count),
                     systemImage: "clock.fill",
                     color: .blue
                 )
 
                 overviewCard(
                     title: settingsStore.localized("reports.dashboard.card.manual", defaultValue: "Manuel Kayıtlar"),
-                    value: ProWorkFormatters.durationHHmm(manualSeconds),
-                    subtitle: String(format: settingsStore.localized("reports.dashboard.card.manualCount", defaultValue: "%d manuel"), filteredSessions.filter { $0.isManual }.count),
+                    value: ProWorkFormatters.durationHHmm(viewModel.manualSeconds),
+                    subtitle: String(format: settingsStore.localized("reports.dashboard.card.manualCount", defaultValue: "%d manuel"), viewModel.filteredSessions.filter(\.isManual).count),
                     systemImage: "hand.point.up.left.fill",
                     color: .orange
                 )
 
                 overviewCard(
                     title: settingsStore.localized("reports.dashboard.card.automatic", defaultValue: "Otomatik Kayıtlar"),
-                    value: ProWorkFormatters.durationHHmm(automaticSeconds),
-                    subtitle: String(format: settingsStore.localized("reports.dashboard.card.automaticCount", defaultValue: "%d otomatik"), filteredSessions.filter { !$0.isManual }.count),
+                    value: ProWorkFormatters.durationHHmm(viewModel.automaticSeconds),
+                    subtitle: String(format: settingsStore.localized("reports.dashboard.card.automaticCount", defaultValue: "%d otomatik"), viewModel.filteredSessions.filter { !$0.isManual }.count),
                     systemImage: "play.fill",
                     color: .green
                 )
 
                 overviewCard(
                     title: settingsStore.localized("reports.dashboard.card.customerCount", defaultValue: "Müşteri Sayısı"),
-                    value: "\(uniqueCustomerCount)",
+                    value: "\(viewModel.uniqueCustomerCount)",
                     subtitle: settingsStore.localized("reports.dashboard.card.uniqueCustomer", defaultValue: "farklı müşteri"),
                     systemImage: "person.2.fill",
                     color: .purple
@@ -287,29 +303,13 @@ struct ReportsDashboardView: View {
 
                 overviewCard(
                     title: settingsStore.localized("reports.dashboard.card.projectCount", defaultValue: "Proje Sayısı"),
-                    value: "\(uniqueProjectCount)",
+                    value: "\(viewModel.uniqueProjectCount)",
                     subtitle: settingsStore.localized("reports.dashboard.card.uniqueProject", defaultValue: "farklı proje"),
                     systemImage: "folder.fill",
                     color: .cyan
                 )
             }
         }
-    }
-
-    private var manualSeconds: Int {
-        filteredSessions.filter { $0.isManual }.reduce(0) { $0 + ($1.durationSeconds ?? 0) }
-    }
-
-    private var automaticSeconds: Int {
-        filteredSessions.filter { !$0.isManual }.reduce(0) { $0 + ($1.durationSeconds ?? 0) }
-    }
-
-    private var uniqueCustomerCount: Int {
-        Set(filteredSessions.compactMap { $0.customerName }).count
-    }
-
-    private var uniqueProjectCount: Int {
-        Set(filteredSessions.compactMap { $0.projectName }).count
     }
 
     private func overviewCard(
@@ -352,152 +352,73 @@ struct ReportsDashboardView: View {
 
     // MARK: - Customer Breakdown
 
-    private var todoLookup: [String: TodoListItem] {
-        Dictionary(uniqueKeysWithValues: viewModel.todos.map { ($0.id, $0) })
-    }
-
-    private var categoryBreakdownRows: [DonutBreakdownRow] {
-        SessionBreakdownBuilder.categoryRows(
-            sessions: filteredSessions,
-            todoLookup: todoLookup,
-            unknownTitle: settingsStore.localized("home.pie.unknownCategory", defaultValue: "Kategorisiz"),
-            otherTitle: settingsStore.localized("home.pie.other", defaultValue: "Diğer")
+    /// Extracted card builders to share between the
+    /// horizontal and vertical branches of the ViewThatFits. The
+    /// previous code duplicated each card's full configuration, so a
+    /// localiser key change had to land in two places.
+    @ViewBuilder
+    private var breakdownCards: some View {
+        ProWorkDonutBreakdownCard(
+            title: settingsStore.localized("reports.dashboard.chart.category", defaultValue: "Kategori Dağılımı"),
+            systemImage: "tag.fill",
+            rows: viewModel.categoryBreakdownRows,
+            emptyMessage: settingsStore.localized("reports.empty.period", defaultValue: "Bu dönemde kayıt yok")
         )
-    }
 
-    private var customerBreakdownRows: [DonutBreakdownRow] {
-        SessionBreakdownBuilder.customerRows(
-            sessions: filteredSessions,
-            noCustomerTitle: settingsStore.localized("home.pie.noCustomer", defaultValue: "Müşterisiz"),
-            otherTitle: settingsStore.localized("home.pie.other", defaultValue: "Diğer")
+        ProWorkDonutBreakdownCard(
+            title: settingsStore.localized("reports.dashboard.chart.customer", defaultValue: "Müşteri Dağılımı"),
+            systemImage: "person.2.fill",
+            rows: viewModel.customerBreakdownRows,
+            emptyMessage: settingsStore.localized("reports.empty.period", defaultValue: "Bu dönemde kayıt yok")
         )
     }
 
     private var breakdownCharts: some View {
         ViewThatFits(in: .horizontal) {
             HStack(alignment: .top, spacing: ProWorkLayout.scaled(20, using: settingsStore)) {
-                ProWorkDonutBreakdownCard(
-                    title: settingsStore.localized("reports.dashboard.chart.category", defaultValue: "Kategori Dağılımı"),
-                    systemImage: "tag.fill",
-                    rows: categoryBreakdownRows,
-                    emptyMessage: settingsStore.localized("reports.empty.period", defaultValue: "Bu dönemde kayıt yok")
-                )
-
-                ProWorkDonutBreakdownCard(
-                    title: settingsStore.localized("reports.dashboard.chart.customer", defaultValue: "Müşteri Dağılımı"),
-                    systemImage: "person.2.fill",
-                    rows: customerBreakdownRows,
-                    emptyMessage: settingsStore.localized("reports.empty.period", defaultValue: "Bu dönemde kayıt yok")
-                )
+                breakdownCards
             }
-
             VStack(alignment: .leading, spacing: ProWorkLayout.scaled(20, using: settingsStore)) {
-                ProWorkDonutBreakdownCard(
-                    title: settingsStore.localized("reports.dashboard.chart.category", defaultValue: "Kategori Dağılımı"),
-                    systemImage: "tag.fill",
-                    rows: categoryBreakdownRows,
-                    emptyMessage: settingsStore.localized("reports.empty.period", defaultValue: "Bu dönemde kayıt yok")
-                )
-
-                ProWorkDonutBreakdownCard(
-                    title: settingsStore.localized("reports.dashboard.chart.customer", defaultValue: "Müşteri Dağılımı"),
-                    systemImage: "person.2.fill",
-                    rows: customerBreakdownRows,
-                    emptyMessage: settingsStore.localized("reports.empty.period", defaultValue: "Bu dönemde kayıt yok")
-                )
+                breakdownCards
             }
         }
-    }
-
-    private var customerBreakdownData: [(name: String, seconds: Int)] {
-        var map: [String: Int] = [:]
-        for session in filteredSessions {
-            let key = session.customerName ?? settingsStore.localized("todos.administrative", defaultValue: "İdari")
-            map[key, default: 0] += session.durationSeconds ?? 0
-        }
-        return map.map { (name: $0.key, seconds: $0.value) }
-            .sorted { $0.seconds > $1.seconds }
     }
 
     private var customerBreakdown: some View {
         breakdownTable(
             title: settingsStore.localized("reports.dashboard.breakdown.customer", defaultValue: "Müşteri Bazlı"),
             systemImage: "person.2",
-            rows: customerBreakdownData.map { ($0.name, $0.seconds) },
-            total: totalSeconds
+            rows: viewModel.customerBreakdownData.map { ($0.name, $0.seconds) },
+            total: viewModel.totalSeconds
         )
         .frame(maxWidth: .infinity)
-    }
-
-    // MARK: - Billable Breakdown
-
-    private var billableBreakdownData: [(name: String, seconds: Int)] {
-        let billable = filteredSessions.filter { $0.statusStartsTimer }.reduce(0) { $0 + ($1.durationSeconds ?? 0) }
-        let administrative = totalSeconds - billable
-        return [
-            (settingsStore.localized("reports.dashboard.breakdown.billable", defaultValue: "Faturalandırılabilir"), billable),
-            (settingsStore.localized("todos.administrative", defaultValue: "İdari"), administrative)
-        ]
-        .filter { $0.1 > 0 }
     }
 
     private var billableBreakdown: some View {
         breakdownTable(
             title: settingsStore.localized("reports.dashboard.breakdown.billing", defaultValue: "Faturalandırma"),
             systemImage: "creditcard",
-            rows: billableBreakdownData.map { ($0.name, $0.seconds) },
-            total: totalSeconds
+            rows: viewModel.billableBreakdownData.map { ($0.name, $0.seconds) },
+            total: viewModel.totalSeconds
         )
         .frame(maxWidth: .infinity)
-    }
-
-    // MARK: - Project Breakdown
-
-    private var projectBreakdownData: [(name: String, seconds: Int)] {
-        var map: [String: Int] = [:]
-        for session in filteredSessions {
-            let key: String
-            if let project = session.projectName, !project.isEmpty {
-                key = project
-            } else if let customer = session.customerName, !customer.isEmpty {
-                key = String(format: settingsStore.localized("reports.dashboard.project.noProject", defaultValue: "%@ (Proje yok)"), customer)
-            } else {
-                key = settingsStore.localized("todos.administrative", defaultValue: "İdari")
-            }
-            map[key, default: 0] += session.durationSeconds ?? 0
-        }
-        return map.map { (name: $0.key, seconds: $0.value) }
-            .sorted { $0.seconds > $1.seconds }
     }
 
     private var projectBreakdown: some View {
         breakdownTable(
             title: settingsStore.localized("reports.dashboard.breakdown.project", defaultValue: "Proje Bazlı"),
             systemImage: "folder",
-            rows: projectBreakdownData.map { ($0.name, $0.seconds) },
-            total: totalSeconds
+            rows: viewModel.projectBreakdownData.map { ($0.name, $0.seconds) },
+            total: viewModel.totalSeconds
         )
-    }
-
-    // MARK: - Todo Breakdown
-
-    private var todoBreakdownData: [(name: String, seconds: Int)] {
-        var map: [String: Int] = [:]
-        for session in filteredSessions {
-            map[session.todoTitle, default: 0] += session.durationSeconds ?? 0
-        }
-        return map.map { (name: $0.key, seconds: $0.value) }
-            .sorted { $0.seconds > $1.seconds }
-            .prefix(20)
-            .map { $0 }
     }
 
     private var todoBreakdown: some View {
         breakdownTable(
             title: settingsStore.localized("reports.dashboard.breakdown.todo", defaultValue: "Yapılacak İş Bazlı"),
             systemImage: "checklist",
-            rows: todoBreakdownData.map { ($0.name, $0.seconds) },
-            total: totalSeconds
+            rows: viewModel.todoBreakdownData.map { ($0.name, $0.seconds) },
+            total: viewModel.totalSeconds
         )
     }
 
@@ -539,10 +460,16 @@ struct ReportsDashboardView: View {
                 .padding(ProWorkLayout.scaled(16, using: settingsStore))
                 .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                    breakdownRow(name: row.0, seconds: row.1, total: total)
+                // Previously rendered as a plain ForEach in
+                // a VStack, so a long category breakdown materialised every
+                // row even when off-screen. Wrap in LazyVStack so rendering
+                // is bounded by what's actually visible.
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                        breakdownRow(name: row.0, seconds: row.1, total: total)
 
-                    Divider()
+                        Divider()
+                    }
                 }
             }
         }
@@ -593,7 +520,7 @@ struct ReportsDashboardView: View {
 
 }
 
-private struct FilterOption: Identifiable {
-    let id: String
-    let title: String
-}
+/// Route through the canonical `SearchPickerOption`
+/// shape so the dashboard filter and other (id, title) pickers can't
+/// drift independently.
+private typealias FilterOption = SearchPickerOption

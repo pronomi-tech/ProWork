@@ -1,13 +1,10 @@
-//
 //  Weekday.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 
-/// Haftanın günü. ISO 8601 sırası: Pazartesi=1 ... Pazar=7.
+/// Day of the week. ISO 8601 order: Monday=1 ... Sunday=7.
 enum Weekday: Int, CaseIterable, Identifiable, Hashable {
     case monday = 1
     case tuesday = 2
@@ -43,8 +40,14 @@ enum Weekday: Int, CaseIterable, Identifiable, Hashable {
         }
     }
 
-    /// Apple Calendar standardında 1=Pazar...7=Cumartesi'dir.
-    /// Bu helper Calendar'dan gelen değeri ISO Weekday'e çevirir.
+    /// Apple Calendar's convention is 1=Sunday...7=Saturday.
+    /// This helper converts the value returned by Calendar into ISO Weekday.
+    ///
+    /// `default` branch turns into a `fatalError`. Apple
+    /// documents the range as 1...7; any other value means the SDK
+    /// changed its contract under us, and silently returning `.monday`
+    /// would route Sunday work into Monday holiday rules. Crashing
+    /// loud at the boundary surfaces the regression in TestFlight.
     static func from(calendarWeekday raw: Int) -> Weekday {
         switch raw {
         case 1: return .sunday
@@ -54,11 +57,18 @@ enum Weekday: Int, CaseIterable, Identifiable, Hashable {
         case 5: return .thursday
         case 6: return .friday
         case 7: return .saturday
-        default: return .monday
+        default:
+            fatalError("Weekday.from(calendarWeekday:) received out-of-range value \(raw); Apple Calendar contract changed.")
         }
     }
 
-    static func from(date: Date, calendar: Calendar = .current) -> Weekday {
+    /// Default calendar is `AppCalendar.istanbul` instead of
+    /// `Calendar.current` so a user travelling between TZs doesn't
+    /// see weekday rules shift around midnight. Billing pipeline
+    /// already passes an explicit Istanbul calendar; UI callers
+    /// that genuinely want system TZ display must pass `.current`
+    /// explicitly.
+    static func from(date: Date, calendar: Calendar = AppCalendar.istanbul) -> Weekday {
         let raw = calendar.component(.weekday, from: date)
         return from(calendarWeekday: raw)
     }

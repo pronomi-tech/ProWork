@@ -77,6 +77,8 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = E89581D02FAB2F2800EB7A44 /* Build configuration list for PBXNativeTarget "ProWork" */;
 			buildPhases = (
+				E89581C82FAB2F2700EB7A44 /* Validate localizations */,
+				E89581C92FAB2F2700EB7A44 /* Validate log privacy */,
 				E89581C12FAB2F2700EB7A44 /* Sources */,
 				E89581C22FAB2F2700EB7A44 /* Frameworks */,
 				E89581C32FAB2F2700EB7A44 /* Resources */,
@@ -176,6 +178,52 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		E89581C82FAB2F2700EB7A44 /* Validate localizations */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/Scripts/validate-localizations.swift",
+				"$(SRCROOT)/ProWork/en.lproj/Localizable.strings",
+				"$(SRCROOT)/ProWork/tr.lproj/Localizable.strings",
+			);
+			name = "Validate localizations";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Code review M9: enforce en/tr Localizable.strings parity and\n# printf-style format-specifier alignment at build time. The script\n# exits non-zero on any drift so the build fails rather than letting\n# a runtime crash slip out (e.g. %@ vs %d swap).\nxcrun swift \"$SRCROOT/Scripts/validate-localizations.swift\" \"$SRCROOT/ProWork\"\n";
+		};
+		E89581C92FAB2F2700EB7A44 /* Validate log privacy */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/Scripts/validate-log-privacy.swift",
+				"$(SRCROOT)/ProWork",
+			);
+			name = "Validate log privacy";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Code review M11: every ProWorkLog interpolation must carry an\n# explicit privacy: marker so tenant / customer / financial values\n# never leak into macOS Console exports. The linter fails the build\n# on any new unmarked interpolation. Run with the user-sandbox bypass\n# (ENABLE_USER_SCRIPT_SANDBOXING already false at project level for the\n# sibling localization phase) so the recursive enumeration works.\nxcrun swift \"$SRCROOT/Scripts/validate-log-privacy.swift\" \"$SRCROOT/ProWork\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		E89581C12FAB2F2700EB7A44 /* Sources */ = {
@@ -332,13 +380,15 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = ProWork/ProWork.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
-				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
@@ -365,13 +415,15 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = ProWork/ProWork.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
-				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";

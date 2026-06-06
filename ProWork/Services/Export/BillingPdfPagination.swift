@@ -1,18 +1,13 @@
-//
 //  BillingPdfPagination.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
-//  BillingPdfDocument'in sayfa alokasyon ve yükseklik hesabı katmanı.
-//  Sayfa başına satır/ödeme bloklarını kaç parçada dağıtacağını burada
-//  belirliyoruz; gerçek `draw*` çağrıları BillingPdfDrawing.swift'te.
-//
+//  Page allocation and height computation layer for BillingPdfDocument.
+//  Decides how many chunks to split the per-page line/payment blocks into;
+//  the actual `draw*` calls live in BillingPdfDrawing.swift.
 
 import AppKit
 import Foundation
 
-@MainActor
 extension BillingPdfDocument {
     func paginate() -> [RenderPage] {
         var pages: [RenderPage] = [.init()]
@@ -256,7 +251,7 @@ extension BillingPdfDocument {
         }
     }
 
-    // MARK: - Yükseklik hesapları
+    // MARK: - Height computations
 
     var contentWidth: CGFloat {
         pageSize.width - marginLeft - marginRight

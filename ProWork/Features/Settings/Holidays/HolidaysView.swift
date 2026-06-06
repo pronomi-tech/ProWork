@@ -1,9 +1,6 @@
-//
 //  HolidaysView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
@@ -11,56 +8,58 @@ struct HolidaysView: View {
     @EnvironmentObject private var settingsStore: AppSettingsStore
     @StateObject private var viewModel = HolidaysViewModel()
 
-    @State private var selectedYear: Int = Calendar.current.component(.year, from: Date())
+    @State private var selectedYear: Int = AppCalendar.istanbul.component(.year, from: Date())
     @State private var isShowingCreate = false
     @State private var editingHoliday: Holiday?
     @State private var confirmation: ProWorkConfirmation?
+    /// Cache backings.
+    @State private var cachedAvailableYears: [Int] = []
+    @State private var cachedFilteredHolidays: [Holiday] = []
 
     var body: some View {
         SettingsScreenScaffold(
             title: settingsStore.localized("holidays.title", defaultValue: "Resmi Tatiller"),
             subtitle: settingsStore.localized("holidays.subtitle", defaultValue: "Tatil günlerinde yapılan çalışmalar 'Tatil' zaman tipi olarak ücretlendirilir. 2025–2030 TR tatilleri ön-yüklü gelir; düzenleyebilir, ekleyebilir veya silebilirsiniz."),
             errorMessage: viewModel.errorMessage,
+            contentScrollBehavior: .fixed,
             toolbar: {
-                Button {
+                SettingsCRUDToolbarButton(
+                    title: settingsStore.localized("holidays.action.new", defaultValue: "Yeni Tatil"),
+                    systemImage: "plus"
+                ) {
                     isShowingCreate = true
-                } label: {
-                    ProWorkButtonLabel(title: settingsStore.localized("holidays.action.new", defaultValue: "Yeni Tatil"), systemImage: "plus", minHeight: 32)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
             }
         ) {
             yearPicker
 
-            if filteredHolidays.isEmpty {
-                SettingsCard {
-                    SettingsEmptyState(
-                        systemImage: "calendar",
-                        title: String(format: settingsStore.localized("holidays.empty.year", defaultValue: "%d için tatil yok"), selectedYear),
-                        message: settingsStore.localized("holidays.empty.message", defaultValue: "Sağ üstten yeni tatil ekleyebilirsiniz.")
-                    )
-                }
-            } else {
-                holidayTable
-            }
+            holidayTable
         }
-        .onAppear { viewModel.load() }
-        .sheet(isPresented: $isShowingCreate) {
-            HolidayFormView(mode: .create) { holiday in
-                if viewModel.create(holiday) {
-                    isShowingCreate = false
+        .onAppear {
+            viewModel.load()
+            rebuildHolidayCaches()
+        }
+        .onChange(of: viewModel.holidays) { _, _ in rebuildHolidayCaches() }
+        .onChange(of: selectedYear) { _, _ in rebuildHolidayCaches() }
+        .settingsCRUDPresenter(
+            isShowingCreate: $isShowingCreate,
+            editingItem: $editingHoliday,
+            confirmation: $confirmation,
+            createForm: {
+                HolidayFormView(mode: .create) { holiday in
+                    if viewModel.create(holiday) {
+                        isShowingCreate = false
+                    }
+                }
+            },
+            editForm: { holiday in
+                HolidayFormView(mode: .edit(holiday)) { updated in
+                    if viewModel.update(updated) {
+                        editingHoliday = nil
+                    }
                 }
             }
-        }
-        .sheet(item: $editingHoliday) { holiday in
-            HolidayFormView(mode: .edit(holiday)) { updated in
-                if viewModel.update(updated) {
-                    editingHoliday = nil
-                }
-            }
-        }
-        .proWorkConfirmationDialog($confirmation)
+        )
     }
 
     private var yearPicker: some View {
@@ -86,30 +85,44 @@ struct HolidaysView: View {
         }
     }
 
+    /// Cache `availableYears` and `filteredHolidays` so they
+    /// rebuild only on the inputs that affect them. The computed
+    /// versions rebuilt on every body eval (year picker change,
+    /// holiday import progress) and scanned all holidays each time.
     private var availableYears: [Int] {
-        let years = Set(viewModel.holidays.compactMap {
-            $0.dateString.split(separator: "-").first.flatMap { Int($0) }
-        })
-        let now = Calendar.current.component(.year, from: Date())
-        let allRange = Set((now - 1)...(now + 4))
-        return Array(years.union(allRange)).sorted()
+        cachedAvailableYears
     }
 
     private var filteredHolidays: [Holiday] {
-        viewModel.holidays
+        cachedFilteredHolidays
+    }
+
+    private func rebuildHolidayCaches() {
+        let years = Set(viewModel.holidays.compactMap {
+            $0.dateString.split(separator: "-").first.flatMap { Int($0) }
+        })
+        let now = AppCalendar.istanbul.component(.year, from: Date())
+        let allRange = Set((now - 1)...(now + 4))
+        cachedAvailableYears = Array(years.union(allRange)).sorted()
+
+        cachedFilteredHolidays = viewModel.holidays
             .filter { $0.dateString.hasPrefix("\(selectedYear)-") }
             .sorted { $0.dateString < $1.dateString }
     }
 
     private var holidayTable: some View {
-        SettingsTableContainer {
-            tableHeader
-            Divider()
-            ForEach(filteredHolidays) { holiday in
-                row(holiday)
-                Divider()
-            }
-        }
+        ProWorkGrid(
+            items: filteredHolidays,
+            header: { tableHeader },
+            emptyContent: {
+                ProWorkGridEmptyState(
+                    systemImage: "calendar",
+                    title: String(format: settingsStore.localized("holidays.empty.year", defaultValue: "%d için tatil yok"), selectedYear),
+                    message: settingsStore.localized("holidays.empty.message", defaultValue: "Sağ üstten yeni tatil ekleyebilirsiniz.")
+                )
+            },
+            row: { holiday in row(holiday) }
+        )
     }
 
     private var tableHeader: some View {
@@ -117,8 +130,8 @@ struct HolidaysView: View {
             Text(settingsStore.localized("holidays.column.date", defaultValue: "Tarih")).frame(width: 130, alignment: .leading)
             Text(settingsStore.localized("holidays.column.name", defaultValue: "Ad")).frame(maxWidth: .infinity, alignment: .leading)
             Text(settingsStore.localized("holidays.column.type", defaultValue: "Tip")).frame(width: 130, alignment: .leading)
-            Text(settingsStore.localized("holidays.column.active", defaultValue: "Aktif")).frame(width: 60, alignment: .center)
-            Text("").frame(width: 76)
+            Text(settingsStore.localized("holidays.column.active", defaultValue: "Aktif")).frame(width: 90, alignment: .leading)
+            Color.gridHeaderSpacer(width: 76)
         }
         .proWorkTextStyle(.caption)
         .foregroundStyle(.secondary)
@@ -156,9 +169,8 @@ struct HolidaysView: View {
             .foregroundStyle(.secondary)
             .frame(width: 130, alignment: .leading)
 
-            Image(systemName: holiday.isActive ? "checkmark.circle.fill" : "xmark.circle")
-                .foregroundStyle(holiday.isActive ? .green : .secondary)
-                .frame(width: 60, alignment: .center)
+            ProWorkActivityBadge(isActive: holiday.isActive)
+                .frame(width: 90, alignment: .leading)
 
             HStack(spacing: 6) {
                 Button { editingHoliday = holiday } label: {

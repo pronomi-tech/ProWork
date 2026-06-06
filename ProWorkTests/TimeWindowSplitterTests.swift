@@ -1,9 +1,6 @@
-//
 //  TimeWindowSplitterTests.swift
 //  ProWorkTests
-//
 //  Spec §5 — Çalışma süresinin zaman tiplerine bölünmesi.
-//
 
 import XCTest
 @testable import ProWork

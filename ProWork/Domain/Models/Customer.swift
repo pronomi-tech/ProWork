@@ -1,9 +1,6 @@
-//
 //  Customer.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 
@@ -20,7 +17,7 @@ struct Customer: Identifiable, Hashable {
     var vatRateId: String?
     var notes: String?
 
-    // Tenant + audit + sync (bkz. RecordMetadata)
+    // Tenant + audit + sync (see RecordMetadata)
     var organizationId: String
     var createdByUserId: String?
     var updatedByUserId: String?
@@ -53,7 +50,7 @@ struct Customer: Identifiable, Hashable {
         rowVersion: Int = 0,
         syncStatus: SyncStatus = .local,
         lastSyncedAt: Date? = nil,
-        originDeviceId: String? = nil
+        originDeviceId: String? = DeviceIdentity.current
     ) {
         self.id = id
         self.name = name
@@ -79,10 +76,10 @@ struct Customer: Identifiable, Hashable {
     }
 }
 
-// MARK: - Metadata köprüsü
+// MARK: - Metadata bridge
 
 extension Customer {
-    /// Repository binding/okuma için metadata bloğu.
+    /// Metadata block for repository binding/read paths.
     var meta: RecordMetadata {
         RecordMetadata(
             organizationId: organizationId,
@@ -98,7 +95,7 @@ extension Customer {
         )
     }
 
-    /// Convenience init: business alanları + tek bir RecordMetadata bloğu.
+    /// Convenience init: business fields + a single RecordMetadata block.
     init(
         id: String = UUID().uuidString,
         name: String,

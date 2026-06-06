@@ -1,12 +1,8 @@
-//
 //  ScopedPriceListsView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
-//  Belirli bir owner (Müşteri veya Proje) için fiyat listelerini yöneten
-//  generic ekran. CustomerPricingSheet ve ProjectPricingSheet bu view'ı kullanır.
-//
+//  Generic screen managing price lists for a specific owner (Customer or Project).
+//  CustomerPricingSheet and ProjectPricingSheet both use this view.
 
 import SwiftUI
 
@@ -29,8 +25,10 @@ struct ScopedPriceListsView: View {
     @State private var confirmation: ProWorkConfirmation?
     @State private var errorMessage: String?
 
-    private let listRepository = PriceListRepository()
-    private let rowRepository = PriceListRowRepository()
+    // Repositories are taken from AppServices so that a new instance is not
+    // created every time the view struct is recreated.
+    private let listRepository = AppServices.shared.priceListRepository
+    private let rowRepository = AppServices.shared.priceListRowRepository
 
     init(
         ownerType: PriceListOwnerType,
@@ -53,6 +51,7 @@ struct ScopedPriceListsView: View {
             systemImage: "list.bullet.rectangle.portrait",
             width: 1000,
             height: 660,
+            contentScrollBehavior: .fixed,
             headerTrailing: {
                 HStack(spacing: 10) {      
                     Button {
@@ -79,11 +78,7 @@ struct ScopedPriceListsView: View {
             VStack(alignment: .leading, spacing: 12) {
                 infoBanner
 
-                if lists.isEmpty {
-                    emptyState
-                } else {
-                    listTable
-                }
+                listTable
             }
         } footer: {
             SettingsFormSingleFooter(onPrimary: { dismiss() }, title: settingsStore.localized("common.close", defaultValue: "Kapat"), systemImage: "xmark")
@@ -147,21 +142,18 @@ struct ScopedPriceListsView: View {
     }
 
     private var listTable: some View {
-        VStack(spacing: 0) {
-            tableHeader
-            Divider()
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(lists) { list in
-                        row(list)
-                        Divider()
-                    }
-                }
-            }
-        }
-        .background(.background)
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary, lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        ProWorkGrid(
+            items: lists,
+            header: { tableHeader },
+            emptyContent: {
+                ProWorkGridEmptyState(
+                    systemImage: "list.bullet.rectangle.portrait",
+                    title: emptyTitle,
+                    message: settingsStore.localized("priceLists.scoped.empty.message", defaultValue: "Bir liste oluşturup içine fiyat satırları ekleyebilirsiniz.")
+                )
+            },
+            row: { list in row(list) }
+        )
     }
 
     private var tableHeader: some View {
@@ -170,8 +162,8 @@ struct ScopedPriceListsView: View {
             Text(settingsStore.localized("priceLists.column.currency", defaultValue: "Para Birimi")).frame(width: 110, alignment: .leading)
             Text(settingsStore.localized("priceLists.column.default", defaultValue: "Varsayılan")).frame(width: 90, alignment: .center)
             Text(settingsStore.localized("priceLists.column.rows", defaultValue: "Satır")).frame(width: 60, alignment: .trailing)
-            Text(settingsStore.localized("priceLists.column.active", defaultValue: "Aktif")).frame(width: 60, alignment: .center)
-            Text("").frame(width: 90)
+            Text(settingsStore.localized("priceLists.column.active", defaultValue: "Aktif")).frame(width: 90, alignment: .leading)
+            Color.gridHeaderSpacer(width: 90)
         }
         .proWorkTextStyle(.caption)
         .foregroundStyle(.secondary)
@@ -210,9 +202,8 @@ struct ScopedPriceListsView: View {
                 .proWorkTextStyle(.callout)
                 .frame(width: 60, alignment: .trailing)
 
-            Image(systemName: list.isActive ? "checkmark.circle.fill" : "xmark.circle")
-                .foregroundStyle(list.isActive ? .green : .secondary)
-                .frame(width: 60, alignment: .center)
+            ProWorkActivityBadge(isActive: list.isActive)
+                .frame(width: 90, alignment: .leading)
 
             HStack(spacing: 6) {
                 Button {
@@ -246,20 +237,6 @@ struct ScopedPriceListsView: View {
         )
     }
 
-    private var emptyState: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "list.bullet.rectangle.portrait")
-                .proWorkFont(size: 28)
-                .foregroundStyle(.secondary)
-            Text(emptyTitle)
-                .proWorkTextStyle(.headline)
-            Text(settingsStore.localized("priceLists.scoped.empty.message", defaultValue: "Bir liste oluşturup içine fiyat satırları ekleyebilirsiniz."))
-                .proWorkTextStyle(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .proWorkFrame(minHeight: 220, maxWidth: .infinity)
-    }
-
     private var emptyTitle: String {
         switch ownerType {
         case .global:
@@ -286,25 +263,25 @@ struct ScopedPriceListsView: View {
 
     // MARK: - Actions
 
+    /// Routed through `PriceListsLoader`.
     private func load() {
         do {
-            lists = try listRepository.fetchOwned(
+            let result = try PriceListsLoader.load(
                 organizationId: BuiltInOrganizationId.default,
                 ownerType: ownerType,
-                ownerId: ownerId
+                ownerId: ownerId,
+                listRepository: listRepository,
+                rowRepository: rowRepository
             )
-            var bucket: [String: [PriceListRow]] = [:]
-            for list in lists {
-                bucket[list.id] = (try? rowRepository.fetchAll(priceListId: list.id)) ?? []
-            }
-            rowsByListId = bucket
+            lists = result.lists
+            rowsByListId = result.rowsByListId
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
     private func createList(_ list: PriceList) {
-        // currency varsayılanı parent'ın default'u olabilir
+        // Currency default may be the parent's default
         var copy = list
         if copy.currency.isEmpty {
             copy.currency = defaultCurrency
@@ -344,7 +321,7 @@ struct ScopedPriceListsView: View {
 
     private func delete(_ list: PriceList) {
         do {
-            try listRepository.softDelete(id: list.id)
+            try listRepository.softDelete(id: list.id, by: AppServices.currentUserId)
             load()
             onListsChanged?()
         } catch {

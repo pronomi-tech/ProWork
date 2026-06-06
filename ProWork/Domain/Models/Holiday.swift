@@ -1,26 +1,23 @@
-//
 //  Holiday.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 
-/// Tatil kapsamı.
+/// Holiday scope.
 enum HolidayScope: String, CaseIterable, Identifiable, Hashable {
-    case global   // organization seviyesi
-    case customer // belirli müşteriye özel istisna
+    case global   // organization-wide
+    case customer // customer-specific override
 
     var id: String { rawValue }
 }
 
-/// Resmi/yarı tatil günü. Yarım gün ise belirli saatten sonra tatildir.
+/// Public/half-day holiday. If half-day, the holiday begins after the given cutoff time.
 struct Holiday: Identifiable, Hashable {
     let id: String
     var scope: HolidayScope
     var customerId: String?
-    /// "yyyy-MM-dd" formatında tarih.
+    /// Date in "yyyy-MM-dd" format.
     var dateString: String
     var name: String
     var isHalfDay: Bool
@@ -56,7 +53,7 @@ struct Holiday: Identifiable, Hashable {
         rowVersion: Int = 0,
         syncStatus: SyncStatus = .local,
         lastSyncedAt: Date? = nil,
-        originDeviceId: String? = nil
+        originDeviceId: String? = DeviceIdentity.current
     ) {
         self.id = id
         self.scope = scope
@@ -80,10 +77,14 @@ struct Holiday: Identifiable, Hashable {
 }
 
 extension Holiday {
+    /// holiday strings are interpreted in the application's
+    /// canonical billing timezone (`AppCalendar.istanbul`) rather than a
+    /// hardcoded `Europe/Istanbul` literal. When the app gains support for
+    /// other tenants / locales this becomes a single line change.
     static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(identifier: "Europe/Istanbul")
+        f.timeZone = AppCalendar.istanbul.timeZone
         f.dateFormat = "yyyy-MM-dd"
         return f
     }()

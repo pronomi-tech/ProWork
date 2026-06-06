@@ -1,25 +1,37 @@
-//
 //  PriceListQuotePdfRenderer.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import AppKit
 import Foundation
+import os
 
-/// Fiyat listesi → Teklif PDF'i renderer'ı.
-/// Kapak sayfası + hizmet bölümleri + ticari şartlar + (opsiyonel) imza bloğu üretir.
-final class PriceListQuotePdfRenderer {
-    @MainActor
+/// Price list → Quote PDF renderer.
+/// Produces cover page + service sections + commercial terms + (optional) signature block.
+///
+/// Render off-main via `Task.detached`, mirroring the
+/// `BillingPdfRenderer` pattern. AppKit `NSGraphicsContext.current` is
+/// thread-local and the renderer builds its own context, so the document
+/// does not need MainActor isolation. The previous `@MainActor` pin
+/// blocked the UI for the full render duration on multi-page quotes.
+final class PriceListQuotePdfRenderer: Sendable {
     func render(bundle: PriceListQuoteBundle) async throws -> Data {
-        try PriceListQuotePdfDocument(bundle: bundle).makePDFData()
+        try await Task.detached(priority: .userInitiated) {
+            // Under default-MainActor isolation PriceListQuotePdfDocument
+            // gets implicit MainActor isolation; when called from
+            // Task.detached's nonisolated context the actor hop becomes
+            // async. We make it explicit with `await`.
+            try await PriceListQuotePdfDocument(bundle: bundle).makePDFData()
+        }.value
     }
 }
 
-@MainActor
-private struct PriceListQuotePdfDocument {
+private final class PriceListQuotePdfDocument {
     let bundle: PriceListQuoteBundle
+
+    /// Y6: single decode, downsampled logo. Previously, `NSImage(data:)`
+    /// was decoding the logo again on every header draw call.
+    let logoImage: NSImage?
 
     private let pageSize = CGSize(width: 595, height: 842)
     private let marginLeft: CGFloat = 48
@@ -31,31 +43,42 @@ private struct PriceListQuotePdfDocument {
 
     private var settings: PriceListQuoteTemplateSettings { bundle.settings }
 
+    init(bundle: PriceListQuoteBundle) {
+        self.bundle = bundle
+        self.logoImage = bundle.settings.showLogo
+            ? PDFLogoLoader.downsampledImage(from: bundle.companyProfile?.logoData)
+            : nil
+    }
+
     func makePDFData() throws -> Data {
         let mutableData = NSMutableData()
         var mediaBox = CGRect(origin: .zero, size: pageSize)
 
         guard let consumer = CGDataConsumer(data: mutableData),
               let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
-            throw CocoaError(.fileWriteUnknown)
+            // Shared error type for a user-friendly message.
+            throw BillingPdfRendererError.contextCreationFailed
         }
 
         let pages = paginate()
 
         for (index, page) in pages.enumerated() {
-            context.beginPDFPage(nil)
-            context.saveGState()
-            context.translateBy(x: 0, y: pageSize.height)
-            context.scaleBy(x: 1, y: -1)
+            // Y5/Y6: per-page autoreleasepool to keep peak memory down.
+            autoreleasepool {
+                context.beginPDFPage(nil)
+                context.saveGState()
+                context.translateBy(x: 0, y: pageSize.height)
+                context.scaleBy(x: 1, y: -1)
 
-            NSGraphicsContext.saveGraphicsState()
-            NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
 
-            draw(page: page, pageIndex: index, totalPages: pages.count)
+                draw(page: page, pageIndex: index, totalPages: pages.count)
 
-            NSGraphicsContext.restoreGraphicsState()
-            context.restoreGState()
-            context.endPDFPage()
+                NSGraphicsContext.restoreGraphicsState()
+                context.restoreGState()
+                context.endPDFPage()
+            }
         }
 
         context.closePDF()
@@ -85,7 +108,7 @@ private struct PriceListQuotePdfDocument {
             remaining -= needed
         }
 
-        // Sayfa 1 (veya kapak sonrası): başlık + alıcı blok (kapakta yoksa)
+        // Page 1 (or post-cover): title + recipient block (if missing from cover)
         if !settings.showCoverPage {
             push(.documentTitle)
         }
@@ -108,6 +131,16 @@ private struct PriceListQuotePdfDocument {
             }
         }
 
+        // Terms block renders as a single atomic card. When
+        // height exceeds the available page space, pagination pushes
+        // the whole block to the next page; if it exceeds an entire
+        // page (rare today, plausible with a long custom-terms list)
+        // the bottom content is silently clipped because the
+        // single-block layout can't split. Splitting would require
+        // breaking the card into a `RenderBlock.termsRow(item)`
+        // sequence with per-item heights — deferred until a real
+        // overflow shows up. Until then, oversized terms log a
+        // warning at paginate time so the gap is debuggable.
         push(.terms)
 
         if settings.showSignatureBlock {
@@ -143,7 +176,14 @@ private struct PriceListQuotePdfDocument {
         case .sectionRow(let line):
             return rowHeight(for: line)
         case .terms:
-            return termsBlockHeight
+            let height = termsBlockHeight
+            let availableHeight = contentPageAvailableHeight
+            if height > availableHeight {
+                ProWorkLog.export.warning(
+                    "PriceListQuotePdfRenderer: terms block height \(height, privacy: .public)pt exceeds available page \(availableHeight, privacy: .public)pt; bottom content will be clipped because the block is rendered atomically."
+                )
+            }
+            return height
         case .signature:
             return 96
         }
@@ -168,8 +208,8 @@ private struct PriceListQuotePdfDocument {
         return max(senderHeight, recipientHeight)
     }
 
-    /// Bir "Kimden / Kime" kartının içeriğine göre toplam yüksekliği — başlık + isim satırı +
-    /// her bir gövde satırının ölçülen yüksekliği + alt/üst padding.
+    /// Total height of a "From / To" card based on its content — title + name line +
+    /// the measured height of each body line + top/bottom padding.
     private func cardContentHeight(for rows: [(String, String)], cardWidth: CGFloat) -> CGFloat {
         guard !rows.isEmpty else { return 64 }
 
@@ -184,11 +224,11 @@ private struct PriceListQuotePdfDocument {
             bodyHeight += cardBodyRowHeight(row: row, cardWidth: cardWidth)
         }
 
-        // 12 üst + 12 başlık + 8 ara + name + 6 ara + body + 12 alt padding
+        // 12 top + 12 title + 8 gap + name + 6 gap + body + 12 bottom padding
         return 12 + 12 + 8 + nameHeight + 6 + bodyHeight + 12
     }
 
-    /// Tek bir gövde satırının ölçülen yüksekliği + alt boşluk.
+    /// Measured height of a single body line + bottom spacing.
     private func cardBodyRowHeight(row: (String, String), cardWidth: CGFloat) -> CGFloat {
         let label = row.0
         let value = row.1
@@ -213,14 +253,14 @@ private struct PriceListQuotePdfDocument {
         let greetingHeight: CGFloat = 20
         let introToClosingGap: CGFloat = 16
 
-        // Closing satırı + (varsa imza bloğu + kaşe payı) toplam yüksekliği.
-        var signatureBlockHeight: CGFloat = 14 // closing satırı
+        // Total height of the closing line + (if present) the signature block + stamp allowance.
+        var signatureBlockHeight: CGFloat = 14 // closing line
         if !settings.signerName.isEmpty {
-            signatureBlockHeight += 18 + 14 // boşluk + name
+            signatureBlockHeight += 18 + 14 // gap + name
             if !settings.signerTitle.isEmpty {
                 signatureBlockHeight += 14 // title
             }
-            signatureBlockHeight += 32 // kaşe payı
+            signatureBlockHeight += 32 // stamp allowance
         } else {
             signatureBlockHeight += 12
         }
@@ -302,17 +342,15 @@ private struct PriceListQuotePdfDocument {
     // MARK: - Cover
 
     private func drawCoverPage() {
-        // Üst accent bant
+        // Top accent band
         let bandRect = CGRect(x: 0, y: 0, width: pageSize.width, height: 130)
         accentColor.setFill()
         bandRect.fill()
 
-        // Logo veya şirket adı (band içinde)
-        if settings.showLogo,
-           let data = bundle.companyProfile?.logoData,
-           let image = NSImage(data: data) {
+        // Logo or company name (inside the band)
+        if let image = logoImage {
             let logoFrame = CGRect(x: marginLeft, y: 38, width: 200, height: 56)
-            // Beyaz arka plan kartı
+            // White background card
             drawRoundedRect(logoFrame.insetBy(dx: -8, dy: -8), fill: .white, stroke: .clear, radius: 12)
             image.draw(in: fitRect(sourceSize: image.size, inside: logoFrame))
         } else {
@@ -324,7 +362,7 @@ private struct PriceListQuotePdfDocument {
             )
         }
 
-        // Sağ üstte küçük şirket meta
+        // Small company meta in the top-right
         if let companyMeta = coverCompanyMetaText {
             _ = drawText(
                 companyMeta,
@@ -340,7 +378,7 @@ private struct PriceListQuotePdfDocument {
             )
         }
 
-        // Kapak içeriği — orta
+        // Cover content — middle
         var y: CGFloat = 196
 
         // Belge etiketi (caps)
@@ -352,7 +390,7 @@ private struct PriceListQuotePdfDocument {
         )
         y += 26
 
-        // Başlık (büyük)
+        // Title (large)
         let titleHeight = measureText(bundle.titleText, width: contentWidth, font: font(28, weight: .bold)).height
         _ = drawText(
             bundle.titleText,
@@ -375,14 +413,14 @@ private struct PriceListQuotePdfDocument {
         )
         y += 50
 
-        // Kapak From/To kartları
+        // Cover From/To cards
         if settings.showFromToBlock {
             y = drawFromTo(at: y)
         } else {
             y += sectionGap
         }
 
-        // Özet şeridi (kapakta da)
+        // Summary strip (also on the cover)
         if settings.showFinancialSummaryBar {
             _ = drawSummaryBar(at: y)
         }
@@ -391,11 +429,9 @@ private struct PriceListQuotePdfDocument {
     // MARK: - Header / Footer
 
     private func drawHeader(at y: CGFloat, pageIndex: Int) -> CGFloat {
-        // Kapak varsa kapak sonrası sayfalarda sade bir header
+        // If there's a cover, post-cover pages use a plain header
         let logoFrame = CGRect(x: marginLeft, y: y, width: 180, height: 44)
-        if settings.showLogo,
-           let data = bundle.companyProfile?.logoData,
-           let image = NSImage(data: data) {
+        if let image = logoImage {
             image.draw(in: fitRect(sourceSize: image.size, inside: logoFrame))
         } else {
             _ = drawText(
@@ -414,7 +450,7 @@ private struct PriceListQuotePdfDocument {
             }
         }
 
-        // Sağ üstte teklif no & tarih
+        // Quote number & date in the top-right
         let metaText = String(
             format: "%@\n%@",
             String(format: localized("quote.numberBadge", defaultValue: "Teklif No: %@"), bundle.quoteNumber),
@@ -461,8 +497,9 @@ private struct PriceListQuotePdfDocument {
         )
     }
 
-    /// Footer ortasındaki satır — placeholder'ları doldurur ve sadece dolu olanları "•" ile birleştirir.
-    /// Tüm değerler boşsa boş string döner (boş "•" işaretleri görünmez).
+    /// Middle line of the footer — fills the placeholders and joins only
+    /// the non-empty ones with "•". Returns an empty string when every
+    /// value is empty (no orphan "•" markers appear).
     private var resolvedFooterText: String {
         let parts: [String?] = [
             clean(bundle.companyProfile?.address),
@@ -470,13 +507,14 @@ private struct PriceListQuotePdfDocument {
             clean(bundle.companyProfile?.email),
             clean(bundle.companyProfile?.website)
         ]
-        // Şablonda placeholder kalıbı varsa onu kullanıcı kontrolünde tutuyoruz; yine de boş kombinasyonlar
-        // için sade fallback üretiyoruz.
+        // If the template carries placeholder markers we keep them under
+        // user control; we still generate a plain fallback for empty
+        // combinations.
         let template = settings.footerCenterLine
         let substituted = substituteTemplateVariables(template)
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // " • • " gibi yalnızca ayırıcılardan oluşan içerikleri filtrele
+        // Filter content that consists only of separators like " • • "
         let stripped = substituted
             .replacingOccurrences(of: "•", with: "")
             .replacingOccurrences(of: " ", with: "")
@@ -534,6 +572,18 @@ private struct PriceListQuotePdfDocument {
         let rect = CGRect(x: marginLeft, y: y, width: contentWidth, height: height)
         drawRoundedRect(rect, fill: accentColor, stroke: .clear, radius: 14)
 
+        // Text colour adapts to the accent's luminance. With a
+        // pale accent (e.g. "#F5F0E5"), white-on-accent rendered as
+        // white-on-white and the summary bar lost its labels entirely.
+        // Standard sRGB relative luminance threshold of 0.6 picks dark
+        // text for light fills and white for dark ones.
+        let textColor: NSColor = Self.relativeLuminance(of: accentColor) > 0.6
+            ? NSColor.black.withAlphaComponent(0.86)
+            : .white
+        let separatorColor: NSColor = (textColor == .white)
+            ? NSColor.white.withAlphaComponent(0.18)
+            : NSColor.black.withAlphaComponent(0.12)
+
         let columns: [(String, String)] = [
             (localized("quote.summary.issueDate", defaultValue: "Düzenleme Tarihi"), displayDate(bundle.issueDate)),
             (localized("quote.summary.validity", defaultValue: "Geçerlilik"), validityText),
@@ -551,7 +601,7 @@ private struct PriceListQuotePdfDocument {
             )
 
             if index > 0 {
-                NSColor.white.withAlphaComponent(0.18).setStroke()
+                separatorColor.setStroke()
                 let path = NSBezierPath()
                 path.lineWidth = 1
                 path.move(to: CGPoint(x: columnRect.minX, y: columnRect.minY + 12))
@@ -563,13 +613,13 @@ private struct PriceListQuotePdfDocument {
                 column.0,
                 at: CGRect(x: columnRect.minX + 14, y: columnRect.minY + 10, width: columnRect.width - 28, height: 12),
                 font: font(7.6),
-                color: .white.withAlphaComponent(0.78)
+                color: textColor.withAlphaComponent(0.78)
             )
             _ = drawText(
                 column.1,
                 at: CGRect(x: columnRect.minX + 14, y: columnRect.minY + 26, width: columnRect.width - 28, height: 22),
                 font: font(11, weight: .bold),
-                color: .white
+                color: textColor
             )
         }
 
@@ -604,7 +654,7 @@ private struct PriceListQuotePdfDocument {
         )
         cursor += introHeight + 16
 
-        // Closing ("Saygılarımızla") — orijinal konumunda kalsın (sol, sayfa eninde).
+        // Closing ("Best regards") — stays in its original position (left, full page width).
         let closing = clean(settings.closing) ?? localized("quote.closing.default", defaultValue: "Saygılarımızla")
         _ = drawText(
             closing,
@@ -615,10 +665,10 @@ private struct PriceListQuotePdfDocument {
         cursor += 14
 
         if !settings.signerName.isEmpty {
-            // Closing ile imza bloğu arasında belirgin boşluk.
+            // Clear spacing between the closing and the signature block.
             cursor += 18
 
-            // İmza bloğu sağda hizalı; sağ kenardan sadece ufak bir miktar içeride.
+            // Signature block aligned right; sits just slightly in from the right edge.
             let signatureBlockWidth: CGFloat = 220
             let signatureRightInset: CGFloat = 30
             let signatureBlockX = pageSize.width - marginRight - signatureBlockWidth - signatureRightInset
@@ -641,7 +691,7 @@ private struct PriceListQuotePdfDocument {
                 )
                 cursor += 14
             }
-            // Ünvandan sonra hizmet listelerine kadar kaşe/imza pay alanı.
+            // Stamp/signature allowance area between the title and the service lists.
             cursor += 32
         } else {
             cursor += 12
@@ -651,7 +701,7 @@ private struct PriceListQuotePdfDocument {
     }
 
     private func drawSectionHeader(_ section: PriceListQuoteBundle.Section, at y: CGFloat) -> CGFloat {
-        // Sol accent dikey çubuk
+        // Left accent vertical bar
         let barRect = CGRect(x: marginLeft, y: y + 2, width: 3, height: 18)
         accentColor.setFill()
         barRect.fill()
@@ -864,7 +914,7 @@ private struct PriceListQuotePdfDocument {
                     color: secondaryTextColor
                 )
             }
-            // İmza çizgisi
+            // Signature line
             NSColor(calibratedWhite: 0.75, alpha: 1).setStroke()
             let line = NSBezierPath()
             line.lineWidth = 0.6
@@ -1036,27 +1086,75 @@ private struct PriceListQuotePdfDocument {
         return parts.isEmpty ? nil : parts.joined(separator: "\n")
     }
 
+    /// Previously called `replacingOccurrences` 8 times in a
+    /// row, building intermediate strings for each pass. A single regex
+    /// pass with a closure replacement substitutes every placeholder in
+    /// one traversal. Variables not in the table are left untouched
+    /// (matches the previous behaviour for unknown `{…}` tokens).
     private func substituteTemplateVariables(_ template: String) -> String {
         let phone = clean(bundle.companyProfile?.phone) ?? ""
         let email = clean(bundle.companyProfile?.email) ?? ""
         let address = clean(bundle.companyProfile?.address) ?? ""
         let website = clean(bundle.companyProfile?.website) ?? ""
 
-        return template
-            .replacingOccurrences(of: "{validityDays}", with: "\(settings.normalizedValidityDays)")
-            .replacingOccurrences(of: "{validUntil}", with: displayDate(bundle.validUntil))
-            .replacingOccurrences(of: "{quoteNumber}", with: bundle.quoteNumber)
-            .replacingOccurrences(of: "{customerName}", with: bundle.recipientName)
-            .replacingOccurrences(of: "{phone}", with: phone)
-            .replacingOccurrences(of: "{email}", with: email)
-            .replacingOccurrences(of: "{address}", with: address)
-            .replacingOccurrences(of: "{website}", with: website)
+        let substitutions: [String: String] = [
+            "validityDays": "\(settings.normalizedValidityDays)",
+            "validUntil": displayDate(bundle.validUntil),
+            "quoteNumber": bundle.quoteNumber,
+            "customerName": bundle.recipientName,
+            "phone": phone,
+            "email": email,
+            "address": address,
+            "website": website
+        ]
+
+        guard let regex = try? NSRegularExpression(pattern: #"\{([A-Za-z0-9_]+)\}"#) else {
+            return template
+        }
+        let nsTemplate = template as NSString
+        let fullRange = NSRange(location: 0, length: nsTemplate.length)
+        let matches = regex.matches(in: template, options: [], range: fullRange)
+        guard !matches.isEmpty else { return template }
+
+        var result = String()
+        result.reserveCapacity(template.count)
+        var cursor = 0
+        for match in matches {
+            let matchRange = match.range
+            // Append everything before this placeholder.
+            if matchRange.location > cursor {
+                result.append(nsTemplate.substring(with: NSRange(
+                    location: cursor,
+                    length: matchRange.location - cursor
+                )))
+            }
+            let nameRange = match.range(at: 1)
+            let name = nsTemplate.substring(with: nameRange)
+            if let replacement = substitutions[name] {
+                result.append(replacement)
+            } else {
+                result.append(nsTemplate.substring(with: matchRange))
+            }
+            cursor = matchRange.location + matchRange.length
+        }
+        if cursor < nsTemplate.length {
+            result.append(nsTemplate.substring(from: cursor))
+        }
+        return result
     }
 
+    /// Cached via `ProWorkFormatters.cachedDateFormatter` so a
+    /// multi-page quote shares one formatter instance instead of
+    /// allocating a fresh one on every header + signature + cover draw
+    /// (4-5 per render call).
     private func displayDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: ProWorkLocalizer.shared.language.localeIdentifier)
-        formatter.dateFormat = "dd.MM.yyyy"
+        let identifier = ProWorkLocalizer.shared.language.localeIdentifier.isEmpty
+            ? Locale.current.identifier
+            : ProWorkLocalizer.shared.language.localeIdentifier
+        let formatter = ProWorkFormatters.cachedDateFormatter(
+            localeIdentifier: identifier,
+            dateFormat: "dd.MM.yyyy"
+        )
         return formatter.string(from: date)
     }
 
@@ -1089,21 +1187,33 @@ private struct PriceListQuotePdfDocument {
     private var footerMutedColor: NSColor { NSColor(calibratedWhite: 0.62, alpha: 1) }
 
     private func nsColor(from hex: String) -> NSColor? {
-        let cleaned = hex.replacingOccurrences(of: "#", with: "")
-        guard cleaned.count == 6, let value = UInt64(cleaned, radix: 16) else { return nil }
-        return NSColor(
-            calibratedRed: CGFloat((value & 0xFF0000) >> 16) / 255,
-            green: CGFloat((value & 0x00FF00) >> 8) / 255,
-            blue: CGFloat(value & 0x0000FF) / 255,
-            alpha: 1
-        )
+        // Shared with BillingPdfDocument.
+        PDFDrawingPrimitives.nsColor(fromHex: hex)
     }
 
     private func font(_ size: CGFloat, weight: NSFont.Weight = .regular) -> NSFont {
         NSFont.systemFont(ofSize: size * settings.normalizedFontScale, weight: weight)
     }
 
+    /// SRGB relative luminance per WCAG 2.x. Used by `drawSummaryBar` to
+    /// pick a readable text colour against the configurable accent
+    /// .
+    fileprivate static func relativeLuminance(of color: NSColor) -> CGFloat {
+        let rgb = color.usingColorSpace(.sRGB) ?? color
+        let r = component(rgb.redComponent)
+        let g = component(rgb.greenComponent)
+        let b = component(rgb.blueComponent)
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    }
+
+    private static func component(_ raw: CGFloat) -> CGFloat {
+        raw <= 0.03928 ? raw / 12.92 : pow((raw + 0.055) / 1.055, 2.4)
+    }
+
     // MARK: - Drawing primitives
+
+    // Drawing primitives delegated to PDFDrawingPrimitives
+    // so a fix or tuning lives in one file.
 
     @discardableResult
     private func drawText(
@@ -1113,51 +1223,38 @@ private struct PriceListQuotePdfDocument {
         color: NSColor,
         alignment: NSTextAlignment = .left
     ) -> CGFloat {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = alignment
-        paragraph.lineBreakMode = .byWordWrapping
-
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: color,
-            .paragraphStyle: paragraph
-        ]
-        let attributed = NSAttributedString(string: text, attributes: attributes)
-        let measured = attributed.boundingRect(
-            with: NSSize(width: rect.width, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading]
-        )
-        let drawRect = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: ceil(measured.height))
-        attributed.draw(with: drawRect, options: [.usesLineFragmentOrigin, .usesFontLeading])
-        return ceil(measured.height)
+        PDFDrawingPrimitives.drawText(text, at: rect, font: font, color: color, alignment: alignment)
     }
 
-    private func measureText(_ text: String, width: CGFloat, font: NSFont) -> CGSize {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineBreakMode = .byWordWrapping
+    /// Pagination + drawing measure the same (text, width, font)
+    /// triple multiple times per page; memoize on the document instance
+    /// to halve the CoreText boundingRect cost on long quotes. Cache key
+    /// follows the BillingPdfDocument MeasureCacheKey layout.
+    private struct MeasureCacheKey: Hashable {
+        let text: String
+        let width: CGFloat
+        let fontName: String
+        let fontSize: CGFloat
+    }
+    private var measureCache: [MeasureCacheKey: CGSize] = [:]
 
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .paragraphStyle: paragraph
-        ]
-        let rect = NSAttributedString(string: text, attributes: attributes).boundingRect(
-            with: NSSize(width: width, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading]
+    private func measureText(_ text: String, width: CGFloat, font: NSFont) -> CGSize {
+        let key = MeasureCacheKey(
+            text: text,
+            width: width,
+            fontName: font.fontName,
+            fontSize: font.pointSize
         )
-        return CGSize(width: ceil(rect.width), height: ceil(rect.height))
+        if let cached = measureCache[key] {
+            return cached
+        }
+        let size = PDFDrawingPrimitives.measureText(text, width: width, font: font)
+        measureCache[key] = size
+        return size
     }
 
     private func drawRoundedRect(_ rect: CGRect, fill: NSColor, stroke: NSColor, radius: CGFloat) {
-        let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
-        if fill != .clear {
-            fill.setFill()
-            path.fill()
-        }
-        if stroke != .clear {
-            stroke.setStroke()
-            path.lineWidth = 1
-            path.stroke()
-        }
+        PDFDrawingPrimitives.drawRoundedRect(rect, fill: fill, stroke: stroke, radius: radius)
     }
 
     private func drawHorizontalSeparator(y: CGFloat, color: NSColor = NSColor(calibratedWhite: 0.88, alpha: 1)) {

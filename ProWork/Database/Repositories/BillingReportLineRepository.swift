@@ -1,9 +1,6 @@
-//
 //  BillingReportLineRepository.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 import SQLite3
@@ -30,73 +27,79 @@ final class BillingReportLineRepository {
 
         return try database.query(
             sql,
-            map: { Self.makeLine(from: $0) },
+            map: { try Self.makeLine(from: $0) },
             bind: { $0.bindText(runId, at: 1) }
         )
     }
 
+    /// Single-row insert; prefer `executeBatch` (Y2) for the bulk path.
     func insert(_ line: BillingReportLine) throws {
-        let sql = """
-        INSERT INTO billing_report_lines (
-            id, organizationId, runId, sessionId,
-            todoId, todoTitle, projectId, projectName,
-            customerId, customerName, categoryId, categoryName,
-            serviceType, timeType, segmentIndex,
-            actualSeconds, billableMinutes,
-            unitPriceMinor, fixedFeeMinor, amountMinor, currency,
-            vatRate, vatMinor, totalMinor, isVatExempt,
-            isBillable, isManual, isFixedFee,
-            startedAt, endedAt, note, sortOrder,
-            createdByUserId, updatedByUserId,
-            createdAt, updatedAt, deletedAt, rowVersion,
-            syncStatus, lastSyncedAt, originDeviceId
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-        """
-
-        try database.execute(sql) { stmt in
-            stmt.bindText(line.id, at: 1)
-            stmt.bindText(line.organizationId, at: 2)
-            stmt.bindText(line.runId, at: 3)
-            stmt.bindText(line.sessionId, at: 4)
-            stmt.bindText(line.todoId, at: 5)
-            stmt.bindText(line.todoTitle, at: 6)
-            stmt.bindText(line.projectId, at: 7)
-            stmt.bindText(line.projectName, at: 8)
-            stmt.bindText(line.customerId, at: 9)
-            stmt.bindText(line.customerName, at: 10)
-            stmt.bindText(line.categoryId, at: 11)
-            stmt.bindText(line.categoryName, at: 12)
-            stmt.bindText(line.serviceType.rawValue, at: 13)
-            stmt.bindText(line.timeType.rawValue, at: 14)
-            stmt.bindInt(line.segmentIndex, at: 15)
-            stmt.bindInt(line.actualSeconds, at: 16)
-            stmt.bindInt(line.billableMinutes, at: 17)
-            stmt.bindInt(line.unitPriceMinor, at: 18)
-            stmt.bindOptionalInt(line.fixedFeeMinor, at: 19)
-            stmt.bindInt(line.amountMinor, at: 20)
-            stmt.bindText(line.currency, at: 21)
-            stmt.bindText(NSDecimalNumber(decimal: line.vatRate).stringValue, at: 22)
-            stmt.bindInt(line.vatMinor, at: 23)
-            stmt.bindInt(line.totalMinor, at: 24)
-            stmt.bindInt(line.isVatExempt ? 1 : 0, at: 25)
-            stmt.bindInt(line.isBillable ? 1 : 0, at: 26)
-            stmt.bindInt(line.isManual ? 1 : 0, at: 27)
-            stmt.bindInt(line.isFixedFee ? 1 : 0, at: 28)
-            stmt.bindText(line.startedAt.map(DateFormatter.proWorkSQLite.string(from:)), at: 29)
-            stmt.bindText(line.endedAt.map(DateFormatter.proWorkSQLite.string(from:)), at: 30)
-            stmt.bindText(line.note, at: 31)
-            stmt.bindInt(line.sortOrder, at: 32)
-            stmt.bindText(line.createdByUserId, at: 33)
-            stmt.bindText(line.updatedByUserId, at: 34)
-            stmt.bindText(DateFormatter.proWorkSQLite.string(from: line.createdAt), at: 35)
-            stmt.bindText(DateFormatter.proWorkSQLite.string(from: line.updatedAt), at: 36)
-            stmt.bindText(line.deletedAt.map(DateFormatter.proWorkSQLite.string(from:)), at: 37)
-            stmt.bindInt(line.rowVersion, at: 38)
-            stmt.bindText(line.syncStatus.rawValue, at: 39)
-            stmt.bindText(line.lastSyncedAt.map(DateFormatter.proWorkSQLite.string(from:)), at: 40)
-            stmt.bindText(line.originDeviceId, at: 41)
+        try database.execute(Self.insertSQL) { stmt in
+            Self.bindInsert(stmt, line)
         }
+    }
+
+    private static let insertSQL = """
+    INSERT INTO billing_report_lines (
+        id, organizationId, runId, sessionId,
+        todoId, todoTitle, projectId, projectName,
+        customerId, customerName, categoryId, categoryName,
+        serviceType, timeType, segmentIndex,
+        actualSeconds, billableMinutes,
+        unitPriceMinor, fixedFeeMinor, amountMinor, currency,
+        vatRate, vatMinor, totalMinor, isVatExempt,
+        isBillable, isManual, isFixedFee,
+        startedAt, endedAt, note, sortOrder,
+        createdByUserId, updatedByUserId,
+        createdAt, updatedAt, deletedAt, rowVersion,
+        syncStatus, lastSyncedAt, originDeviceId
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    """
+
+    /// Single bind site — `insert` and `executeBatch` share the same code path.
+    private static func bindInsert(_ stmt: SQLiteStatement, _ line: BillingReportLine) {
+        stmt.bindText(line.id, at: 1)
+        stmt.bindText(line.organizationId, at: 2)
+        stmt.bindText(line.runId, at: 3)
+        stmt.bindText(line.sessionId, at: 4)
+        stmt.bindText(line.todoId, at: 5)
+        stmt.bindText(line.todoTitle, at: 6)
+        stmt.bindText(line.projectId, at: 7)
+        stmt.bindText(line.projectName, at: 8)
+        stmt.bindText(line.customerId, at: 9)
+        stmt.bindText(line.customerName, at: 10)
+        stmt.bindText(line.categoryId, at: 11)
+        stmt.bindText(line.categoryName, at: 12)
+        stmt.bindText(line.serviceType.rawValue, at: 13)
+        stmt.bindText(line.timeType.rawValue, at: 14)
+        stmt.bindInt(line.segmentIndex, at: 15)
+        stmt.bindInt(line.actualSeconds, at: 16)
+        stmt.bindInt(line.billableMinutes, at: 17)
+        stmt.bindInt(line.unitPriceMinor, at: 18)
+        stmt.bindOptionalInt(line.fixedFeeMinor, at: 19)
+        stmt.bindInt(line.amountMinor, at: 20)
+        stmt.bindText(line.currency, at: 21)
+        stmt.bindText(DecimalPersistence.string(line.vatRate), at: 22)
+        stmt.bindInt(line.vatMinor, at: 23)
+        stmt.bindInt(line.totalMinor, at: 24)
+        stmt.bindInt(line.isVatExempt ? 1 : 0, at: 25)
+        stmt.bindInt(line.isBillable ? 1 : 0, at: 26)
+        stmt.bindInt(line.isManual ? 1 : 0, at: 27)
+        stmt.bindInt(line.isFixedFee ? 1 : 0, at: 28)
+        stmt.bindText(line.startedAt.map(DateFormatter.proWorkSQLite.string(from:)), at: 29)
+        stmt.bindText(line.endedAt.map(DateFormatter.proWorkSQLite.string(from:)), at: 30)
+        stmt.bindText(line.note, at: 31)
+        stmt.bindInt(line.sortOrder, at: 32)
+        stmt.bindText(line.createdByUserId, at: 33)
+        stmt.bindText(line.updatedByUserId, at: 34)
+        stmt.bindText(DateFormatter.proWorkSQLite.string(from: line.createdAt), at: 35)
+        stmt.bindText(DateFormatter.proWorkSQLite.string(from: line.updatedAt), at: 36)
+        stmt.bindText(line.deletedAt.map(DateFormatter.proWorkSQLite.string(from:)), at: 37)
+        stmt.bindInt(line.rowVersion, at: 38)
+        stmt.bindText(line.syncStatus.rawValue, at: 39)
+        stmt.bindText(line.lastSyncedAt.map(DateFormatter.proWorkSQLite.string(from:)), at: 40)
+        stmt.bindText(line.originDeviceId, at: 41)
     }
 
     func deleteAll(runId: String) throws {
@@ -110,80 +113,54 @@ final class BillingReportLineRepository {
         }
     }
 
-    /// Verilen run için tüm satırları siler ve yenilerini ekler (taslak yenileme).
+    /// Deletes every row for the given run and inserts the new ones (draft refresh).
+    /// nested-friendly savepoint.
+    /// single prepare → N reset+rebind. Eliminates the per-row
+    /// prepare/finalize cost on drafts with thousands of rows.
+    /// eder.
     func replace(runId: String, lines: [BillingReportLine]) throws {
-        try database.execute("BEGIN TRANSACTION;")
-        do {
+        try database.inTransaction {
             try deleteAll(runId: runId)
-            for line in lines {
-                try insert(line)
+            guard !lines.isEmpty else { return }
+            try database.executeBatch(Self.insertSQL, items: lines) { stmt, line in
+                Self.bindInsert(stmt, line)
             }
-            try database.execute("COMMIT;")
-        } catch {
-            try? database.execute("ROLLBACK;")
-            throw error
         }
     }
 
+    /// Single SQL covering both "all runs" and "exclude one run" cases via
+    /// a nullable-bind predicate (`? IS NULL OR r.id != ?`). The two
+    /// near-duplicate queries used to drift independently when filters
+    /// changed; the consolidated form is bound twice with the same
+    /// `excludingRunId` (NULL when not filtering).
     func fetchSelectionAssignments(
         organizationId: String,
         customerId: String,
         excludingRunId: String? = nil
     ) throws -> [BillingLineSelectionAssignment] {
-        let sql: String
-        let bind: (SQLiteStatement) -> Void
-
-        if let excludingRunId {
-            sql = """
-            SELECT
-                l.sessionId,
-                l.todoId,
-                l.segmentIndex,
-                l.startedAt,
-                r.id,
-                COALESCE(r.title, r.invoiceNumber, r.id)
-            FROM billing_report_lines l
-            INNER JOIN billing_report_runs r ON r.id = l.runId
-            WHERE l.organizationId = ?
-              AND l.customerId = ?
-              AND l.deletedAt IS NULL
-              AND r.deletedAt IS NULL
-              AND r.status != 'cancelled'
-              AND r.id != ?;
-            """
-            bind = { statement in
-                statement.bindText(organizationId, at: 1)
-                statement.bindText(customerId, at: 2)
-                statement.bindText(excludingRunId, at: 3)
-            }
-        } else {
-            sql = """
-            SELECT
-                l.sessionId,
-                l.todoId,
-                l.segmentIndex,
-                l.startedAt,
-                r.id,
-                COALESCE(r.title, r.invoiceNumber, r.id)
-            FROM billing_report_lines l
-            INNER JOIN billing_report_runs r ON r.id = l.runId
-            WHERE l.organizationId = ?
-              AND l.customerId = ?
-              AND l.deletedAt IS NULL
-              AND r.deletedAt IS NULL
-              AND r.status != 'cancelled';
-            """
-            bind = { statement in
-                statement.bindText(organizationId, at: 1)
-                statement.bindText(customerId, at: 2)
-            }
-        }
+        let sql = """
+        SELECT
+            l.sessionId,
+            l.todoId,
+            l.segmentIndex,
+            l.startedAt,
+            r.id,
+            COALESCE(r.title, r.invoiceNumber, r.id)
+        FROM billing_report_lines l
+        INNER JOIN billing_report_runs r ON r.id = l.runId
+        WHERE l.organizationId = ?
+          AND l.customerId = ?
+          AND l.deletedAt IS NULL
+          AND r.deletedAt IS NULL
+          AND r.status != 'cancelled'
+          AND (? IS NULL OR r.id != ?);
+        """
 
         return try database.query(sql, map: { statement in
             let sessionId = statement.text(at: 0)
             let todoId = statement.text(at: 1) ?? ""
             let segmentIndex = statement.int(at: 2)
-            let startedAt = statement.text(at: 3).flatMap(DateFormatter.proWorkSQLite.date(from:))
+            let startedAt = SQLitePersistedDate.parse(statement.text(at: 3))
             return BillingLineSelectionAssignment(
                 runId: statement.text(at: 4) ?? "",
                 runLabel: statement.text(at: 5) ?? "",
@@ -194,7 +171,12 @@ final class BillingReportLineRepository {
                     startedAt: startedAt
                 )
             )
-        }, bind: bind)
+        }, bind: { statement in
+            statement.bindText(organizationId, at: 1)
+            statement.bindText(customerId, at: 2)
+            statement.bindText(excludingRunId, at: 3)
+            statement.bindText(excludingRunId, at: 4)
+        })
     }
 
     // MARK: - Helpers
@@ -216,10 +198,13 @@ final class BillingReportLineRepository {
     FROM billing_report_lines
     """
 
-    private static func makeLine(from statement: SQLiteStatement) -> BillingReportLine {
-        let vatRate = Decimal(string: statement.text(at: 20) ?? "0") ?? 0
+    /// Business fields 0..30 (31 columns), metadata 31..40 (10 columns).
+    /// Metadata block now goes through the centralised `readMetadata`
+    /// helper so throw-on-corruption applies here too.
+    private static func makeLine(from statement: SQLiteStatement) throws -> BillingReportLine {
+        let vatRate = DecimalPersistence.decimal(from: statement.text(at: 20) ?? "0") ?? 0
+        let meta = try statement.readMetadata(startingAt: 31)
 
-        // Iş alanları 0..30 (31 kolon), metadata 31..40 (10 kolon)
         return BillingReportLine(
             id: statement.text(at: 0) ?? UUID().uuidString,
             runId: statement.text(at: 1) ?? "",
@@ -248,20 +233,20 @@ final class BillingReportLineRepository {
             isBillable: statement.int(at: 24) == 1,
             isManual: statement.int(at: 25) == 1,
             isFixedFee: statement.int(at: 26) == 1,
-            startedAt: statement.text(at: 27).flatMap(DateFormatter.proWorkSQLite.date(from:)),
-            endedAt: statement.text(at: 28).flatMap(DateFormatter.proWorkSQLite.date(from:)),
+            startedAt: SQLitePersistedDate.parse(statement.text(at: 27)),
+            endedAt: SQLitePersistedDate.parse(statement.text(at: 28)),
             note: statement.text(at: 29),
             sortOrder: statement.int(at: 30),
-            organizationId: statement.text(at: 31) ?? BuiltInOrganizationId.default,
-            createdByUserId: statement.text(at: 32),
-            updatedByUserId: statement.text(at: 33),
-            createdAt: DateFormatter.proWorkSQLite.date(from: statement.text(at: 34) ?? "") ?? Date(),
-            updatedAt: DateFormatter.proWorkSQLite.date(from: statement.text(at: 35) ?? "") ?? Date(),
-            deletedAt: statement.text(at: 36).flatMap(DateFormatter.proWorkSQLite.date(from:)),
-            rowVersion: statement.int(at: 37),
-            syncStatus: SyncStatus(rawValue: statement.text(at: 38) ?? "") ?? .local,
-            lastSyncedAt: statement.text(at: 39).flatMap(DateFormatter.proWorkSQLite.date(from:)),
-            originDeviceId: statement.text(at: 40)
+            organizationId: meta.organizationId,
+            createdByUserId: meta.createdByUserId,
+            updatedByUserId: meta.updatedByUserId,
+            createdAt: meta.createdAt,
+            updatedAt: meta.updatedAt,
+            deletedAt: meta.deletedAt,
+            rowVersion: meta.rowVersion,
+            syncStatus: meta.syncStatus,
+            lastSyncedAt: meta.lastSyncedAt,
+            originDeviceId: meta.originDeviceId
         )
     }
 }

@@ -1,14 +1,10 @@
-//
 //  TenantRepositoriesIntegrationTests.swift
 //  ProWorkTests
-//
 //  Created by Pronomi.
-//
 //  Üç ufak tenant repository'sini tek dosyada toplar:
 //    - OrganizationRepository
 //    - UserRepository
 //    - CompanyProfileRepository
-//
 
 import XCTest
 @testable import ProWork
@@ -60,7 +56,7 @@ final class OrganizationRepositoryIntegrationTests: XCTestCase {
     func test_softDelete_hidesFromFetchAll() throws {
         let org = Organization(name: "qa-Silinen", masterCurrency: "TRY")
         try repository.insert(org)
-        try repository.softDelete(id: org.id)
+        try repository.softDelete(id: org.id, by: BuiltInUserId.defaultOwner)
 
         let visible = try repository.fetchAll()
         XCTAssertFalse(visible.contains { $0.id == org.id })

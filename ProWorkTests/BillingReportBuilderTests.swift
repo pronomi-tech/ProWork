@@ -1,10 +1,7 @@
-//
 //  BillingReportBuilderTests.swift
 //  ProWorkTests
-//
 //  BillingReportLine listesinden müşteri/proje/todo kırılımı üretir.
 //  Toplama saymalarının (saniye, dakika, tutar, KDV, total) doğruluğunu doğrular.
-//
 
 import XCTest
 @testable import ProWork

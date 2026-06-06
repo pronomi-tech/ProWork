@@ -1,9 +1,6 @@
-//
 //  PriceListResolverTests.swift
 //  ProWorkTests
-//
 //  Spec §3 — Fiyat öncelik sırası: task override → proje → müşteri → genel
-//
 
 import XCTest
 @testable import ProWork
@@ -19,24 +16,17 @@ final class PriceListResolverTests: XCTestCase {
         timeType: TimeType = .regular,
         service: ServiceType = .remote
     ) -> PriceListRow {
-        PriceListRow(
-            priceListId: listId,
-            serviceType: service,
+        BillingFixtures.makeRow(
+            listId: listId,
+            unit: unit,
+            category: category,
             timeType: timeType,
-            categoryId: category,
-            unitPriceMinor: unit
+            service: service
         )
     }
 
     private func emptyContext() -> PriceResolutionContext {
-        PriceResolutionContext(
-            todoOverride: nil,
-            projectPriceLists: [],
-            customerPriceLists: [],
-            globalPriceLists: [],
-            organizationCurrency: "TRY",
-            rowsByListId: [:]
-        )
+        BillingFixtures.emptyPriceContext()
     }
 
     // MARK: - §3 Öncelik

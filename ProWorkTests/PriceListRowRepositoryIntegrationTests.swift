@@ -1,9 +1,6 @@
-//
 //  PriceListRowRepositoryIntegrationTests.swift
 //  ProWorkTests
-//
 //  Created by Pronomi.
-//
 
 import XCTest
 @testable import ProWork
@@ -99,7 +96,7 @@ final class PriceListRowRepositoryIntegrationTests: XCTestCase {
         try rowRepository.insert(kept)
         try rowRepository.insert(deleted)
 
-        try rowRepository.softDelete(id: deleted.id)
+        try rowRepository.softDelete(id: deleted.id, by: BuiltInUserId.defaultOwner)
 
         let rows = try rowRepository.fetchAll(priceListId: priceList.id).map(\.unitPriceMinor)
         XCTAssertEqual(rows, [1])

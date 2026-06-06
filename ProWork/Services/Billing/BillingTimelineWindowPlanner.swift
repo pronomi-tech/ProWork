@@ -1,9 +1,6 @@
-//
 //  BillingTimelineWindowPlanner.swift
 //  ProWork
-//
 //  Created by Pronomi
-//
 
 import Foundation
 
@@ -44,7 +41,12 @@ enum BillingTimelineWindowPlanner {
             func flushCluster() {
                 guard !cluster.isEmpty, let activeEnd = clusterEnd else { return }
                 let clusterStart = cluster[0].startedAt
-                let totalBillableMinutes = Int(activeEnd.timeIntervalSince(clusterStart) / 60)
+                // Int(timeInterval / 60) double-converts via
+                // floating point and truncates seconds, losing up to 59s per
+                // cluster. Do the arithmetic in integer seconds and ceil-divide
+                // so a 59-second tail still counts as a billable minute.
+                let totalSeconds = max(0, Int(activeEnd.timeIntervalSince(clusterStart).rounded()))
+                let totalBillableMinutes = (totalSeconds + 59) / 60
                 let allocations = BillableMinuteAllocator.allocate(
                     durationSeconds: cluster.map(\.actualSeconds),
                     totalBillableMinutes: totalBillableMinutes
@@ -58,6 +60,13 @@ enum BillingTimelineWindowPlanner {
                 clusterEnd = nil
             }
 
+            // window planlama clock-time (wall) yerine
+            // advances in absolute duration (`TimeInterval` = seconds) —
+            // intentional behaviour (the billing minimum is "1 hour of
+            // work" = 3600 s, not calendar hours). Working duration
+            // stays constant even across DST transitions. Türkiye
+            // removed DST in 2016; this comment signals the intent in
+            // case a future contributor wants calendar-based semantics.
             for request in sorted {
                 if cluster.isEmpty {
                     cluster = [request]

@@ -1,8 +1,5 @@
-//
 //  BillingTimelineWindowPlannerTests.swift
 //  ProWorkTests
-//
-//
 
 import XCTest
 @testable import ProWork

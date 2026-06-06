@@ -1,9 +1,6 @@
-//
 //  CustomersView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
@@ -17,30 +14,46 @@ struct CustomersView: View {
     @State private var confirmation: ProWorkConfirmation?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: ProWorkLayout.scaled(16, using: settingsStore)) {
-            header
+        SettingsScreenScaffold(
+            title: settingsStore.localized("customers.title", defaultValue: "Müşteriler"),
+            subtitle: settingsStore.localized("customers.subtitle", defaultValue: "Müşteri kartları, varsayılan hizmet tipi ve ücretlendirme penceresi."),
+            errorMessage: viewModel.errorMessage,
+            contentScrollBehavior: .fixed,
+            toolbar: {
+                SettingsCRUDToolbarButton(
+                    title: settingsStore.localized("customers.action.new", defaultValue: "Yeni Müşteri"),
+                    systemImage: "plus"
+                ) {
+                    isShowingCreateForm = true
+                }
+            }
+        ) {
             customerList
         }
-        .padding(ProWorkLayout.scaled(24, using: settingsStore))
-        .proWorkFrame(minWidth: 860, minHeight: 560)
-        .proWorkToastNotifications(errorMessage: viewModel.errorMessage)
         .onAppear {
-            viewModel.load(settingsStore: settingsStore)
+            viewModel.load()
         }
-        .sheet(isPresented: $isShowingCreateForm) {
-            CustomerFormView(mode: .create) { customer in
-                if viewModel.create(customer, settingsStore: settingsStore) {
-                    isShowingCreateForm = false
+        .settingsCRUDPresenter(
+            isShowingCreate: $isShowingCreateForm,
+            editingItem: $editingCustomer,
+            confirmation: $confirmation,
+            createForm: {
+                CustomerFormView(mode: .create) { customer in
+                    if viewModel.create(customer) {
+                        isShowingCreateForm = false
+                    }
+                }
+            },
+            editForm: { customer in
+                CustomerFormView(mode: .edit(customer)) { updatedCustomer in
+                    if viewModel.update(updatedCustomer) {
+                        editingCustomer = nil
+                    }
                 }
             }
-        }
-        .sheet(item: $editingCustomer) { customer in
-            CustomerFormView(mode: .edit(customer)) { updatedCustomer in
-                if viewModel.update(updatedCustomer, settingsStore: settingsStore) {
-                    editingCustomer = nil
-                }
-            }
-        }
+        )
+        // Pricing sheet is kept separate because it's an additional flow
+        // outside the CRUDPresenter's standard create/edit/confirmation trio.
         .sheet(item: $pricingCustomer) { customer in
             ScopedPriceListsView(
                 ownerType: .customer,
@@ -48,81 +61,128 @@ struct CustomersView: View {
                 ownerLabel: customer.name,
                 defaultCurrency: viewModel.customerCurrencies[customer.id] ?? "TRY",
                 onListsChanged: {
-                    viewModel.load(settingsStore: settingsStore)
+                    viewModel.load()
                 }
             )
-        }
-        .proWorkConfirmationDialog($confirmation)
-    }
-
-    private var header: some View {
-        HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: ProWorkLayout.scaled(4, using: settingsStore)) {
-                Text(settingsStore.localized("customers.title", defaultValue: "Müşteriler"))
-                    .proWorkTextStyle(.largeTitle)
-                    .bold()
-
-                Text(settingsStore.localized("customers.subtitle", defaultValue: "Müşteri kartları, varsayılan hizmet tipi ve ücretlendirme penceresi."))
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            Button {
-                isShowingCreateForm = true
-            } label: {
-                ProWorkButtonLabel(title: settingsStore.localized("customers.action.new", defaultValue: "Yeni Müşteri"), systemImage: "plus", minHeight: 32)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
         }
     }
 
     private var customerList: some View {
-        ZStack {
-            if viewModel.customers.isEmpty {
-                emptyState
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: ProWorkLayout.scaled(12, using: settingsStore)) {
-                        ForEach(viewModel.customers) { customer in
-                            CustomerRowView(
-                                customer: customer,
-                                effectiveCurrency: viewModel.customerCurrencies[customer.id] ?? "TRY",
-                                vatLabel: customer.vatRateId.flatMap { viewModel.vatLabelsById[$0] },
-                                onEdit: {
-                                    editingCustomer = customer
-                                },
-                                onPricing: {
-                                    pricingCustomer = customer
-                                },
-                                onDelete: {
-                                    askDeleteCustomer(customer)
-                                }
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        .proWorkFrame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        ProWorkGrid(
+            items: viewModel.customers,
+            header: { tableHeader },
+            emptyContent: {
+                ProWorkGridEmptyState(
+                    systemImage: "person.2",
+                    title: settingsStore.localized("customers.empty.title", defaultValue: "Henüz müşteri yok"),
+                    message: settingsStore.localized("customers.empty.message", defaultValue: "Sağ üstten yeni müşteri ekleyebilirsiniz.")
+                )
+            },
+            row: { customer in customerRow(customer) }
+        )
     }
 
-    private var emptyState: some View {
-        VStack(alignment: .center, spacing: ProWorkLayout.scaled(12, using: settingsStore)) {
-            Image(systemName: "person.2")
-                .proWorkFont(size: 34)
-                .foregroundStyle(.secondary)
-
-            Text(settingsStore.localized("customers.empty.title", defaultValue: "Henüz müşteri yok"))
-                .proWorkTextStyle(.title2)
-                .bold()
-
-            Text(settingsStore.localized("customers.empty.message", defaultValue: "Sağ üstten yeni müşteri ekleyebilirsiniz."))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+    private var tableHeader: some View {
+        HStack(spacing: 12) {
+            Text(settingsStore.localized("customers.column.name", defaultValue: "Müşteri"))
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(settingsStore.localized("customers.column.currency", defaultValue: "Para Birimi"))
+                .frame(width: 110, alignment: .leading)
+            Text(settingsStore.localized("customers.column.serviceType", defaultValue: "Hizmet"))
+                .frame(width: 110, alignment: .leading)
+            Text(settingsStore.localized("customers.column.window", defaultValue: "Min. Pencere"))
+                .frame(width: 110, alignment: .trailing)
+            Text(settingsStore.localized("customers.column.vat", defaultValue: "KDV"))
+                .frame(width: 140, alignment: .leading)
+            Text(settingsStore.localized("customers.column.active", defaultValue: "Durum"))
+                .frame(width: 90, alignment: .leading)
+            Color.gridHeaderSpacer(width: 110)
         }
-        .proWorkFrame(maxWidth: 420)
+        .proWorkTextStyle(.caption)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.quaternary.opacity(0.35))
+    }
+
+    private func customerRow(_ customer: Customer) -> some View {
+        let effectiveCurrency = viewModel.customerCurrencies[customer.id] ?? "TRY"
+        let vatLabel = customer.vatRateId.flatMap { viewModel.vatLabelsById[$0] } ?? "—"
+        let serviceTitle = ServiceType(rawValue: customer.defaultServiceType)?.title ?? ServiceType.default.title
+        let window = String(format: settingsStore.localized("customers.form.minutes", defaultValue: "%d dk"), customer.defaultMinBillingMinutes)
+
+        return HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(customer.name)
+                        .proWorkTextStyle(.callout, weight: .medium)
+                        .lineLimit(1)
+                    if let code = customer.code, !code.isEmpty {
+                        Text(code)
+                            .proWorkTextStyle(.caption)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(.quaternary)
+                            .clipShape(Capsule())
+                    }
+                }
+                if let notes = customer.notes, !notes.isEmpty {
+                    Text(notes)
+                        .proWorkTextStyle(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text(effectiveCurrency)
+                .proWorkTextStyle(.callout)
+                .frame(width: 110, alignment: .leading)
+
+            Text(serviceTitle)
+                .proWorkTextStyle(.callout)
+                .frame(width: 110, alignment: .leading)
+
+            Text(window)
+                .proWorkTextStyle(.callout)
+                .frame(width: 110, alignment: .trailing)
+
+            Text(vatLabel)
+                .proWorkTextStyle(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(width: 140, alignment: .leading)
+
+            ProWorkActivityBadge(isActive: customer.isActive)
+                .frame(width: 90, alignment: .leading)
+
+            HStack(spacing: 6) {
+                Button {
+                    pricingCustomer = customer
+                } label: {
+                    Image(systemName: "list.bullet.rectangle.portrait").proWorkFont(size: 12)
+                }
+                .buttonStyle(.bordered).controlSize(.small)
+                .help(settingsStore.localized("customers.action.pricing", defaultValue: "Fiyatlandırma"))
+
+                Button {
+                    editingCustomer = customer
+                } label: {
+                    Image(systemName: "pencil").proWorkFont(size: 12)
+                }
+                .buttonStyle(.bordered).controlSize(.small)
+
+                Button {
+                    askDeleteCustomer(customer)
+                } label: {
+                    Image(systemName: "trash").proWorkFont(size: 12)
+                }
+                .buttonStyle(.bordered).controlSize(.small)
+            }
+            .frame(width: 110, alignment: .trailing)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
     }
 
     private func askDeleteCustomer(_ customer: Customer) {
@@ -133,7 +193,7 @@ struct CustomersView: View {
             cancelTitle: settingsStore.localized("customers.delete.cancel", defaultValue: "Vazgeç"),
             role: .destructive
         ) {
-            viewModel.delete(id: customer.id, settingsStore: settingsStore)
+            viewModel.delete(id: customer.id)
         }
     }
 }

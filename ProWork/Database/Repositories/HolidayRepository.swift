@@ -1,9 +1,6 @@
-//
 //  HolidayRepository.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 import SQLite3
@@ -28,12 +25,12 @@ final class HolidayRepository {
 
         return try database.query(
             sql,
-            map: { Self.makeHoliday(from: $0) },
+            map: { try Self.makeHoliday(from: $0) },
             bind: { $0.bindText(organizationId, at: 1) }
         )
     }
 
-    /// Belirli bir tarihe ait tüm tatilleri (global + müşteri) döner.
+    /// Returns every holiday (global + customer) for a given date.
     func fetchForDate(organizationId: String, date: String, customerId: String? = nil) throws -> [Holiday] {
         let sql: String
         let binds: (SQLiteStatement) -> Void
@@ -70,17 +67,21 @@ final class HolidayRepository {
 
         return try database.query(
             sql,
-            map: { Self.makeHoliday(from: $0) },
+            map: { try Self.makeHoliday(from: $0) },
             bind: binds
         )
     }
 
     func insert(_ holiday: Holiday) throws {
+        // organizationId already exists in the body of the table; using
+        // the "without org id" version of the constant metadata list keeps
+        // the bind indexes aligned
+        // kayma riski elimine edildi.
         let sql = """
         INSERT INTO holidays (
             id, organizationId, scope, customerId,
             date, name, isHalfDay, halfDayCutoff, isActive,
-            \(RecordMetadataSQL.columns.replacingOccurrences(of: "organizationId, ", with: ""))
+            \(RecordMetadataSQL.columnsWithoutOrgId)
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """
@@ -131,24 +132,12 @@ final class HolidayRepository {
         }
     }
 
-    func softDelete(id: String, by userId: String = BuiltInUserId.defaultOwner) throws {
-        let sql = """
-        UPDATE holidays
-        SET deletedAt = ?, updatedAt = ?, updatedByUserId = ?,
-            rowVersion = rowVersion + 1, syncStatus = 'local'
-        WHERE id = ? AND deletedAt IS NULL;
-        """
-
-        try database.execute(sql) { stmt in
-            let now = DateFormatter.proWorkSQLite.string(from: Date())
-            stmt.bindText(now, at: 1)
-            stmt.bindText(now, at: 2)
-            stmt.bindText(userId, at: 3)
-            stmt.bindText(id, at: 4)
-        }
+    func softDelete(id: String, by userId: String) throws {
+        // delegate to the central helper.
+        try database.softDelete(table: "holidays", id: id, by: userId)
     }
 
-    private static func makeHoliday(from statement: SQLiteStatement) -> Holiday {
+    private static func makeHoliday(from statement: SQLiteStatement) throws -> Holiday {
         Holiday(
             id: statement.text(at: 0) ?? UUID().uuidString,
             scope: HolidayScope(rawValue: statement.text(at: 1) ?? "global") ?? .global,
@@ -158,7 +147,7 @@ final class HolidayRepository {
             isHalfDay: statement.int(at: 5) == 1,
             halfDayCutoff: statement.text(at: 6).flatMap(TimeOfDay.init(string:)),
             isActive: statement.int(at: 7) == 1,
-            meta: statement.readMetadata(startingAt: 8)
+            meta: try statement.readMetadata(startingAt: 8)
         )
     }
 }

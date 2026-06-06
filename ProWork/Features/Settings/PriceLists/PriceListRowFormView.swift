@@ -1,9 +1,6 @@
-//
 //  PriceListRowFormView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
@@ -31,7 +28,7 @@ struct PriceListRowFormView: View {
 
     @State private var serviceType: ServiceType = .remote
     @State private var timeType: TimeType = .regular
-    @State private var categoryId: String = ""  // boş = tüm kategoriler
+    @State private var categoryId: String = ""  // empty = all categories
     @State private var unitPriceText: String = "0,00"
     @State private var isActive: Bool = true
     @State private var notes: String = ""
@@ -144,17 +141,24 @@ struct PriceListRowFormView: View {
         )
     }
 
+    /// Cached so every keystroke in the rate field doesn't
+    /// allocate a fresh NumberFormatter.
     private var priceFormatter: NumberFormatter {
-        let formatter = NumberFormatter()
-        formatter.locale = settingsStore.locale
-        formatter.numberStyle = .decimal
-        formatter.minimumFractionDigits = 2
-        formatter.maximumFractionDigits = 4
-        return formatter
+        ProWorkFormatters.cachedDecimalFormatter(
+            localeIdentifier: settingsStore.locale.identifier,
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 4
+        )
     }
 
     private var pricePlaceholder: String {
         priceFormatter.string(from: 1500.0 as NSNumber) ?? "1500.00"
+    }
+
+    /// Routed through the shared ProWorkDecimalParser so
+    /// the price and vat forms share one parser path.
+    private func parseDecimal(_ input: String) -> Decimal? {
+        ProWorkDecimalParser.parse(input, primary: priceFormatter, maximumFractionDigits: 4)
     }
 
     private func applyMode() {
@@ -171,13 +175,14 @@ struct PriceListRowFormView: View {
     }
 
     private func save() {
-        let formatter = priceFormatter
-
-        guard let number = formatter.number(from: unitPriceText) else {
+        // Previously parse went only through the active
+        // settings locale; a user pasting "1.500,00" while the app was on
+        // en_US would silently fail. Try the configured locale first, then
+        // fall back to a POSIX formatter that accepts the "1500.00" shape.
+        guard let amount = parseDecimal(unitPriceText) else {
             errorMessage = settingsStore.localized("priceLists.rows.form.error.invalidUnitPrice", defaultValue: "Birim ücret geçersiz.")
             return
         }
-        let amount = number.decimalValue
         let unitMoney = Money(amount: amount, currency: listCurrency)
         let unitMinor = unitMoney.minorUnits
 
@@ -197,6 +202,13 @@ struct PriceListRowFormView: View {
             endTime: nil,
             unitPriceMinor: unitMinor,
             currency: listCurrency,
+            // `minimumWindowMinutes`
+            // remains in the model/schema for backward compatibility
+            // but the calculator no longer consults it (window
+            // resolution lives at the project/customer level). Pass
+            // nil so newly-saved rows don't reintroduce stale data;
+            // legacy rows keep their persisted value because we never
+            // round-trip it through this form.
             minimumWindowMinutes: nil,
             isActive: isActive,
             sortOrder: timeType.sortOrder,

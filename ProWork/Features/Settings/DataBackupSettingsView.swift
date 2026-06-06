@@ -1,9 +1,6 @@
-//
 //  DataBackupSettingsView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
@@ -40,14 +37,14 @@ struct DataBackupSettingsView: View {
                     .buttonStyle(.bordered)
 
                     Button {
-                        sessionController.promptToOpenExistingDatabase(restartAfterSelection: true)
+                        sessionController.promptToOpenExistingDatabase()
                     } label: {
                         ProWorkButtonLabel(title: settingsStore.localized("dataBackup.switch", defaultValue: "Farklı Dosyaya Geç"), systemImage: "arrow.trianglehead.2.clockwise")
                     }
                     .buttonStyle(.borderedProminent)
 
                     Button {
-                        sessionController.promptToCreateDatabase(restartAfterSelection: true)
+                        sessionController.promptToCreateDatabase()
                     } label: {
                         ProWorkButtonLabel(title: settingsStore.localized("dataBackup.newFile", defaultValue: "Yeni Veri Dosyası"), systemImage: "plus")
                     }

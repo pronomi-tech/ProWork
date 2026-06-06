@@ -1,14 +1,11 @@
-//
 //  PricingCurrencyResolverTests.swift
 //  ProWorkTests
-//
 //  Currency çözümleme öncelik sırası:
 //    1. Müşterinin defaultPriceListId'si varsa (müşteri/global listelerden) onun currency'si
 //    2. Proje listesi (proje currency'si için)
 //    3. Müşteri listesi (default hariç)
 //    4. Global liste (default hariç)
 //    5. Organizasyon master currency'si
-//
 
 import XCTest
 @testable import ProWork

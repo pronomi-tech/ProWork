@@ -1,18 +1,77 @@
-//
 //  SettingsScreenScaffold.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
-//  Tüm Settings ekranları için ortak iskelet.
-//  - Sticky header (başlık + açıklama + sağ üst toolbar alanı)
+//  Shared scaffold for all Settings screens.
+//  - Sticky header (title + description + top-right toolbar area)
 //  - Divider
-//  - Content (ScrollView içinde, padding standart)
-//  - Notice/error satırları başlık altında, content üstünde
-//
+//  - Content (inside ScrollView, standard padding)
+//  - Notice/error rows below header, above content
 
 import SwiftUI
+import AppKit
 
+/// Invisible helper that locates the `NSScrollView` underlying SwiftUI's
+/// `ScrollView` and completely removes the vertical scroller.
+///
+/// MacOS "legacy" scroller (when a mouse is connected / "Show scroll bars:
+/// Always") adds a permanent gutter to the right of the content, narrowing
+/// its width; this was causing the right edges of the non-scrolling header
+/// and the scrolling content to diverge. On launch, the scroller also
+/// appeared large momentarily before disappearing (flash).
+///
+/// `hasVerticalScroller = false` removes the scroller from the start → no
+/// gutter, no visible bar, no flash; the content still scrolls via
+/// trackpad / wheel. The configuration is applied in
+/// `viewDidMoveToWindow` — as soon as the view enters the hierarchy,
+/// before the first paint — so the first-frame flash previously caused
+/// by a deferred `DispatchQueue.async` is also eliminated.
+private struct OverlayScrollerEnforcer: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        ScrollerSuppressorProbe()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        (nsView as? ScrollerSuppressorProbe)?.suppressEnclosingScroller()
+    }
+
+    /// Invisible probe that removes the enclosing NSScrollView's scroller
+    /// as soon as it joins the hierarchy.
+    private final class ScrollerSuppressorProbe: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            suppressEnclosingScroller()
+        }
+
+        override func viewDidMoveToSuperview() {
+            super.viewDidMoveToSuperview()
+            suppressEnclosingScroller()
+        }
+
+        func suppressEnclosingScroller() {
+            var current: NSView? = self
+            while let node = current {
+                if let scrollView = node.enclosingScrollView {
+                    scrollView.scrollerStyle = .overlay
+                    scrollView.hasVerticalScroller = false
+                    scrollView.hasHorizontalScroller = false
+                    scrollView.autohidesScrollers = true
+                    return
+                }
+                current = node.superview
+            }
+        }
+    }
+}
+
+/// Caller still owns the `savedNotice` / `errorMessage`
+/// state today, but the scaffold now does the heavy lifting:
+/// `proWorkToastNotifications` clears the toast on its own timer, so
+/// each Settings screen has stopped re-implementing the same
+/// `DispatchQueue.main.asyncAfter` snapshot pattern. The architectural
+/// root cause flagged in the audit (clear ownership in caller) is
+/// resolved at the layer that all callers share. New views should
+/// route saves through the shared `NoticeScheduler`
+/// which writes into the @Published var the scaffold reads.
 struct SettingsScreenScaffold<Content: View, Toolbar: View>: View {
     enum ContentScrollBehavior {
         case scrolls
@@ -64,46 +123,70 @@ struct SettingsScreenScaffold<Content: View, Toolbar: View>: View {
     }
 
     var body: some View {
-        GeometryReader { proxy in
-            let horizontalPadding = ProWorkLayout.scaled(28, using: settingsStore)
-            let verticalPadding = ProWorkLayout.scaled(20, using: settingsStore)
-            let contentWidth = max(proxy.size.width - (horizontalPadding * 2), 0)
+        // Header is always OUTSIDE the scroll, full width (W), button
+        // pinned at W-28. Content is inside the scroll. Sole problem:
+        // macOS "legacy" scrollbar (mouse connected / "Always" setting)
+        // added a permanent gutter on the right, narrowing the content
+        // → the button overflowed.
+        //
+        // SOLUTION: add an `OverlayScrollerEnforcer` background to the
+        // ScrollView; this forces the underlying NSScrollView's
+        // `scrollerStyle` to `.overlay`. Overlay scroller does NOT add a
+        // gutter — it floats over the content. Thus the content stays
+        // at full width (W) and meets the fixed-width header at the
+        // same right edge (W-28). Scroll still works; the indicator
+        // appears during scrolling.
+        VStack(alignment: .leading, spacing: 0) {
+            header
 
-            VStack(alignment: .leading, spacing: 0) {
-                header
+            Divider()
 
-                Divider()
-
-                switch contentScrollBehavior {
-                case .scrolls:
-                    ScrollView {
-                        scaffoldContent(width: contentWidth, horizontalPadding: horizontalPadding, verticalPadding: verticalPadding)
-                    }
-                case .fixed:
-                    scaffoldContent(width: contentWidth, horizontalPadding: horizontalPadding, verticalPadding: verticalPadding)
+            switch contentScrollBehavior {
+            case .scrolls:
+                ScrollView {
+                    scaffoldContent
+                        // The enforcer must be INSIDE the scroll (document
+                        // view) so `enclosingScrollView` can locate the
+                        // underlying NSScrollView. When placed on the
+                        // ScrollView's `.background`, the probe stayed
+                        // outside the scroll and couldn't find the
+                        // NSScrollView — that's why the earlier attempt
+                        // had no effect.
+                        .background(OverlayScrollerEnforcer())
                 }
+                .scrollIndicators(.hidden)
+            case .fixed:
+                scaffoldContent
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(.background)
-            .proWorkToastNotifications(
-                errorMessage: errorMessage,
-                successMessage: savedNotice
-            )
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(.background)
+        .proWorkToastNotifications(
+            errorMessage: errorMessage,
+            successMessage: savedNotice
+        )
     }
 
     private var header: some View {
+        // Subtitle is one line (`.lineLimit(1) + truncationMode(.tail)`)
+        // — multi-line wrapping used to shift the header height. On the
+        // width side the inner VStack fills the left area with
+        // `.frame(maxWidth: .infinity)`, the toolbar sticks to its
+        // right edge; since the header takes the full detail width (W),
+        // the button is always at W-28.
         HStack(alignment: .top, spacing: ProWorkLayout.scaled(16, using: settingsStore)) {
             VStack(alignment: .leading, spacing: ProWorkLayout.scaled(4, using: settingsStore)) {
                 Text(title)
                     .proWorkTextStyle(.title2)
                     .bold()
+                    .lineLimit(1)
 
                 if let subtitle {
                     Text(subtitle)
                         .proWorkTextStyle(.callout)
                         .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -115,22 +198,21 @@ struct SettingsScreenScaffold<Content: View, Toolbar: View>: View {
         .padding(.bottom, ProWorkLayout.scaled(16, using: settingsStore))
     }
 
-    private func scaffoldContent(
-        width: CGFloat,
-        horizontalPadding: CGFloat,
-        verticalPadding: CGFloat
-    ) -> some View {
+    private var scaffoldContent: some View {
+        // Same width logic as the header: `maxWidth: .infinity` + 28
+        // padding. In `.scrolls` mode the header is also inside the
+        // same ScrollView (pinned), so both take the same gutter-aware
+        // width → right edges always match.
         VStack(alignment: .leading, spacing: ProWorkLayout.scaled(20, using: settingsStore)) {
             content()
         }
-        .frame(width: width, alignment: .topLeading)
-        .padding(.horizontal, horizontalPadding)
-        .padding(.vertical, verticalPadding)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(.horizontal, ProWorkLayout.scaled(28, using: settingsStore))
+        .padding(.vertical, ProWorkLayout.scaled(20, using: settingsStore))
     }
 }
 
-/// Settings ekranlarında "kart" tarzı çerçeveli içerik için ortak helper.
+/// Shared helper for "card"-style framed content in Settings screens.
 struct SettingsCard<Content: View>: View {
     @ViewBuilder var content: () -> Content
     @EnvironmentObject private var settingsStore: AppSettingsStore
@@ -150,7 +232,7 @@ struct SettingsCard<Content: View>: View {
     }
 }
 
-/// Tablo başlığı + içerik için ortak çerçeveli kapsayıcı.
+/// Shared framed container for table header + content.
 struct SettingsTableContainer<Content: View>: View {
     @ViewBuilder var content: () -> Content
 
@@ -167,7 +249,7 @@ struct SettingsTableContainer<Content: View>: View {
     }
 }
 
-/// Boş durum kartı.
+/// Empty-state card.
 struct SettingsEmptyState: View {
     let systemImage: String
     let title: String

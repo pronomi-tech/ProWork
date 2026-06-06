@@ -1,9 +1,6 @@
-//
 //  PaymentRepository.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 import SQLite3
@@ -27,7 +24,7 @@ final class PaymentRepository {
 
         return try database.query(
             sql,
-            map: { Self.makePayment(from: $0) },
+            map: { try Self.makePayment(from: $0) },
             bind: { $0.bindText(runId, at: 1) }
         )
     }
@@ -44,7 +41,7 @@ final class PaymentRepository {
 
         return try database.query(
             sql,
-            map: { Self.makePayment(from: $0) },
+            map: { try Self.makePayment(from: $0) },
             bind: { $0.bindText(organizationId, at: 1) }
         )
     }
@@ -106,24 +103,12 @@ final class PaymentRepository {
         }
     }
 
-    func softDelete(id: String, by userId: String = BuiltInUserId.defaultOwner) throws {
-        let sql = """
-        UPDATE payments
-        SET deletedAt = ?, updatedAt = ?, updatedByUserId = ?,
-            rowVersion = rowVersion + 1, syncStatus = 'local'
-        WHERE id = ? AND deletedAt IS NULL;
-        """
-
-        try database.execute(sql) { stmt in
-            let now = DateFormatter.proWorkSQLite.string(from: Date())
-            stmt.bindText(now, at: 1)
-            stmt.bindText(now, at: 2)
-            stmt.bindText(userId, at: 3)
-            stmt.bindText(id, at: 4)
-        }
+    func softDelete(id: String, by userId: String) throws {
+        // delegate to the central helper.
+        try database.softDelete(table: "payments", id: id, by: userId)
     }
 
-    private static func makePayment(from statement: SQLiteStatement) -> Payment {
+    private static func makePayment(from statement: SQLiteStatement) throws -> Payment {
         Payment(
             id: statement.text(at: 0) ?? UUID().uuidString,
             runId: statement.text(at: 1) ?? "",
@@ -133,7 +118,7 @@ final class PaymentRepository {
             method: PaymentMethod(rawValue: statement.text(at: 5) ?? "bank_transfer") ?? .bankTransfer,
             reference: statement.text(at: 6),
             note: statement.text(at: 7),
-            meta: statement.readMetadata(startingAt: 8)
+            meta: try statement.readMetadata(startingAt: 8)
         )
     }
 }

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        Explicit entitlements (code review H3). The previous implicit
+        setup leaned on ENABLE_OUTGOING_NETWORK_CONNECTIONS at the build
+        setting layer, which is hard to audit. Listing the exact entitlements
+        here makes the security surface obvious.
+    -->
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+    <!-- Outgoing network only. TCMB FX feed is currently the single known
+         remote endpoint. App Sandbox cannot scope to a specific host, so
+         host-level pinning belongs in URLSession config / ATS in Info.plist. -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <!-- User-selected file read/write for export/import dialogs. -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+</dict>
+</plist>

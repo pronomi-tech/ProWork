@@ -1,15 +1,12 @@
-//
 //  PriceListQuoteBundleBuilder.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 
-/// `PriceList` + satırlar + alıcı bilgisi → render edilebilir `PriceListQuoteBundle` dönüştürücüsü.
+/// Converts `PriceList` + rows + recipient info into a renderable `PriceListQuoteBundle`.
 struct PriceListQuoteBundleBuilder {
-    /// Form alanından gelen alıcı bilgisi.
+    /// Recipient information from the form field.
     struct RecipientInput {
         var name: String
         var contactPerson: String?
@@ -30,7 +27,11 @@ struct PriceListQuoteBundleBuilder {
     ) -> PriceListQuoteBundle {
         let activeRows = rows.filter { $0.isActive }
         let sections = makeSections(rows: activeRows, categories: categories)
-        let validUntil = Calendar.current.date(
+        // Previously Calendar.current; quote validity
+        // computed on a non-Istanbul host could drift by a day at DST
+        // boundaries. Use the pinned Istanbul calendar to match the rest
+        // of the billing pipeline.
+        let validUntil = AppCalendar.istanbul.date(
             byAdding: .day,
             value: settings.normalizedValidityDays,
             to: issueDate
@@ -95,6 +96,14 @@ struct PriceListQuoteBundleBuilder {
         }
     }
 
+    /// The default phrasing ("Saatlik uzaktan hizmet bedeli")
+    /// pairs with `quote.quantity.hour` ("1 saat") to assume an hourly
+    /// rate. Any deployment selling daily/piece-rate work must override
+    /// **both** strings together via Localizable.strings; the keys are
+    /// documented here so the assumption is visible at the call site
+    /// rather than buried in the localiser bundle. A future tier might
+    /// expose per-row unit types in the model so the wording follows
+    /// `PriceListRow.unit` instead of static strings.
     private func primaryDescription(
         for row: PriceListRow,
         in type: ServiceType,
@@ -163,21 +172,35 @@ struct PriceListQuoteBundleBuilder {
         return value
     }
 
-    private func yearString(from date: Date) -> String {
+    /// Shared static formatter — instance allocation per call
+    /// is wasteful and the locale/format never change. POSIX
+    /// `yyyy` is required so the build year stays unambiguous regardless
+    /// of the user's locale.
+    private static let yearFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy"
-        return formatter.string(from: date)
+        return formatter
+    }()
+
+    private func yearString(from date: Date) -> String {
+        Self.yearFormatter.string(from: date)
     }
 }
 
-/// Verilen yıl + sıra numarasından format şablonuyla teklif numarası üretir.
+/// Produces a quote number from the given year + sequence number using the format template.
 enum PriceListQuoteNumberFormatter {
+    /// Emit a 4-digit year. The previous `%02d, year % 100`
+    /// form would have made 2099 (`"99"`) and 2100 (`"00"`) collide for
+    /// long-lived documents — and the same shortened year would have
+    /// made 2026 ("26") and 1926 ("26") indistinguishable. Visible
+    /// quote numbers (`TKL.YYYY.NN`) are unambiguous through the
+    /// turn of the century.
     static func format(prefix: String, year: Int, sequence: Int) -> String {
         let trimmedPrefix = prefix.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanPrefix = trimmedPrefix.isEmpty ? "TKL" : trimmedPrefix
-        let yearSuffix = String(format: "%02d", year % 100)
+        let yearString = String(format: "%04d", year)
         let seqString = String(format: "%02d", sequence)
-        return "\(cleanPrefix).\(yearSuffix).\(seqString)"
+        return "\(cleanPrefix).\(yearString).\(seqString)"
     }
 }

@@ -1,15 +1,12 @@
-//
 //  HolidaysViewModel.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Combine
 import Foundation
 
 @MainActor
-final class HolidaysViewModel: ObservableObject {
+final class HolidaysViewModel: ObservableObject, CRUDListViewModel {
     @Published private(set) var holidays: [Holiday] = []
     @Published var errorMessage: String?
 
@@ -33,37 +30,15 @@ final class HolidaysViewModel: ObservableObject {
 
     @discardableResult
     func create(_ holiday: Holiday) -> Bool {
-        do {
-            try holidayRepository.insert(holiday)
-            load()
-            errorMessage = nil
-            return true
-        } catch {
-            errorMessage = error.localizedDescription
-            return false
-        }
+        performMutation { try holidayRepository.insert(holiday) }
     }
 
     @discardableResult
     func update(_ holiday: Holiday) -> Bool {
-        do {
-            try holidayRepository.update(holiday)
-            load()
-            errorMessage = nil
-            return true
-        } catch {
-            errorMessage = error.localizedDescription
-            return false
-        }
+        performMutation { try holidayRepository.update(holiday) }
     }
 
     func softDelete(id: String) {
-        do {
-            try holidayRepository.softDelete(id: id)
-            load()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        performMutation { try holidayRepository.softDelete(id: id, by: AppServices.currentUserId) }
     }
 }

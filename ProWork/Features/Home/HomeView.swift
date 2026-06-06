@@ -1,12 +1,9 @@
-//
 //  HomeView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
-//  Anasayfa: günlük çalışmaya odaklı genel bakış. Aktif sayaç, bugünün özeti,
-//  gecikmiş ve devam eden işler, son oturumlar ve haftalık grafik.
-//
+//  Home page: an overview focused on daily work. Active timer, today's
+//  summary, overdue and in-progress items, recent sessions and the
+//  weekly chart.
 
 import Combine
 import SwiftUI
@@ -26,8 +23,7 @@ struct HomeView: View {
     var onNavigate: (HomeNavigationTarget) -> Void = { _ in }
 
     @StateObject private var viewModel = HomeViewModel()
-    @State private var nowTick: Date = Date()
-    private let tickTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    @EnvironmentObject private var clockTicker: ProWorkClockTicker
 
     var body: some View {
         ScrollView {
@@ -63,9 +59,12 @@ struct HomeView: View {
         .onAppear {
             viewModel.loadData()
         }
-        .onReceive(tickTimer) { value in
-            nowTick = value
-        }
+        // Previously this view mirrored the shared
+        // ProWorkClockTicker into a private @State nowTick on every
+        // emission. The copy was redundant — SwiftUI already re-renders
+        // when clockTicker.second publishes — and risked drifting if a
+        // tick arrived between two reads. All time-derived expressions
+        // now read clockTicker.second directly.
     }
 
     // MARK: - Header
@@ -85,18 +84,29 @@ struct HomeView: View {
         }
     }
 
+    /// Previously the hour ranges (5..<12 / 12..<18 / 18..<23)
+    /// were inlined into the switch as magic numbers. Extract to named
+    /// constants so the cutoff times can be adjusted from one place and
+    /// the intent of each band is obvious.
+    private static let greetingMorningStart = 5
+    private static let greetingAfternoonStart = 12
+    private static let greetingEveningStart = 18
+    private static let greetingNightStart = 23
+
     private var greetingText: String {
-        let hour = Calendar.current.component(.hour, from: nowTick)
+        // Use Istanbul calendar to keep the greeting consistent with the
+        // rest of the app's date math.
+        let hour = AppCalendar.istanbul.component(.hour, from: clockTicker.second)
         let key: String
         let fallback: String
         switch hour {
-        case 5..<12:
+        case Self.greetingMorningStart..<Self.greetingAfternoonStart:
             key = "home.greeting.morning"
             fallback = "Günaydın 👋"
-        case 12..<18:
+        case Self.greetingAfternoonStart..<Self.greetingEveningStart:
             key = "home.greeting.afternoon"
             fallback = "İyi günler 👋"
-        case 18..<23:
+        case Self.greetingEveningStart..<Self.greetingNightStart:
             key = "home.greeting.evening"
             fallback = "İyi akşamlar 👋"
         default:
@@ -107,10 +117,14 @@ struct HomeView: View {
     }
 
     private var formattedDate: String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: settingsStore.settings.language.localeIdentifier)
-        formatter.dateStyle = .full
-        return formatter.string(from: nowTick)
+        // K16: cached formatter — body ticks once per second, allocating
+        // a new DateFormatter each tick was costing ~1ms on every redraw.
+        ProWorkFormatters
+            .cachedDateFormatter(
+                localeIdentifier: settingsStore.settings.language.localeIdentifier,
+                dateStyle: .full
+            )
+            .string(from: clockTicker.second)
     }
 
     // MARK: - Active / Paused session card
@@ -118,7 +132,7 @@ struct HomeView: View {
     private func sessionCard(_ summary: ActiveWorkSessionSummary, isPaused: Bool) -> some View {
         let elapsed: Int = isPaused
             ? summary.elapsedSeconds
-            : max(summary.elapsedSeconds, Int(nowTick.timeIntervalSince(summary.startedAt)))
+            : max(summary.elapsedSeconds, Int(clockTicker.second.timeIntervalSince(summary.startedAt)))
 
         let bgColor: Color = isPaused ? .orange : .green
 
@@ -359,9 +373,15 @@ struct HomeView: View {
                     .monospacedDigit()
             }
 
+            // Precompute the max once and pass into every bar
+            // instead of recomputing inside `weeklyBar(_:)` for each of
+            // the 7 bars. The previous form walked the array 7 times
+            // per redraw — on each clockTicker tick, that's 49 max()
+            // calls per second.
+            let weeklyMaxSeconds = max(weeklyData.map { $0.seconds }.max() ?? 0, 1)
             HStack(alignment: .bottom, spacing: ProWorkLayout.scaled(10, using: settingsStore)) {
                 ForEach(weeklyData, id: \.date) { item in
-                    weeklyBar(item)
+                    weeklyBar(item, maxSeconds: weeklyMaxSeconds)
                 }
             }
             .frame(height: ProWorkLayout.scaled(120, using: settingsStore))
@@ -376,10 +396,9 @@ struct HomeView: View {
         )
     }
 
-    private func weeklyBar(_ item: DayBucket) -> some View {
-        let maxSeconds = max(weeklyData.map { $0.seconds }.max() ?? 0, 1)
+    private func weeklyBar(_ item: HomeWeeklyBucket, maxSeconds: Int) -> some View {
         let ratio = CGFloat(item.seconds) / CGFloat(maxSeconds)
-        let isToday = Calendar.current.isDateInToday(item.date)
+        let isToday = AppCalendar.istanbul.isDateInToday(item.date)
 
         return VStack(spacing: ProWorkLayout.scaled(6, using: settingsStore)) {
             Text(item.seconds > 0 ? ProWorkFormatters.durationHHmm(item.seconds) : "—")
@@ -407,46 +426,48 @@ struct HomeView: View {
     }
 
     private func dayLabel(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: settingsStore.settings.language.localeIdentifier)
-        formatter.dateFormat = "EEE"
-        return formatter.string(from: date)
+        ProWorkFormatters
+            .cachedDateFormatter(
+                localeIdentifier: settingsStore.settings.language.localeIdentifier,
+                dateFormat: "EEE"
+            )
+            .string(from: date)
     }
 
     // MARK: - Ongoing todos
 
+    /// The ViewThatFits branches used to repeat each
+    /// `ProWorkDonutBreakdownCard` configuration verbatim. SwiftUI
+    /// would build both branches to pick the wider one, so the second
+    /// (vertical) copy paid the same construction cost as the first
+    /// (horizontal) copy — and every label/row change had to land in
+    /// two places. Extract the card builders into a private `@ViewBuilder`
+    /// helper so both layouts compose them once.
+    @ViewBuilder
+    private var breakdownCards: some View {
+        ProWorkDonutBreakdownCard(
+            title: settingsStore.localized("home.pie.categoryTitle", defaultValue: "Bu Ay Kategori Dağılımı"),
+            systemImage: "tag.fill",
+            rows: categoryBreakdownRows,
+            emptyMessage: settingsStore.localized("home.pie.empty.category", defaultValue: "Bu ay kategori bazlı süre verisi yok.")
+        )
+
+        ProWorkDonutBreakdownCard(
+            title: settingsStore.localized("home.pie.customerTitle", defaultValue: "Bu Ay Müşteri Dağılımı"),
+            systemImage: "person.2.fill",
+            rows: customerBreakdownRows,
+            emptyMessage: settingsStore.localized("home.pie.empty.customer", defaultValue: "Bu ay müşteri bazlı süre verisi yok.")
+        )
+    }
+
     private var breakdownCharts: some View {
         ViewThatFits(in: .horizontal) {
             HStack(alignment: .top, spacing: ProWorkLayout.scaled(20, using: settingsStore)) {
-                ProWorkDonutBreakdownCard(
-                    title: settingsStore.localized("home.pie.categoryTitle", defaultValue: "Bu Ay Kategori Dağılımı"),
-                    systemImage: "tag.fill",
-                    rows: categoryBreakdownRows,
-                    emptyMessage: settingsStore.localized("home.pie.empty.category", defaultValue: "Bu ay kategori bazlı süre verisi yok.")
-                )
-
-                ProWorkDonutBreakdownCard(
-                    title: settingsStore.localized("home.pie.customerTitle", defaultValue: "Bu Ay Müşteri Dağılımı"),
-                    systemImage: "person.2.fill",
-                    rows: customerBreakdownRows,
-                    emptyMessage: settingsStore.localized("home.pie.empty.customer", defaultValue: "Bu ay müşteri bazlı süre verisi yok.")
-                )
+                breakdownCards
             }
 
             VStack(alignment: .leading, spacing: ProWorkLayout.scaled(20, using: settingsStore)) {
-                ProWorkDonutBreakdownCard(
-                    title: settingsStore.localized("home.pie.categoryTitle", defaultValue: "Bu Ay Kategori Dağılımı"),
-                    systemImage: "tag.fill",
-                    rows: categoryBreakdownRows,
-                    emptyMessage: settingsStore.localized("home.pie.empty.category", defaultValue: "Bu ay kategori bazlı süre verisi yok.")
-                )
-
-                ProWorkDonutBreakdownCard(
-                    title: settingsStore.localized("home.pie.customerTitle", defaultValue: "Bu Ay Müşteri Dağılımı"),
-                    systemImage: "person.2.fill",
-                    rows: customerBreakdownRows,
-                    emptyMessage: settingsStore.localized("home.pie.empty.customer", defaultValue: "Bu ay müşteri bazlı süre verisi yok.")
-                )
+                breakdownCards
             }
         }
     }
@@ -474,7 +495,7 @@ struct HomeView: View {
     private func ongoingTodoRow(_ todo: TodoListItem) -> some View {
         HStack(spacing: ProWorkLayout.scaled(10, using: settingsStore)) {
             Circle()
-                .fill(priorityColor(for: todo.priority))
+                .fill(ProWorkLabels.priorityColor(todo.priority))
                 .frame(width: 8, height: 8)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -502,7 +523,7 @@ struct HomeView: View {
             Spacer(minLength: 0)
 
             if let due = todo.dueDate {
-                let isOverdue = due < Calendar.current.startOfDay(for: nowTick)
+                let isOverdue = due < AppCalendar.istanbul.startOfDay(for: clockTicker.second)
                 Text(formatShortDate(due))
                     .proWorkTextStyle(.caption)
                     .foregroundStyle(isOverdue ? Color.red : .secondary)
@@ -513,18 +534,8 @@ struct HomeView: View {
         .padding(.vertical, ProWorkLayout.scaled(10, using: settingsStore))
     }
 
-    private func priorityColor(for priority: String) -> Color {
-        switch priority.lowercased() {
-        case "high", "urgent", "yuksek", "yüksek", "acil":
-            return .red
-        case "medium", "orta", "normal":
-            return .orange
-        case "low", "dusuk", "düşük":
-            return .green
-        default:
-            return .secondary
-        }
-    }
+    // Priority color mapping consolidated in
+    // ProWorkLabels.priorityColor; the local copy is removed.
 
     // MARK: - Recent sessions
 
@@ -638,7 +649,7 @@ struct HomeView: View {
     // MARK: - Derived data
 
     private var todaySessions: [WorkSessionListItem] {
-        let startOfDay = Calendar.current.startOfDay(for: nowTick)
+        let startOfDay = AppCalendar.istanbul.startOfDay(for: clockTicker.second)
         return viewModel.sessions.filter { $0.endedAt != nil && $0.startedAt >= startOfDay }
     }
 
@@ -651,7 +662,7 @@ struct HomeView: View {
     }
 
     private var weekStart: Date {
-        Calendar.current.dateInterval(of: .weekOfYear, for: nowTick)?.start ?? nowTick
+        AppCalendar.istanbul.dateInterval(of: .weekOfYear, for: clockTicker.second)?.start ?? clockTicker.second
     }
 
     private var weekTotalSeconds: Int {
@@ -677,7 +688,7 @@ struct HomeView: View {
     }
 
     private var overdueTodos: [TodoListItem] {
-        let startOfToday = Calendar.current.startOfDay(for: nowTick)
+        let startOfToday = AppCalendar.istanbul.startOfDay(for: clockTicker.second)
         return ongoingTodos.filter { todo in
             guard let due = todo.dueDate else { return false }
             return due < startOfToday
@@ -692,44 +703,33 @@ struct HomeView: View {
             .map { $0 }
     }
 
-    private struct DayBucket {
-        let date: Date
-        let seconds: Int
-    }
-
-    private var weeklyData: [DayBucket] {
-        let calendar = Calendar.current
-        let startOfToday = calendar.startOfDay(for: nowTick)
-        var buckets: [DayBucket] = []
-
-        for offset in (0..<7).reversed() {
-            guard let day = calendar.date(byAdding: .day, value: -offset, to: startOfToday) else { continue }
-            let nextDay = calendar.date(byAdding: .day, value: 1, to: day) ?? day
-            let total = viewModel.sessions
-                .filter { $0.endedAt != nil && $0.startedAt >= day && $0.startedAt < nextDay }
-                .reduce(0) { $0 + ($1.durationSeconds ?? 0) }
-            buckets.append(DayBucket(date: day, seconds: total))
-        }
-        return buckets
+    /// Previously this 7-day aggregation re-ran on every
+    /// clockTicker.second emission (≈60×/min), filtering all sessions for
+    /// each of the 7 buckets — O(7·N) work per tick. The output only
+    /// changes when sessions reload or the day rolls over, so route
+    /// through HomeViewModel's cached property which invalidates on
+    /// session changes; the day-rollover invalidation lives in the
+    /// view model's halfMinute observer.
+    private var weeklyData: [HomeWeeklyBucket] {
+        viewModel.weeklyData(reference: clockTicker.halfMinute)
     }
 
     private var last7DaysSeconds: Int {
         weeklyData.reduce(0) { $0 + $1.seconds }
     }
 
+    /// Routed through the view model's cached lookup so the
+    /// per-second tick doesn't rebuild a fresh Dictionary.
     private var todoLookup: [String: TodoListItem] {
-        Dictionary(uniqueKeysWithValues: viewModel.todos.map { ($0.id, $0) })
+        viewModel.todoLookup()
     }
 
+    /// Routed through the VM-cached month bucket. Using
+    /// `clockTicker.halfMinute` (instead of `second`) is sufficient
+    /// because the only state that affects month membership is the
+    /// month-end rollover, which the half-minute granularity catches.
     private var currentMonthSessions: [WorkSessionListItem] {
-        let calendar = Calendar.current
-        let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: nowTick)) ?? nowTick
-        let nextMonth = calendar.date(byAdding: .month, value: 1, to: monthStart) ?? nowTick
-        return viewModel.sessions.filter { session in
-            session.endedAt != nil &&
-            session.startedAt >= monthStart &&
-            session.startedAt < nextMonth
-        }
+        viewModel.currentMonthSessions(reference: clockTicker.halfMinute)
     }
 
     private var categoryBreakdownRows: [DonutBreakdownRow] {
@@ -752,31 +752,40 @@ struct HomeView: View {
     // MARK: - Date formatting helpers
 
     private func formatShortDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: settingsStore.settings.language.localeIdentifier)
-        formatter.dateFormat = "d MMM"
-        return formatter.string(from: date)
+        ProWorkFormatters
+            .cachedDateFormatter(
+                localeIdentifier: settingsStore.settings.language.localeIdentifier,
+                dateFormat: "d MMM"
+            )
+            .string(from: date)
     }
 
     private func formatRelativeStart(_ date: Date) -> String {
-        let calendar = Calendar.current
+        let localeId = settingsStore.settings.language.localeIdentifier
+        let calendar = AppCalendar.istanbul
         if calendar.isDateInToday(date) {
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: settingsStore.settings.language.localeIdentifier)
-            formatter.timeStyle = .short
+            let formatter = ProWorkFormatters.cachedDateFormatter(
+                localeIdentifier: localeId,
+                dateStyle: .none,
+                timeStyle: .short
+            )
             return String(format: settingsStore.localized("home.recent.today", defaultValue: "Bugün %@"), formatter.string(from: date))
         }
         if calendar.isDateInYesterday(date) {
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: settingsStore.settings.language.localeIdentifier)
-            formatter.timeStyle = .short
+            let formatter = ProWorkFormatters.cachedDateFormatter(
+                localeIdentifier: localeId,
+                dateStyle: .none,
+                timeStyle: .short
+            )
             return String(format: settingsStore.localized("home.recent.yesterday", defaultValue: "Dün %@"), formatter.string(from: date))
         }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: settingsStore.settings.language.localeIdentifier)
-        formatter.dateStyle = .short
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
+        return ProWorkFormatters
+            .cachedDateFormatter(
+                localeIdentifier: localeId,
+                dateStyle: .short,
+                timeStyle: .short
+            )
+            .string(from: date)
     }
 
 }

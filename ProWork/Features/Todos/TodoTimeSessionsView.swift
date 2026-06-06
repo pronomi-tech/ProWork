@@ -1,9 +1,6 @@
-//
 //  TodoTimeSessionsView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 import Combine
@@ -19,21 +16,16 @@ struct TodoTimeSessionsView: View {
     @State private var editingSession: WorkSessionListItem?
 
     @State private var confirmation: ProWorkConfirmation?
-    @State private var now: Date = Date()
 
-    private let timer = Timer.publish(
-        every: 30,
-        on: .main,
-        in: .common
-    ).autoconnect()
+    @EnvironmentObject private var clockTicker: ProWorkClockTicker
 
     var body: some View {
         ProWorkFormShell(
             title: todo.title,
             subtitle: settingsStore.localized("todoSessions.title", defaultValue: "Çalışmalar"),
             systemImage: "clock",
-            width: 760,
-            height: 620
+            width: FormSheetSize.todoTimeSessionsForm.width,
+            height: FormSheetSize.todoTimeSessionsForm.height
         ) {
             summary
             sessionTable
@@ -44,13 +36,12 @@ struct TodoTimeSessionsView: View {
         .onAppear {
             viewModel.load(todoId: todo.id)
         }
-        .onReceive(timer) { value in
-            guard viewModel.sessions.contains(where: { $0.endedAt == nil }) else {
-                return
-            }
-
-            now = value
-        }
+        // Previously mirrored clockTicker.halfMinute into
+        // a private @State `now`, gated by "has any open session". The copy
+        // wasn't necessary — reading clockTicker.halfMinute directly in
+        // elapsedSeconds gives the same reactivity without a stale-copy
+        // window and SwiftUI batches re-renders to whichever fields the
+        // body actually reads.
         .sheet(isPresented: $isShowingCreateForm) {
             WorkSessionFormView(
                 mode: .create,
@@ -157,30 +148,18 @@ struct TodoTimeSessionsView: View {
     }
 
     private var sessionTable: some View {
-        VStack(spacing: 0) {
-            tableHeader
-
-            Divider()
-
-            if viewModel.sessions.isEmpty {
-                emptyState
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(viewModel.sessions) { session in
-                            sessionRow(session)
-
-                            Divider()
-                        }
-                    }
-                }
-            }
-        }
-        .background(.background)
-        .clipShape(RoundedRectangle(cornerRadius: ProWorkLayout.scaled(12, using: settingsStore)))
-        .overlay(
-            RoundedRectangle(cornerRadius: ProWorkLayout.scaled(12, using: settingsStore))
-                .stroke(.quaternary, lineWidth: 1)
+        ProWorkGrid(
+            items: viewModel.sessions,
+            cornerRadius: ProWorkLayout.scaled(12, using: settingsStore),
+            header: { tableHeader },
+            emptyContent: {
+                ProWorkGridEmptyState(
+                    systemImage: "clock",
+                    title: settingsStore.localized("todoSessions.empty.title", defaultValue: "Henüz çalışma kaydı yok"),
+                    message: settingsStore.localized("todoSessions.empty.message", defaultValue: "Kartı çalıştırdığınızda veya manuel çalışma eklediğinizde kayıtlar burada görünecek.")
+                )
+            },
+            row: { session in sessionRow(session) }
         )
     }
 
@@ -201,8 +180,7 @@ struct TodoTimeSessionsView: View {
             Text(settingsStore.localized("vat.form.note", defaultValue: "Not"))
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            Text("")
-                .frame(width: ProWorkLayout.scaled(84, using: settingsStore), alignment: .trailing)
+            Color.gridHeaderSpacer(width: ProWorkLayout.scaled(84, using: settingsStore))
         }
         .proWorkTextStyle(.caption)
         .foregroundStyle(.secondary)
@@ -288,25 +266,8 @@ struct TodoTimeSessionsView: View {
                 .background(.orange.opacity(0.16))
                 .clipShape(Capsule())
         } else {
-            Text("")
+            Color.clear
         }
-    }
-
-    private var emptyState: some View {
-        VStack(spacing: ProWorkLayout.scaled(10, using: settingsStore)) {
-            Image(systemName: "clock")
-                .proWorkFont(size: 32)
-                .foregroundStyle(.secondary)
-
-            Text(settingsStore.localized("todoSessions.empty.title", defaultValue: "Henüz çalışma kaydı yok"))
-                .proWorkTextStyle(.headline)
-
-            Text(settingsStore.localized("todoSessions.empty.message", defaultValue: "Kartı çalıştırdığınızda veya manuel çalışma eklediğinizde kayıtlar burada görünecek."))
-                .proWorkTextStyle(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity, minHeight: ProWorkLayout.scaled(260, using: settingsStore))
     }
 
     private var footer: some View {
@@ -349,9 +310,10 @@ struct TodoTimeSessionsView: View {
         }
     }
 
-    private var hasActiveSession: Bool {
-        viewModel.sessions.contains { $0.endedAt == nil }
-    }
+    // Removed unused `hasActiveSession` computed var. The
+    // last call site was deleted in an earlier UI sweep but the
+    // helper was left orphaned; deleting now so future readers don't
+    // wonder which row gate it used to drive.
 
     private var totalSessionSeconds: Int {
         viewModel.sessions.reduce(0) { total, session in
@@ -368,7 +330,7 @@ struct TodoTimeSessionsView: View {
             return 0
         }
 
-        return max(0, Int(now.timeIntervalSince(session.startedAt)))
+        return max(0, Int(clockTicker.halfMinute.timeIntervalSince(session.startedAt)))
     }
 
     private func endDateText(_ session: TodoTimeSession) -> String {

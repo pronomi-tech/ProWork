@@ -1,11 +1,7 @@
-//
 //  ReportsView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
-//  Raporlama wrapper'ı. Üstte sekme seçimi, altında ilgili rapor ekranı.
-//
+//  Reporting wrapper. Tab selection on top, the corresponding report screen below.
 
 import SwiftUI
 
@@ -61,17 +57,24 @@ struct ReportsView: View {
         .buttonStyle(.plain)
     }
 
+    /// Same pattern. Keep all four report children
+    /// alive in a ZStack so their @StateObject VMs aren't torn down
+    /// on every tab switch (date range + filter selections survive).
     @ViewBuilder
     private var content: some View {
-        switch selectedTab {
-        case .dashboard:
+        ZStack {
             ReportsDashboardView()
-        case .customer:
+                .opacity(selectedTab == .dashboard ? 1 : 0)
+                .allowsHitTesting(selectedTab == .dashboard)
             CustomerReportView()
-        case .project:
+                .opacity(selectedTab == .customer ? 1 : 0)
+                .allowsHitTesting(selectedTab == .customer)
             ProjectReportView()
-        case .todo:
+                .opacity(selectedTab == .project ? 1 : 0)
+                .allowsHitTesting(selectedTab == .project)
             TodoReportView()
+                .opacity(selectedTab == .todo ? 1 : 0)
+                .allowsHitTesting(selectedTab == .todo)
         }
     }
 }

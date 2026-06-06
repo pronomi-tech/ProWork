@@ -1,14 +1,11 @@
-//
 //  BuiltInUserId.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 
-/// Yerleşik kullanıcı sabit ID'leri.
-/// Auth devreye girene kadar tüm createdBy/updatedBy alanları default Owner'a yazar.
+/// Built-in user constant IDs.
+/// Until auth is wired up, all createdBy/updatedBy fields point to the default Owner.
 enum BuiltInUserId {
     nonisolated static let defaultOwner = "user_default_owner"
 }

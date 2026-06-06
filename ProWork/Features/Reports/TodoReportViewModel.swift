@@ -1,9 +1,6 @@
-//
 //  TodoReportViewModel.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Combine
 import Foundation
@@ -17,6 +14,10 @@ final class TodoReportViewModel: ObservableObject {
 
     private let customerRepository: CustomerRepository
     private let computation: BillingComputationService
+
+    /// Debounce so computePeriod isn't fired on every drag/keystroke.
+    private var pendingComputeTask: Task<Void, Never>?
+    private let debounceInterval: UInt64 = 300_000_000
 
     init(
         services: AppServices = .shared,
@@ -35,6 +36,25 @@ final class TodoReportViewModel: ObservableObject {
     }
 
     func compute(
+        period: DateRangeFilter,
+        customStart: Date,
+        customEnd: Date,
+        customerFilter: String
+    ) {
+        pendingComputeTask?.cancel()
+        pendingComputeTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: self?.debounceInterval ?? 300_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.performCompute(
+                period: period,
+                customStart: customStart,
+                customEnd: customEnd,
+                customerFilter: customerFilter
+            )
+        }
+    }
+
+    private func performCompute(
         period: DateRangeFilter,
         customStart: Date,
         customEnd: Date,

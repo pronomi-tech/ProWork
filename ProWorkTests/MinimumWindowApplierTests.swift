@@ -1,10 +1,7 @@
-//
 //  MinimumWindowApplierTests.swift
 //  ProWorkTests
-//
 //  Spec §4 — minimum ücretlendirme penceresi.
 //  Spec'te verilen üç vaka (10dk/61dk/130dk) birebir testlenir.
-//
 
 import XCTest
 @testable import ProWork

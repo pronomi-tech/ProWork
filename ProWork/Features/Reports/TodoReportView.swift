@@ -1,12 +1,8 @@
-//
 //  TodoReportView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
-//  Spec §13 — Her yapılacak iş için süre + tutar kırılımı.
-//  Manuel kayıtlar (§14) görünür şekilde işaretlenir.
-//
+//  Spec §13 — Duration + amount breakdown per todo item.
+//  Manual entries (§14) are flagged visibly.
 
 import SwiftUI
 
@@ -16,7 +12,7 @@ struct TodoReportView: View {
 
     @State private var customerFilter: String = ""
     @State private var period: DateRangeFilter = .thisMonth
-    @State private var customStart: Date = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: Date())) ?? Date()
+    @State private var customStart: Date = AppCalendar.istanbul.date(from: AppCalendar.istanbul.dateComponents([.year, .month], from: Date())) ?? Date()
     @State private var customEnd: Date = Date()
     @State private var manualOnly: Bool = false
 

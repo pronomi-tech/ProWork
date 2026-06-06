@@ -1,9 +1,6 @@
-//
 //  PriceListRowsEditView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import AppKit
 import SwiftUI
@@ -33,6 +30,7 @@ struct PriceListRowsEditView: View {
             systemImage: "list.bullet.rectangle.portrait",
             width: 880,
             height: 640,
+            contentScrollBehavior: .fixed,
             headerTrailing: {
                 HStack(spacing: 10) {
                     Button {
@@ -56,11 +54,7 @@ struct PriceListRowsEditView: View {
             }
         ) {
             VStack(alignment: .leading, spacing: 12) {
-                if viewModel.rows.isEmpty {
-                    emptyState
-                } else {
-                    rowsTable
-                }
+                rowsTable
             }
         } footer: {
             SettingsFormSingleFooter(onPrimary: { dismiss() }, title: settingsStore.localized("common.close", defaultValue: "Kapat"), systemImage: "xmark")
@@ -95,7 +89,7 @@ struct PriceListRowsEditView: View {
         }
         .proWorkConfirmationDialog($confirmation)
         .sheet(isPresented: $isShowingQuoteRecipientSheet) {
-            let year = Calendar.current.component(.year, from: Date())
+            let year = AppCalendar.istanbul.component(.year, from: Date())
             let nextSequence = settingsStore.peekNextQuoteSequence(year: year)
             let prefix = settingsStore.settings.priceListQuoteTemplateSettings.quoteNumberPrefix
             let suggestedQuoteNumber = PriceListQuoteNumberFormatter.format(
@@ -125,39 +119,19 @@ struct PriceListRowsEditView: View {
         }
     }
 
-    private var emptyState: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "tablecells")
-                .proWorkFont(size: 28)
-                .foregroundStyle(.secondary)
-            Text(settingsStore.localized("priceLists.rows.empty.title", defaultValue: "Bu listede henüz satır yok"))
-                .proWorkTextStyle(.headline)
-            Text(settingsStore.localized("priceLists.rows.empty.message", defaultValue: "Sağ üstten yeni fiyat satırı ekleyin."))
-                .proWorkTextStyle(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .proWorkFrame(minHeight: 240, maxWidth: .infinity)
-    }
-
     private var rowsTable: some View {
-        VStack(spacing: 0) {
-            tableHeader
-            Divider()
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(viewModel.rows) { row in
-                        rowView(row)
-                        Divider()
-                    }
-                }
-            }
-        }
-        .background(.background)
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(.quaternary, lineWidth: 1)
+        ProWorkGrid(
+            items: viewModel.rows,
+            header: { tableHeader },
+            emptyContent: {
+                ProWorkGridEmptyState(
+                    systemImage: "tablecells",
+                    title: settingsStore.localized("priceLists.rows.empty.title", defaultValue: "Bu listede henüz satır yok"),
+                    message: settingsStore.localized("priceLists.rows.empty.message", defaultValue: "Sağ üstten yeni fiyat satırı ekleyin.")
+                )
+            },
+            row: { row in rowView(row) }
         )
-        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
     private var tableHeader: some View {
@@ -166,8 +140,8 @@ struct PriceListRowsEditView: View {
             Text(settingsStore.localized("priceLists.rows.column.timeType", defaultValue: "Zaman Tipi")).frame(width: 130, alignment: .leading)
             Text(settingsStore.localized("priceLists.rows.column.category", defaultValue: "Kategori")).frame(maxWidth: .infinity, alignment: .leading)
             Text(settingsStore.localized("priceLists.rows.column.unitPrice", defaultValue: "Birim Ücret")).frame(width: 160, alignment: .trailing)
-            Text(settingsStore.localized("priceLists.column.active", defaultValue: "Aktif")).frame(width: 60, alignment: .center)
-            Text("").frame(width: 80)
+            Text(settingsStore.localized("priceLists.column.active", defaultValue: "Aktif")).frame(width: 90, alignment: .leading)
+            Color.gridHeaderSpacer(width: 80)
         }
         .proWorkTextStyle(.caption)
         .foregroundStyle(.secondary)
@@ -202,9 +176,8 @@ struct PriceListRowsEditView: View {
                 .proWorkTextStyle(.callout, weight: .medium)
                 .frame(width: 160, alignment: .trailing)
 
-            Image(systemName: row.isActive ? "checkmark.circle.fill" : "xmark.circle")
-                .foregroundStyle(row.isActive ? .green : .secondary)
-                .frame(width: 60, alignment: .center)
+            ProWorkActivityBadge(isActive: row.isActive)
+                .frame(width: 90, alignment: .leading)
 
             HStack(spacing: 6) {
                 Button {
@@ -265,7 +238,7 @@ struct PriceListRowsEditView: View {
             )
 
             if result.sequenceConsumed {
-                let year = Calendar.current.component(.year, from: result.issueDate)
+                let year = AppCalendar.istanbul.component(.year, from: result.issueDate)
                 _ = settingsStore.consumeNextQuoteSequence(year: year)
             }
 
@@ -281,11 +254,11 @@ struct PriceListRowsEditView: View {
                         data: data
                     )
                 } catch {
-                    viewModel.errorMessage = error.localizedDescription
+                    viewModel.reportError(error.localizedDescription)
                 }
             }
         } catch {
-            viewModel.errorMessage = error.localizedDescription
+            viewModel.reportError(error.localizedDescription)
         }
     }
 
@@ -301,17 +274,22 @@ struct PriceListRowsEditView: View {
         do {
             try data.write(to: url)
         } catch {
-            viewModel.errorMessage = error.localizedDescription
+            viewModel.reportError(error.localizedDescription)
         }
     }
 
     private func formattedHourlyRate(_ value: Money) -> String {
-        let formatter = NumberFormatter()
+        // Cached per (locale, decimalPlaces). Grouping
+        // separator stays on; we mutate the cached formatter only at
+        // the field that genuinely varies per row (`decimalPlaces`)
+        // which is keyed in the cache descriptor, so two currencies
+        // never share one entry.
         let info = Currency.info(for: value.currency)
-        formatter.locale = settingsStore.locale
-        formatter.numberStyle = .decimal
-        formatter.minimumFractionDigits = info.decimalPlaces
-        formatter.maximumFractionDigits = info.decimalPlaces
+        let formatter = ProWorkFormatters.cachedDecimalFormatter(
+            localeIdentifier: settingsStore.locale.identifier,
+            minimumFractionDigits: info.decimalPlaces,
+            maximumFractionDigits: info.decimalPlaces
+        )
         formatter.usesGroupingSeparator = true
 
         let number = NSDecimalNumber(decimal: value.amount)

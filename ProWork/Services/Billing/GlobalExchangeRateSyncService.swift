@@ -1,11 +1,9 @@
-//
 //  GlobalExchangeRateSyncService.swift
 //  ProWork
-//
 //  Created by Pronomi
-//
 
 import Foundation
+import os
 
 private let globalDefaultCurrencyCodes = Currency.allCodes
 
@@ -55,16 +53,17 @@ final class GlobalExchangeRateSyncService {
     private let userId: String
     private let session: URLSession
 
-    /// Frankfurter ECB referans kurları üzerinden çalışır; ECB hafta sonu /
-    /// resmi tatil yayımlamaz. Bir önceki yayımlanan günün kurunu en fazla
-    /// 7 gün geriye doğru arayarak "ileri taşıyoruz".
-    private static let carryForwardLookbackDays = 7
+    /// Y12 parallel-sync guard: while one sync is active, a second call
+    /// awaits the same Task instead of starting a new one.
+    private var activeSyncTask: Task<TCMBExchangeRateSyncResult, Error>?
 
-    private static let retryDelaysNanoseconds: [UInt64] = [
-        1_000_000_000,
-        2_000_000_000,
-        4_000_000_000
-    ]
+    /// Uses Frankfurter ECB reference rates; the ECB does not publish on
+    /// weekends or public holidays. We "carry forward" the most recently
+    /// published day's rate by searching up to 7 days backwards.
+    private static let carryForwardLookbackDays = BillingDefaults.exchangeRateCarryForwardDays
+
+    // (DRY): retry policy and URLSession defaults are now
+    // shared with TCMBExchangeRateSyncService via ExchangeRateSyncSupport.
 
     init(
         repository: ExchangeRateRepository? = nil,
@@ -75,14 +74,7 @@ final class GlobalExchangeRateSyncService {
         self.repository = repository ?? ExchangeRateRepository()
         self.organizationId = organizationId ?? BuiltInOrganizationId.default
         self.userId = userId ?? BuiltInUserId.defaultOwner
-        if let session {
-            self.session = session
-        } else {
-            let configuration = URLSessionConfiguration.default
-            configuration.timeoutIntervalForRequest = 15
-            configuration.timeoutIntervalForResource = 30
-            self.session = URLSession(configuration: configuration)
-        }
+        self.session = session ?? ExchangeRateSyncSupport.makeDefaultSession()
     }
 
     func sync(day: Date, currencies: [String]? = nil) async throws -> TCMBExchangeRateSyncResult {
@@ -94,8 +86,40 @@ final class GlobalExchangeRateSyncService {
         to endDate: Date,
         currencies: [String]? = nil
     ) async throws -> TCMBExchangeRateSyncResult {
-        let normalizedStart = Calendar.current.startOfDay(for: startDate)
-        let normalizedEnd = Calendar.current.startOfDay(for: endDate)
+        if let active = activeSyncTask {
+            return try await active.value
+        }
+        let task = Task<TCMBExchangeRateSyncResult, Error> { [weak self] in
+            // See TCMBExchangeRateSyncService — clearing
+            // activeSyncTask from inside the task's defer raced against the
+            // outer awaiter. Cleanup is now done in the caller after
+            // task.value resolves with an identity guard.
+            return try await self?.performSync(
+                from: startDate,
+                to: endDate,
+                currencies: currencies
+            ) ?? TCMBExchangeRateSyncResult(importedRateCount: 0, importedDayCount: 0, skippedDates: [])
+        }
+        activeSyncTask = task
+        defer {
+            // Task is a value type but its hashable identity comes from the
+            // underlying task handle. Compare via `==` against the captured
+            // task; if the slot was overwritten by a fresher caller we
+            // leave it alone.
+            if activeSyncTask == task {
+                activeSyncTask = nil
+            }
+        }
+        return try await task.value
+    }
+
+    private func performSync(
+        from startDate: Date,
+        to endDate: Date,
+        currencies: [String]?
+    ) async throws -> TCMBExchangeRateSyncResult {
+        let normalizedStart = AppCalendar.istanbul.startOfDay(for: startDate)
+        let normalizedEnd = AppCalendar.istanbul.startOfDay(for: endDate)
         guard normalizedStart <= normalizedEnd else {
             throw GlobalExchangeRateSyncError.invalidDateRange
         }
@@ -129,7 +153,7 @@ final class GlobalExchangeRateSyncService {
                 skippedDates.append(dayString)
             }
 
-            cursor = Calendar.current.date(byAdding: .day, value: 1, to: cursor) ?? normalizedEnd.addingTimeInterval(1)
+            cursor = AppCalendar.istanbul.date(byAdding: .day, value: 1, to: cursor) ?? normalizedEnd.addingTimeInterval(1)
         }
 
         return TCMBExchangeRateSyncResult(
@@ -147,12 +171,12 @@ final class GlobalExchangeRateSyncService {
             let rates = try await fetchPublishedTRYRates(for: date, currencies: currencies)
             return (rates, nil)
         } catch GlobalExchangeRateSyncError.ratesNotPublished {
-            // ECB tatil/hafta sonu — geriye doğru en yakın yayımlanmış gün.
+            // ECB holiday / weekend — walk backwards to the nearest published day.
         }
 
         var probe = date
         for _ in 1...Self.carryForwardLookbackDays {
-            guard let previous = Calendar.current.date(byAdding: .day, value: -1, to: probe) else {
+            guard let previous = AppCalendar.istanbul.date(byAdding: .day, value: -1, to: probe) else {
                 break
             }
             probe = previous
@@ -210,10 +234,9 @@ final class GlobalExchangeRateSyncService {
             throw GlobalExchangeRateSyncError.requestFailed(statusCode: httpResponse.statusCode, date: requestedDay)
         }
 
-        let decoder = JSONDecoder()
         let payload: FrankfurterRatesPayload
         do {
-            payload = try decoder.decode(FrankfurterRatesPayload.self, from: data)
+            payload = try FrankfurterRatesPayload.decode(from: data)
         } catch {
             throw GlobalExchangeRateSyncError.parseFailed(date: requestedDay)
         }
@@ -298,34 +321,13 @@ final class GlobalExchangeRateSyncService {
         }
     }
 
+    /// (DRY): retry/backoff implementation is now shared
+    /// with TCMBExchangeRateSyncService via ExchangeRateSyncSupport so
+    /// both sources honour the same 5xx handling and URLError classifier.
+    /// As a side-effect Global now also retries on transient 5xx upstream
+    /// responses (previously it skipped them).
     private func fetchWithRetry(url: URL) async throws -> (Data, URLResponse) {
-        var attempt = 0
-        while true {
-            do {
-                return try await session.data(from: url)
-            } catch {
-                attempt += 1
-                guard attempt <= Self.retryDelaysNanoseconds.count,
-                      Self.shouldRetry(error: error) else {
-                    throw error
-                }
-                try? await Task.sleep(nanoseconds: Self.retryDelaysNanoseconds[attempt - 1])
-            }
-        }
-    }
-
-    private static func shouldRetry(error: Error) -> Bool {
-        guard let urlError = error as? URLError else { return false }
-        switch urlError.code {
-        case .timedOut,
-             .networkConnectionLost,
-             .cannotConnectToHost,
-             .dnsLookupFailed,
-             .notConnectedToInternet:
-            return true
-        default:
-            return false
-        }
+        try await ExchangeRateSyncSupport.fetchWithRetry(url: url, session: session)
     }
 
     private func makeURLs(for date: Date) -> [URL] {
@@ -340,7 +342,7 @@ final class GlobalExchangeRateSyncService {
 
         var urls = components.url.map { [$0] } ?? []
 
-        if Calendar.current.isDate(date, inSameDayAs: Date()) {
+        if AppCalendar.istanbul.isDate(date, inSameDayAs: Date()) {
             var latest = URLComponents()
             latest.scheme = "https"
             latest.host = "api.frankfurter.dev"
@@ -375,7 +377,57 @@ final class GlobalExchangeRateSyncService {
 
 }
 
-private struct FrankfurterRatesPayload: Decodable {
+struct FrankfurterRatesPayload {
     let date: String
     let rates: [String: Decimal]
+
+    /// Parses the Frankfurter response while preserving full `Decimal`
+    /// precision. `JSONDecoder` decodes JSON numbers through `Double`, so
+    /// `0.0234` would round-trip into `0.02339999…`. Going through
+    /// `JSONSerialization` + `NSNumber.stringValue` gives us the canonical
+    /// shortest round-trippable text, and `Decimal(string:)` reconstructs
+    /// it without ever crossing `Double`.
+    static func decode(from data: Data) throws -> FrankfurterRatesPayload {
+        guard let root = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else {
+            throw GlobalExchangeRateSyncError.invalidResponse
+        }
+        guard let date = root["date"] as? String else {
+            throw GlobalExchangeRateSyncError.invalidResponse
+        }
+        guard let rawRates = root["rates"] as? [String: Any] else {
+            throw GlobalExchangeRateSyncError.invalidResponse
+        }
+
+        let posix = Locale(identifier: "en_US_POSIX")
+        var rates: [String: Decimal] = [:]
+        rates.reserveCapacity(rawRates.count)
+
+        for (code, value) in rawRates {
+            let text: String
+            if let n = value as? NSNumber {
+                text = n.stringValue
+            } else if let s = value as? String {
+                text = s
+            } else {
+                // Surface non-numeric / non-string entries so a
+                // payload shape change (e.g. provider switching to a
+                // nested object per currency) is debuggable instead of
+                // silently dropping the affected codes.
+                let typeName = String(describing: type(of: value))
+                ProWorkLog.billing.debug(
+                    "FrankfurterRatesPayload: skipping non-numeric/non-string entry code=\(code, privacy: .public) type=\(typeName, privacy: .public)"
+                )
+                continue
+            }
+            if let decimal = Decimal(string: text, locale: posix) {
+                rates[code] = decimal
+            } else {
+                ProWorkLog.billing.debug(
+                    "FrankfurterRatesPayload: unparseable decimal for code=\(code, privacy: .public) text=\(text, privacy: .public)"
+                )
+            }
+        }
+
+        return FrankfurterRatesPayload(date: date, rates: rates)
+    }
 }

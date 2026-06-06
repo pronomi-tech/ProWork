@@ -2,6 +2,29 @@
 
 Bu klasör fiyatlandırma servislerinin XCTest testlerini içerir.
 
+## UI bileşeni testleri — durum (code review LOW)
+
+- `ProWorkNumberFieldSanitizeTests` — sayısal input sanitizer için pure
+  unit testler (locale ayrımı, fraction clamp, thousands separator
+  düşürme, çoklu separator). Sanitize fonksiyonu `ProWorkNumberField`
+  içinde static helper olarak yeniden yapılandırıldı.
+- `ProWorkToastStoreTests` — toast queue için unit testler (trim, boş
+  mesaj atma, append sırası, dismiss, style ayrımı).
+- **`ProWorkTextField`, `ProWorkCheckbox`, `ProWorkDateField`** — bu
+  bileşenler saf SwiftUI view yapıları; mantık taşımıyor. Anlamlı bir
+  birim test üretmek için ya snapshot testing (pointfree-st/SnapshotTesting)
+  ya da ViewInspector eklenmesi gerekiyor. Her ikisi de eksternal
+  dependency gerektiriyor; ayrı bir test infrastructure görevi olarak
+  takip edilmeli.
+
+> **Code review D40 — açık:** Xcode projesinde `ProWorkTests` adında bir
+> target oluşturuldu (build config'leri mevcut) ancak bu klasördeki test
+> dosyaları henüz target üyeliğine eklenmedi. Yeni eklenen
+> `EdgeCaseTests.swift` ve `ExchangeRateOperationalRateTests.swift` da
+> dahil tüm dosyalar için Xcode tarafından bir kez **Add Files to
+> ProWorkTests** + target membership tikinin atılması gerekir. Aksi halde
+> `xcodebuild test` komutu hiçbir dosyayı koşturmaz.
+
 ## Test target'ı bağlama
 
 Henüz Xcode projesinde test target yok. Eklemek için:

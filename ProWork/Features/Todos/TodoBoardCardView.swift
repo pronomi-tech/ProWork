@@ -1,15 +1,13 @@
-//
 //  TodoBoardCardView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 import Combine
 
 struct TodoBoardCardView: View {
     @EnvironmentObject private var settingsStore: AppSettingsStore
+    @EnvironmentObject private var clockTicker: ProWorkClockTicker
 
     let todo: TodoListItem
     let onEdit: () -> Void
@@ -18,14 +16,13 @@ struct TodoBoardCardView: View {
     let onStopWork: () -> Void
     let onDelete: () -> Void
 
-    @State private var now: Date = Date()
+    // Read `clockTicker.halfMinute` directly
+    // instead of mirroring it into a `@State now`. The mirror added a
+    // second source of truth and forced every onReceive tick to mutate
+    // state on *idle* cards too. Reading the published value gives us
+    // automatic dependency tracking: only running cards (the ones that
+    // actually display elapsed seconds) participate in the redraw.
     @State private var isShowingActions = false
-
-    private let timer = Timer.publish(
-        every: 30,
-        on: .main,
-        in: .common
-    ).autoconnect()
 
     var body: some View {
         VStack(alignment: .leading, spacing: ProWorkLayout.scaled(8, using: settingsStore)) {
@@ -64,13 +61,6 @@ struct TodoBoardCardView: View {
             radius: isRunning ? 12 : 0,
             y: isRunning ? 4 : 0
         )
-        .onReceive(timer) { value in
-            guard isRunning else {
-                return
-            }
-
-            now = value
-        }
     }
 
     private var header: some View {
@@ -303,9 +293,11 @@ struct TodoBoardCardView: View {
             return todo.totalTrackedSeconds
         }
 
+        // Reading `clockTicker.halfMinute` here gives SwiftUI a
+        // dependency on the ticker, so only running cards re-render.
         let activeSeconds = max(
             0,
-            Int(now.timeIntervalSince(activeSessionStartedAt))
+            Int(clockTicker.halfMinute.timeIntervalSince(activeSessionStartedAt))
         )
 
         return todo.totalTrackedSeconds + activeSeconds

@@ -1,9 +1,6 @@
-//
 //  TodoStatus.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 
@@ -57,7 +54,7 @@ struct TodoStatus: Identifiable, Hashable {
         rowVersion: Int = 0,
         syncStatus: SyncStatus = .local,
         lastSyncedAt: Date? = nil,
-        originDeviceId: String? = nil
+        originDeviceId: String? = DeviceIdentity.current
     ) {
         self.id = id
         self.systemKey = systemKey

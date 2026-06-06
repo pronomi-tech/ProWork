@@ -1,29 +1,24 @@
-//
 //  ProWorkLog.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
-//  Uygulama genelinde paylaşılan os.Logger örnekleri.
-//  Önceki `print(...)` çağrıları finansal bir uygulamada problemliydi:
-//    - PII (kullanıcı dizini, hata mesajındaki müşteri adı vb.) düz string
-//      olarak Console.app'a düşüyordu.
-//    - Production'da bile output kapatılmıyordu.
-//    - Audit / debug için kategori bazlı filtreleme yapılamıyordu.
-//
-//  `Logger` kullanarak:
-//    - `privacy: .private` ile hassas alanlar maskelenir.
-//    - Console.app'ta `subsystem` + `category` ile filtre yapılır.
-//    - Release build'de varsayılan log seviyesi optimize edilir.
-//
+//  Shared os.Logger instances used across the app.
+//  The previous `print(...)` calls were problematic for a financial app:
+//    - PII (user path, customer name embedded in error messages, etc.)
+//      hit Console.app as plain strings.
+//    - Output wasn't disabled even in production builds.
+//    - Audit/debug filtering by category wasn't possible.
+//  With `Logger`:
+//    - `privacy: .private` redacts sensitive fields.
+//    - Console.app can filter by `subsystem` + `category`.
+//    - Default log level is optimised in release builds.
 
 import Foundation
 import os
 
-// Proje SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor olduğundan enum üyelerini
-// açıkça `nonisolated` işaretliyoruz. Aksi halde `Task.detached`, repository
-// thread'leri ve diğer nonisolated bağlamlardan log atılamıyor (Swift 6 hatası).
-// `os.Logger` Sendable olduğu için her bağlamdan güvenli.
+// The project uses SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor, so we mark
+// the enum members `nonisolated` explicitly. Otherwise `Task.detached`,
+// repository threads, and other nonisolated contexts can't log (Swift 6 error).
+// `os.Logger` is Sendable, so it's safe from any context.
 enum ProWorkLog {
     nonisolated static let subsystem = "com.pronomi.prowork"
 

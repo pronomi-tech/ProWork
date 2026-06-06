@@ -1,9 +1,6 @@
-//
 //  TaskCategoryRowView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 

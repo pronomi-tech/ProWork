@@ -1,9 +1,10 @@
-//
-//  Untitled.swift
+//  Migration001InitialSchema.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
+//  Initial schema. Tables, indexes and seed data for an empty database.
+//  Schema logic is frozen — changes go into subsequent Migration00N
+//  files (the migrator is forward-only).
+
 import Foundation
 
 struct Migration001InitialSchema: Migration {
@@ -574,9 +575,9 @@ struct Migration001InitialSchema: Migration {
 
 private extension Migration001InitialSchema {
     func applyBillingAndMultiTenantSchema(_ database: AppDatabase) throws {
-        // Transaction sarmalama orkestratör (DatabaseMigrator) tarafından yapılıyor;
-        // burada nested BEGIN/COMMIT açmıyoruz (SQLite nested transaction'ı
-        // desteklemez).
+        // Transaction wrapping is handled by the orchestrator (DatabaseMigrator);
+        // we don't open a nested BEGIN/COMMIT here (SQLite doesn't
+        // support nested transactions).
         try createUsersTable(database)
         try createOrganizationsTable(database)
 
@@ -1333,29 +1334,34 @@ private extension Migration001InitialSchema {
     func seedTurkishHolidays(_ database: AppDatabase) throws {
         let now = DateFormatter.proWorkSQLite.string(from: Date())
 
-        for (date, name, isHalfDay, cutoff) in Self.turkishHolidaySeed {
-            let id = "holiday_tr_\(date)_\(stableSlug(name))"
+        // previously this prepared / stepped / finalized
+        // a fresh statement per holiday row; for ~100 seed rows that's
+        // 100 prepare+finalize cycles inside the migration's transaction.
+        // Use the AppDatabase.executeBatch helper so the statement is
+        // prepared once and reset between rows.
+        let sql = """
+        INSERT OR IGNORE INTO holidays (
+            id, organizationId, scope, customerId,
+            date, name, isHalfDay, halfDayCutoff, isActive,
+            createdByUserId, updatedByUserId,
+            createdAt, updatedAt, rowVersion, syncStatus
+        )
+        VALUES (?, ?, 'global', NULL, ?, ?, ?, ?, 1, ?, ?, ?, ?, 0, 'local');
+        """
 
-            try database.execute("""
-            INSERT OR IGNORE INTO holidays (
-                id, organizationId, scope, customerId,
-                date, name, isHalfDay, halfDayCutoff, isActive,
-                createdByUserId, updatedByUserId,
-                createdAt, updatedAt, rowVersion, syncStatus
-            )
-            VALUES (?, ?, 'global', NULL, ?, ?, ?, ?, 1, ?, ?, ?, ?, 0, 'local');
-            """) { statement in
-                statement.bindText(id, at: 1)
-                statement.bindText(BuiltInOrganizationId.default, at: 2)
-                statement.bindText(date, at: 3)
-                statement.bindText(name, at: 4)
-                statement.bindInt(isHalfDay ? 1 : 0, at: 5)
-                statement.bindText(cutoff, at: 6)
-                statement.bindText(BuiltInUserId.defaultOwner, at: 7)
-                statement.bindText(BuiltInUserId.defaultOwner, at: 8)
-                statement.bindText(now, at: 9)
-                statement.bindText(now, at: 10)
-            }
+        try database.executeBatch(sql, items: Self.turkishHolidaySeed) { statement, row in
+            let (date, name, isHalfDay, cutoff) = row
+            let id = "holiday_tr_\(date)_\(stableSlug(name))"
+            statement.bindText(id, at: 1)
+            statement.bindText(BuiltInOrganizationId.default, at: 2)
+            statement.bindText(date, at: 3)
+            statement.bindText(name, at: 4)
+            statement.bindInt(isHalfDay ? 1 : 0, at: 5)
+            statement.bindText(cutoff, at: 6)
+            statement.bindText(BuiltInUserId.defaultOwner, at: 7)
+            statement.bindText(BuiltInUserId.defaultOwner, at: 8)
+            statement.bindText(now, at: 9)
+            statement.bindText(now, at: 10)
         }
     }
 

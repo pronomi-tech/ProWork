@@ -1125,7 +1125,7 @@
 "pdf.column.no" = "No";
 "pdf.column.serviceDescription" = "Hizmet / İş Tanımı";
 "pdf.column.unitPrice" = "Birim Fiyat";
-"pdf.summary.vatRate" = "KDV (%%%@)";
+"pdf.summary.vatRate" = "KDV (%@)";
 "pdf.summary.vatExempt" = "KDV (Muaf)";
 "pdf.summary.collected" = "Tahsil Edilen";
 "pdf.summary.balance" = "Kalan Bakiye";

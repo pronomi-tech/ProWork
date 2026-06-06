@@ -1,22 +1,17 @@
-//
 //  TimeWindowSplitter.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
-//  Spec §5 — Çalışma süresini zaman tiplerine böler.
-//  Bir oturum mesai içi, mesai dışı, hafta sonu ve tatil dilimlerine ayrılabilir.
-//
-//  Örnek:
-//      Çalışma: 17:30–19:15, Mesai: 09:00–18:00
-//      Sonuç: [17:30–18:00 → regular], [18:00–19:15 → afterHours]
-//
-//  Algoritma: olay-tabanlı (event-driven). Şu sınırlarda parçalar:
-//    - Gece yarısı (gün değişimi)
-//    - Mesai başlangıcı / bitişi
-//    - Tatil günü başlangıcı (00:00)
-//    - Yarım gün tatil cutoff saati
-//
+//  Spec §5 — Splits a work duration by time type.
+//  A session can be split across regular hours, after-hours, weekend
+//  and holiday slices.
+//  Example:
+//      Work: 17:30–19:15, Working hours: 09:00–18:00
+//      Result: [17:30–18:00 → regular], [18:00–19:15 → afterHours]
+//  Algorithm: event-driven. Splits at the following boundaries:
+//    - Midnight (day change)
+//    - Working-hours start / end
+//    - Holiday day start (00:00)
+//    - Half-day holiday cutoff time
 
 import Foundation
 
@@ -29,7 +24,7 @@ struct TimeSegment: Hashable {
         Int(end.timeIntervalSince(start))
     }
 
-    /// Yukarı yuvarlanmış dakika (1 saniye bile 1 dakika).
+    /// Duration in minutes, rounded up (even 1 second counts as 1 minute).
     var durationMinutes: Int {
         guard durationSeconds > 0 else { return 0 }
         return (durationSeconds + 59) / 60
@@ -37,7 +32,7 @@ struct TimeSegment: Hashable {
 }
 
 enum TimeWindowSplitter {
-    /// Verilen çalışma aralığını zaman tiplerine göre parçalara böler.
+    /// Splits the given work range into segments by time type.
     static func split(
         from start: Date,
         to end: Date,
@@ -61,8 +56,23 @@ enum TimeWindowSplitter {
             )
             let segmentEnd = min(nextChange, end)
 
-            // Aynı tip ardışık geliyorsa son segmenti uzat (idempotent merge)
-            if let last = segments.last, last.timeType == currentType, last.end == cursor {
+            // Idempotent merge: extend the previous segment when its end
+            // meets the new cursor and the timeType is the same.
+            // the join used to require strict equality
+            // (`last.end == cursor`). Date objects coming from session
+            // boundaries are technically Doubles since 1970, and any
+            // upstream second-rounding drift would skip the merge and
+            // append a zero-length segment instead. Allow a sub-second
+            // tolerance so the merge survives normal floating noise.
+            let cursorMatchesPreviousEnd: Bool
+            if let last = segments.last {
+                cursorMatchesPreviousEnd = abs(last.end.timeIntervalSince(cursor)) < 0.5
+            } else {
+                cursorMatchesPreviousEnd = false
+            }
+            if let last = segments.last,
+               last.timeType == currentType,
+               cursorMatchesPreviousEnd {
                 segments[segments.count - 1] = TimeSegment(
                     start: last.start,
                     end: segmentEnd,
@@ -94,28 +104,48 @@ enum TimeWindowSplitter {
         let timeOfDay = TimeOfDay.from(date: date, calendar: calendar)
         let weekday = Weekday.from(date: date, calendar: calendar)
 
-        // Tatil kontrolü (önce müşteri-spesifik, sonra global — caller filtrelemiş kabul edilir)
-        let activeHolidays = holidays.filter { $0.dateString == dateString && $0.isActive }
+        // Holiday check (customer-specific first, then global — assumed
+        // pre-filtered by the caller).
+        // When two holidays fall on the same date (e.g. 19 May +
+        // Eid al-Adha collision), the array order used to depend on the
+        // DB row order, which isn't deterministic in practice. We pick a
+        // half-day cutoff FIRST — if present, treat the post-cutoff
+        // window as holiday, fall through for pre-cutoff. If no half-day
+        // is present, "full-day holiday" dominates: any active holiday
+        // match means the whole day is a holiday.
+        let activeHolidays = holidays
+            .filter { $0.dateString == dateString && $0.isActive }
+            .sorted { lhs, rhs in
+                // Full-day holidays sort ahead of half-days for
+                // deterministic tiebreak; within the same type, sort
+                // by id — names can be localised, id is immutable.
+                if lhs.isHalfDay != rhs.isHalfDay { return !lhs.isHalfDay }
+                return lhs.id < rhs.id
+            }
 
+        if let fullDay = activeHolidays.first(where: { !$0.isHalfDay }) {
+            _ = fullDay
+            return .holiday
+        }
         if let holiday = activeHolidays.first {
             if holiday.isHalfDay, let cutoff = holiday.halfDayCutoff {
-                // Cutoff'tan önce: normal mantık devam eder
-                // Cutoff'tan sonra: tatil
+                // Before cutoff: normal logic continues
+                // After cutoff: holiday
                 if timeOfDay >= cutoff {
                     return .holiday
                 }
-                // Aşağıya düş
+                // Fall through
             } else {
                 return .holiday
             }
         }
 
-        // Hafta sonu kontrolü
+        // Weekend check
         if rule.weekendDays.contains(weekday) {
             return .weekend
         }
 
-        // Mesai içi/dışı
+        // Regular / after-hours
         if let workHours = rule.weekdayHours[weekday] {
             if timeOfDay >= workHours.start && timeOfDay < workHours.end {
                 return .regular
@@ -127,7 +157,7 @@ enum TimeWindowSplitter {
 
     // MARK: - Boundaries
 
-    /// `date`'ten sonra timeType'ın değişebileceği bir sonraki andır.
+    /// The next instant after `date` at which timeType could change.
     private static func nextBoundary(
         after date: Date,
         cap: Date,
@@ -137,7 +167,7 @@ enum TimeWindowSplitter {
     ) -> Date {
         var candidates: [Date] = []
 
-        // 1. Gece yarısı (gün değişimi)
+        // 1. Midnight (day change)
         if let nextDayStart = calendar.date(
             byAdding: .day,
             value: 1,
@@ -148,7 +178,7 @@ enum TimeWindowSplitter {
             }
         }
 
-        // 2. Bugünkü mesai başlangıcı / bitişi
+        // 2. Today's working-hours start / end
         let weekday = Weekday.from(date: date, calendar: calendar)
         if let workHours = rule.weekdayHours[weekday] {
             let workStart = workHours.start.combine(with: date, calendar: calendar)
@@ -157,7 +187,7 @@ enum TimeWindowSplitter {
             if workEnd > date { candidates.append(workEnd) }
         }
 
-        // 3. Bugünkü tatil yarım gün cutoff'u
+        // 3. Today's half-day holiday cutoff
         let dateString = Holiday.dateFormatter.string(from: date)
         for holiday in holidays where holiday.dateString == dateString && holiday.isActive {
             if holiday.isHalfDay, let cutoff = holiday.halfDayCutoff {
@@ -168,7 +198,7 @@ enum TimeWindowSplitter {
             }
         }
 
-        // En yakını seç; cap'i aşmasın
+        // Pick the nearest; must not exceed the cap
         let upper = cap
         let valid = candidates.filter { $0 > date && $0 <= upper }
         return valid.min() ?? upper
@@ -176,8 +206,8 @@ enum TimeWindowSplitter {
 
     // MARK: - Calendar
 
-    /// Tek otoriteli kaynak `AppCalendar.istanbul`; mevcut caller'ları
-    /// kırmamak için bu alias korunuyor. Yeni kod doğrudan `AppCalendar`
-    /// üzerinden referans vermeli.
+    /// `AppCalendar.istanbul` is the single authoritative source; this
+    /// alias is kept to avoid breaking existing callers. New code should
+    /// reference `AppCalendar` directly.
     static var istanbulCalendar: Calendar { AppCalendar.istanbul }
 }

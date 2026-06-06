@@ -1,13 +1,15 @@
-//
 //  ProWorkTextEditor.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
 struct ProWorkTextEditor: View {
+    /// Shared padding constants so the placeholder and field can't
+    /// drift.
+    fileprivate static let horizontalPadding: CGFloat = 8
+    fileprivate static let verticalPadding: CGFloat = 7
+
     @EnvironmentObject private var settingsStore: AppSettingsStore
 
     let title: String
@@ -45,15 +47,21 @@ struct ProWorkTextEditor: View {
                         )
                     )
                     .scrollContentBackground(.hidden)
-                    .padding(.horizontal, ProWorkLayout.scaled(8, using: settingsStore))
-                    .padding(.vertical, ProWorkLayout.scaled(7, using: settingsStore))
+                    .padding(.horizontal, ProWorkLayout.scaled(Self.horizontalPadding, using: settingsStore))
+                    .padding(.vertical, ProWorkLayout.scaled(Self.verticalPadding, using: settingsStore))
 
                 if text.isEmpty && !placeholder.isEmpty {
+                    // Placeholder padding now matches the
+                    // field padding (8/7) instead of overshooting to
+                    // 13/13. The previous mismatch made the
+                    // placeholder caret jump 5pt when the user started
+                    // typing; sharing the constants keeps the two in
+                    // sync if a future tuning pass changes the field.
                     Text(placeholder)
                         .proWorkTextStyle(.callout)
                         .foregroundStyle(.tertiary)
-                        .padding(.horizontal, ProWorkLayout.scaled(13, using: settingsStore))
-                        .padding(.vertical, ProWorkLayout.scaled(13, using: settingsStore))
+                        .padding(.horizontal, ProWorkLayout.scaled(Self.horizontalPadding, using: settingsStore))
+                        .padding(.vertical, ProWorkLayout.scaled(Self.verticalPadding, using: settingsStore))
                         .allowsHitTesting(false)
                 }
             }

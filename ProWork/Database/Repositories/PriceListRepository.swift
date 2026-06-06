@@ -1,25 +1,23 @@
-//
 //  PriceListRepository.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 import SQLite3
 
 enum PriceListRepositoryError: LocalizedError {
-    case inUseByCustomer(String)
+    case inUseByCustomers([String])
 
     var errorDescription: String? {
         switch self {
-        case .inUseByCustomer(let customerName):
+        case .inUseByCustomers(let customerNames):
+            let joined = customerNames.joined(separator: ", ")
             return String(
                 format: ProWorkLocalizer.shared.string(
                     "priceLists.error.inUseByCustomer",
                     defaultValue: "\"%@\" müşterisinde seçili olan fiyat listesi silinemez."
                 ),
-                customerName
+                joined
             )
         }
     }
@@ -45,7 +43,7 @@ final class PriceListRepository {
 
         return try database.query(
             sql,
-            map: { Self.makeList(from: $0) },
+            map: { try Self.makeList(from: $0) },
             bind: { $0.bindText(organizationId, at: 1) }
         )
     }
@@ -63,7 +61,7 @@ final class PriceListRepository {
 
         return try database.query(
             sql,
-            map: { Self.makeList(from: $0) },
+            map: { try Self.makeList(from: $0) },
             bind: { $0.bindText(id, at: 1) }
         ).first
     }
@@ -107,7 +105,7 @@ final class PriceListRepository {
             }
         }
 
-        return try database.query(sql, map: { Self.makeList(from: $0) }, bind: binds)
+        return try database.query(sql, map: { try Self.makeList(from: $0) }, bind: binds)
     }
 
     func fetchDefault(
@@ -123,104 +121,123 @@ final class PriceListRepository {
         .first(where: \.isDefault)
     }
 
+    /// `clearDefaultFlag` + main INSERT must be atomic: if the main SQL
+    /// fails after the flag was cleared, the organization would be left
+    /// without any default price list. Wrap the pair in a savepoint so
+    /// a mid-flight failure rolls both halves back.
     func insert(_ list: PriceList) throws {
-        if list.isDefault {
-            try clearDefaultFlag(
-                organizationId: list.organizationId,
-                ownerType: list.ownerType,
-                ownerId: list.ownerId,
-                excluding: nil
+        try database.inTransaction {
+            if list.isDefault {
+                try clearDefaultFlag(
+                    organizationId: list.organizationId,
+                    ownerType: list.ownerType,
+                    ownerId: list.ownerId,
+                    excluding: nil,
+                    by: list.updatedByUserId ?? list.createdByUserId ?? BuiltInUserId.defaultOwner
+                )
+            }
+
+            let sql = """
+            INSERT INTO price_lists (
+                id, organizationId, ownerType, ownerId, name, currency,
+                isActive, isDefault, validFrom, validTo, notes,
+                createdByUserId, updatedByUserId,
+                createdAt, updatedAt, deletedAt, rowVersion,
+                syncStatus, lastSyncedAt, originDeviceId
             )
-        }
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """
 
-        let sql = """
-        INSERT INTO price_lists (
-            id, organizationId, ownerType, ownerId, name, currency,
-            isActive, isDefault, validFrom, validTo, notes,
-            createdByUserId, updatedByUserId,
-            createdAt, updatedAt, deletedAt, rowVersion,
-            syncStatus, lastSyncedAt, originDeviceId
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-        """
-
-        try database.execute(sql) { stmt in
-            stmt.bindText(list.id, at: 1)
-            stmt.bindText(list.organizationId, at: 2)
-            stmt.bindText(list.ownerType.rawValue, at: 3)
-            stmt.bindText(list.ownerId, at: 4)
-            stmt.bindText(list.name, at: 5)
-            stmt.bindText(list.currency, at: 6)
-            stmt.bindInt(list.isActive ? 1 : 0, at: 7)
-            stmt.bindInt(list.isDefault ? 1 : 0, at: 8)
-            stmt.bindText(list.validFrom, at: 9)
-            stmt.bindText(list.validTo, at: 10)
-            stmt.bindText(list.notes, at: 11)
-            stmt.bindText(list.createdByUserId, at: 12)
-            stmt.bindText(list.updatedByUserId, at: 13)
-            stmt.bindText(DateFormatter.proWorkSQLite.string(from: list.createdAt), at: 14)
-            stmt.bindText(DateFormatter.proWorkSQLite.string(from: list.updatedAt), at: 15)
-            stmt.bindText(list.deletedAt.map(DateFormatter.proWorkSQLite.string(from:)), at: 16)
-            stmt.bindInt(list.rowVersion, at: 17)
-            stmt.bindText(list.syncStatus.rawValue, at: 18)
-            stmt.bindText(list.lastSyncedAt.map(DateFormatter.proWorkSQLite.string(from:)), at: 19)
-            stmt.bindText(list.originDeviceId, at: 20)
+            try database.execute(sql) { stmt in
+                stmt.bindText(list.id, at: 1)
+                stmt.bindText(list.organizationId, at: 2)
+                stmt.bindText(list.ownerType.rawValue, at: 3)
+                stmt.bindText(list.ownerId, at: 4)
+                stmt.bindText(list.name, at: 5)
+                stmt.bindText(list.currency, at: 6)
+                stmt.bindInt(list.isActive ? 1 : 0, at: 7)
+                stmt.bindInt(list.isDefault ? 1 : 0, at: 8)
+                stmt.bindText(list.validFrom, at: 9)
+                stmt.bindText(list.validTo, at: 10)
+                stmt.bindText(list.notes, at: 11)
+                stmt.bindText(list.createdByUserId, at: 12)
+                stmt.bindText(list.updatedByUserId, at: 13)
+                stmt.bindText(DateFormatter.proWorkSQLite.string(from: list.createdAt), at: 14)
+                stmt.bindText(DateFormatter.proWorkSQLite.string(from: list.updatedAt), at: 15)
+                stmt.bindText(list.deletedAt.map(DateFormatter.proWorkSQLite.string(from:)), at: 16)
+                stmt.bindInt(list.rowVersion, at: 17)
+                stmt.bindText(list.syncStatus.rawValue, at: 18)
+                stmt.bindText(list.lastSyncedAt.map(DateFormatter.proWorkSQLite.string(from:)), at: 19)
+                stmt.bindText(list.originDeviceId, at: 20)
+            }
         }
     }
 
     func update(_ list: PriceList) throws {
-        if list.isDefault {
-            try clearDefaultFlag(
-                organizationId: list.organizationId,
-                ownerType: list.ownerType,
-                ownerId: list.ownerId,
-                excluding: list.id
-            )
-        }
+        try database.inTransaction {
+            if list.isDefault {
+                try clearDefaultFlag(
+                    organizationId: list.organizationId,
+                    ownerType: list.ownerType,
+                    ownerId: list.ownerId,
+                    excluding: list.id,
+                    by: list.updatedByUserId ?? BuiltInUserId.defaultOwner
+                )
+            }
 
-        let sql = """
-        UPDATE price_lists
-        SET ownerType = ?, ownerId = ?, name = ?, currency = ?,
-            isActive = ?, isDefault = ?, validFrom = ?, validTo = ?, notes = ?,
-            updatedByUserId = ?, updatedAt = ?,
-            rowVersion = rowVersion + 1, syncStatus = 'local'
-        WHERE id = ? AND deletedAt IS NULL;
-        """
+            let sql = """
+            UPDATE price_lists
+            SET ownerType = ?, ownerId = ?, name = ?, currency = ?,
+                isActive = ?, isDefault = ?, validFrom = ?, validTo = ?, notes = ?,
+                updatedByUserId = ?, updatedAt = ?,
+                rowVersion = rowVersion + 1, syncStatus = 'local'
+            WHERE id = ? AND deletedAt IS NULL;
+            """
 
-        try database.execute(sql) { stmt in
-            stmt.bindText(list.ownerType.rawValue, at: 1)
-            stmt.bindText(list.ownerId, at: 2)
-            stmt.bindText(list.name, at: 3)
-            stmt.bindText(list.currency, at: 4)
-            stmt.bindInt(list.isActive ? 1 : 0, at: 5)
-            stmt.bindInt(list.isDefault ? 1 : 0, at: 6)
-            stmt.bindText(list.validFrom, at: 7)
-            stmt.bindText(list.validTo, at: 8)
-            stmt.bindText(list.notes, at: 9)
-            stmt.bindText(list.updatedByUserId ?? BuiltInUserId.defaultOwner, at: 10)
-            stmt.bindText(DateFormatter.proWorkSQLite.string(from: Date()), at: 11)
-            stmt.bindText(list.id, at: 12)
+            try database.execute(sql) { stmt in
+                stmt.bindText(list.ownerType.rawValue, at: 1)
+                stmt.bindText(list.ownerId, at: 2)
+                stmt.bindText(list.name, at: 3)
+                stmt.bindText(list.currency, at: 4)
+                stmt.bindInt(list.isActive ? 1 : 0, at: 5)
+                stmt.bindInt(list.isDefault ? 1 : 0, at: 6)
+                stmt.bindText(list.validFrom, at: 7)
+                stmt.bindText(list.validTo, at: 8)
+                stmt.bindText(list.notes, at: 9)
+                stmt.bindText(list.updatedByUserId ?? BuiltInUserId.defaultOwner, at: 10)
+                stmt.bindText(DateFormatter.proWorkSQLite.string(from: Date()), at: 11)
+                stmt.bindText(list.id, at: 12)
+            }
         }
     }
 
-    func softDelete(id: String, by userId: String = BuiltInUserId.defaultOwner) throws {
-        if let customerName = try customerNameUsingPriceList(id: id) {
-            throw PriceListRepositoryError.inUseByCustomer(customerName)
+    func softDelete(id: String, by userId: String) throws {
+        let customerNames = try customerNamesUsingPriceList(id: id)
+        if !customerNames.isEmpty {
+            throw PriceListRepositoryError.inUseByCustomers(customerNames)
         }
 
-        let sql = """
-        UPDATE price_lists
-        SET deletedAt = ?, updatedAt = ?, updatedByUserId = ?,
-            rowVersion = rowVersion + 1, syncStatus = 'local'
-        WHERE id = ? AND deletedAt IS NULL;
-        """
-
-        try database.execute(sql) { stmt in
+        // Soft-delete needs to cascade to price_list_rows; the ON DELETE
+        // CASCADE FK only fires on hard delete, leaving rows visibly
+        // active while their parent is gone. Wrap both UPDATEs in a
+        // savepoint so they commit together.
+        try database.inTransaction {
+            try database.softDelete(table: "price_lists", id: id, by: userId)
             let now = DateFormatter.proWorkSQLite.string(from: Date())
-            stmt.bindText(now, at: 1)
-            stmt.bindText(now, at: 2)
-            stmt.bindText(userId, at: 3)
-            stmt.bindText(id, at: 4)
+            try database.execute("""
+            UPDATE price_list_rows
+            SET deletedAt = ?,
+                updatedAt = ?,
+                updatedByUserId = ?,
+                rowVersion = rowVersion + 1,
+                syncStatus = 'local'
+            WHERE priceListId = ? AND deletedAt IS NULL;
+            """) { stmt in
+                stmt.bindText(now, at: 1)
+                stmt.bindText(now, at: 2)
+                stmt.bindText(userId, at: 3)
+                stmt.bindText(id, at: 4)
+            }
         }
     }
 
@@ -228,57 +245,79 @@ final class PriceListRepository {
         organizationId: String,
         ownerType: PriceListOwnerType,
         ownerId: String?,
-        excluding listId: String?
+        excluding listId: String?,
+        by userId: String
     ) throws {
-        let sql: String
+        // Y16: the bulk UPDATE must also bump every audit metadata
+        // column; if sync doesn't recognise this row as "changed",
+        // the old isDefault stays on the other side. Caller's userId
+        // is threaded through so
+        // the audit trail blames the right actor (default owner used to
+        // shadow every real caller —).
+        let nowText = DateFormatter.proWorkSQLite.string(from: Date())
+        let userText = userId
 
+        let sql: String
         if ownerId != nil {
             sql = """
             UPDATE price_lists
-            SET isDefault = 0
+            SET isDefault = 0,
+                updatedAt = ?,
+                updatedByUserId = ?,
+                rowVersion = rowVersion + 1,
+                syncStatus = 'local'
             WHERE organizationId = ? AND ownerType = ? AND ownerId = ? AND deletedAt IS NULL
                 AND (? IS NULL OR id != ?);
             """
         } else {
             sql = """
             UPDATE price_lists
-            SET isDefault = 0
+            SET isDefault = 0,
+                updatedAt = ?,
+                updatedByUserId = ?,
+                rowVersion = rowVersion + 1,
+                syncStatus = 'local'
             WHERE organizationId = ? AND ownerType = ? AND ownerId IS NULL AND deletedAt IS NULL
                 AND (? IS NULL OR id != ?);
             """
         }
 
         try database.execute(sql) { stmt in
-            stmt.bindText(organizationId, at: 1)
-            stmt.bindText(ownerType.rawValue, at: 2)
+            stmt.bindText(nowText, at: 1)
+            stmt.bindText(userText, at: 2)
+            stmt.bindText(organizationId, at: 3)
+            stmt.bindText(ownerType.rawValue, at: 4)
             if let ownerId {
-                stmt.bindText(ownerId, at: 3)
-                stmt.bindText(listId, at: 4)
-                stmt.bindText(listId, at: 5)
+                stmt.bindText(ownerId, at: 5)
+                stmt.bindText(listId, at: 6)
+                stmt.bindText(listId, at: 7)
             } else {
-                stmt.bindText(listId, at: 3)
-                stmt.bindText(listId, at: 4)
+                stmt.bindText(listId, at: 5)
+                stmt.bindText(listId, at: 6)
             }
         }
     }
 
-    private func customerNameUsingPriceList(id: String) throws -> String? {
+    /// All customers that currently point at this price list as their
+    /// default. Previously the method returned only the first match,
+    /// so an in-use error message could blame the wrong customer and
+    /// leave the user fishing for the rest.
+    private func customerNamesUsingPriceList(id: String) throws -> [String] {
         let sql = """
         SELECT name
         FROM customers
         WHERE defaultPriceListId = ? AND deletedAt IS NULL
-        ORDER BY name COLLATE NOCASE ASC
-        LIMIT 1;
+        ORDER BY name COLLATE NOCASE ASC;
         """
 
         return try database.query(
             sql,
             map: { $0.text(at: 0) ?? "" },
             bind: { $0.bindText(id, at: 1) }
-        ).first
+        )
     }
 
-    private static func makeList(from statement: SQLiteStatement) -> PriceList {
+    private static func makeList(from statement: SQLiteStatement) throws -> PriceList {
         PriceList(
             id: statement.text(at: 0) ?? UUID().uuidString,
             ownerType: PriceListOwnerType(rawValue: statement.text(at: 1) ?? "global") ?? .global,
@@ -290,7 +329,7 @@ final class PriceListRepository {
             validFrom: statement.text(at: 7),
             validTo: statement.text(at: 8),
             notes: statement.text(at: 9),
-            meta: statement.readMetadata(startingAt: 10)
+            meta: try statement.readMetadata(startingAt: 10)
         )
     }
 }

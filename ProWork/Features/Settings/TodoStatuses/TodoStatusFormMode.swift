@@ -1,31 +1,29 @@
-//
 //  TodoStatusFormMode.swift
 //  ProWork
-//
-//  Created by Pronomi.
-//
+//  Type-alias over the generic `FormMode<Entity>`.
 
 import Foundation
 
-enum TodoStatusFormMode {
-    case create
-    case edit(TodoStatus)
+typealias TodoStatusFormMode = FormMode<TodoStatus>
 
+extension FormMode where Entity == TodoStatus {
     func title(using settingsStore: AppSettingsStore) -> String {
-        switch self {
-        case .create:
-            return settingsStore.localized("todoStatuses.form.mode.createTitle", defaultValue: "Yeni Statü")
-        case .edit:
-            return settingsStore.localized("todoStatuses.form.mode.editTitle", defaultValue: "Statü Düzenle")
-        }
+        title(
+            using: settingsStore,
+            createKey: "todoStatuses.form.mode.createTitle",
+            createDefault: "Yeni Statü",
+            editKey: "todoStatuses.form.mode.editTitle",
+            editDefault: "Statü Düzenle"
+        )
     }
 
     func saveButtonTitle(using settingsStore: AppSettingsStore) -> String {
-        switch self {
-        case .create:
-            return settingsStore.localized("todoStatuses.form.action.save", defaultValue: "Kaydet")
-        case .edit:
-            return settingsStore.localized("todoStatuses.form.action.update", defaultValue: "Güncelle")
-        }
+        saveButtonTitle(
+            using: settingsStore,
+            createKey: "todoStatuses.form.action.save",
+            createDefault: "Kaydet",
+            editKey: "todoStatuses.form.action.update",
+            editDefault: "Güncelle"
+        )
     }
 }

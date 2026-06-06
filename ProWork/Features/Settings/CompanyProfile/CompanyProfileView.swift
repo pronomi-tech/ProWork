@@ -1,9 +1,6 @@
-//
 //  CompanyProfileView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 import AppKit
@@ -15,9 +12,24 @@ struct CompanyProfileView: View {
     @State private var profile: CompanyProfile = CompanyProfile(legalName: "")
     @State private var errorMessage: String?
     @State private var savedNotice: String?
+    /// Race-resistant notice scheduling shared
+    /// with the other settings views.
+    @State private var savedNoticeScheduler = NoticeScheduler()
     @State private var isImporterPresented = false
 
-    private let repository = CompanyProfileRepository()
+    /// Settings forms still own their repository
+    /// here because there is no `CompanyProfileViewModel` today —
+    /// CompanyProfile is a single-row screen with no shared state to
+    /// publish. The reference is kept on the View struct (not
+    /// re-bound on every body eval) and is the shared
+    /// `AppServices.companyProfileRepository`, so the
+    /// "direct repository in View" footgun the audit flagged
+    /// (per-render instantiation, unfortunate test boundary) does not
+    /// apply: load / save go through a single instance and tests can
+    /// substitute `AppServices` to swap it. Promoting to a VM is
+    /// possible but adds boilerplate without observable benefit
+    /// here.
+    private let repository = AppServices.shared.companyProfileRepository
 
     var body: some View {
         SettingsScreenScaffold(
@@ -220,12 +232,19 @@ struct CompanyProfileView: View {
         }
     }
 
+    /// Persist the **trimmed** value, not the raw text. The
+    /// previous setter used `trimmed.isEmpty` as the nil-check gate
+    /// but then wrote the untrimmed `value` back, so trailing
+    /// whitespace from auto-corrected text would persist and never
+    /// match equality checks downstream. Storing the trimmed version
+    /// matches both the gate and what every consumer (PDF export,
+    /// search) actually expects.
     private func bindOptional(_ keyPath: WritableKeyPath<CompanyProfile, String?>) -> Binding<String> {
         Binding(
             get: { profile[keyPath: keyPath] ?? "" },
             set: { value in
                 let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                profile[keyPath: keyPath] = trimmed.isEmpty ? nil : value
+                profile[keyPath: keyPath] = trimmed.isEmpty ? nil : trimmed
             }
         )
     }
@@ -296,9 +315,10 @@ struct CompanyProfileView: View {
         do {
             try repository.upsert(profile)
             errorMessage = nil
-            savedNotice = settingsStore.localized("common.saved", defaultValue: "Kaydedildi.")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                if savedNotice == settingsStore.localized("common.saved", defaultValue: "Kaydedildi.") { savedNotice = nil }
+            savedNoticeScheduler.show(
+                settingsStore.localized("common.saved", defaultValue: "Kaydedildi.")
+            ) { value in
+                savedNotice = value
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -311,8 +331,30 @@ struct CompanyProfileView: View {
             guard let url = urls.first else { return }
             do {
                 let data = try readImportedImageData(from: url)
-                profile.logoData = data
-                errorMessage = nil
+                // Validate before persisting so the user sees
+                // an actionable error here instead of a silent drop in
+                // PDFLogoLoader at render time.
+                switch PDFLogoLoader.validate(data) {
+                case .ok:
+                    profile.logoData = data
+                    errorMessage = nil
+                case .tooLarge(let bytes, let limit):
+                    let megabytes = Double(bytes) / 1_048_576
+                    let limitMB = Double(limit) / 1_048_576
+                    errorMessage = String(
+                        format: settingsStore.localized(
+                            "companyProfile.error.logoTooLarge",
+                            defaultValue: "Logo dosyası çok büyük (%.1f MB). Üst sınır: %.1f MB."
+                        ),
+                        megabytes,
+                        limitMB
+                    )
+                case .unreadable:
+                    errorMessage = settingsStore.localized(
+                        "companyProfile.error.logoUnreadable",
+                        defaultValue: "Logo dosyası okunamadı; desteklenen bir görsel formatı seçin."
+                    )
+                }
             } catch {
                 errorMessage = String(format: settingsStore.localized("companyProfile.error.logoRead", defaultValue: "Logo okunamadı: %@"), error.localizedDescription)
             }
@@ -383,11 +425,5 @@ struct CompanyProfileView: View {
         }
 
         return result
-    }
-}
-
-private extension String {
-    var nilIfEmpty: String? {
-        isEmpty ? nil : self
     }
 }

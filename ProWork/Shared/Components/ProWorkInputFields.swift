@@ -1,9 +1,6 @@
-//
 //  ProWorkInputFields.swift
 //  ProWork
-//
 //  Created by Pronomi
-//
 
 import SwiftUI
 
@@ -61,6 +58,20 @@ struct ProWorkNumberField: View {
     }
 
     private func sanitize(_ value: String) -> String {
+        let separator = Character(settingsStore.locale.decimalSeparator ?? ",")
+        return ProWorkNumberField.sanitize(value, style: style, separator: separator)
+    }
+
+    /// extracted as a pure static helper so unit tests can
+    /// exercise the locale-aware parsing/clamping logic without standing
+    /// up a full SwiftUI environment with a settings store. The Style is
+    /// still public-by-default since `ProWorkNumberField` itself is, but
+    /// the sanitize helper is exposed internally for testing.
+    static func sanitize(
+        _ value: String,
+        style: Style,
+        separator: Character
+    ) -> String {
         switch style {
         case .integer(let maxDigits):
             let digits = value.filter(\.isNumber)
@@ -68,16 +79,15 @@ struct ProWorkNumberField: View {
             return String(digits.prefix(maxDigits))
 
         case .decimal(let maxFractionDigits, let maxIntegerDigits):
-            let separator = Character(settingsStore.locale.decimalSeparator ?? ",")
             let alternateSeparator: Character = separator == "," ? "." : ","
             var filtered = value.filter { $0.isNumber || $0 == separator || $0 == alternateSeparator }
 
-            // Yaygın locale'larda alternate separator aynı zamanda binlik ayracıdır
-            // (tr_TR: decimal=",", binlik="."; en_US: decimal=".", binlik=",").
-            // Ayrımı şu kuralla yapıyoruz: kullanıcı zaten decimal yazmışsa veya alternate
-            // birden fazla kez geçiyorsa, alternate binlik kabul edilip kaldırılır.
-            // Aksi halde (decimal yok, alternate tam bir kez) kullanıcı alternate'i decimal
-            // olarak kullanmıştır → decimal'a çevrilir.
+            // In common locales the alternate separator is also the thousands separator
+            // (tr_TR: decimal=",", thousands="."; en_US: decimal=".", thousands=",").
+            // Rule: if the user has already typed a decimal, or the alternate appears
+            // more than once, treat it as a thousands separator and strip it.
+            // Otherwise (no decimal, exactly one alternate) the user typed the alternate
+            // as a decimal → convert it to the configured decimal.
             let decimalCount = filtered.filter { $0 == separator }.count
             let alternateCount = filtered.filter { $0 == alternateSeparator }.count
             if decimalCount == 0 && alternateCount == 1 {
@@ -86,7 +96,7 @@ struct ProWorkNumberField: View {
                 filtered = filtered.replacingOccurrences(of: String(alternateSeparator), with: "")
             }
 
-            // Birden fazla decimal separator varsa ilkinden sonrasını yok say.
+            // If there's more than one decimal separator, ignore everything after the first.
             let parts = filtered.split(separator: separator, omittingEmptySubsequences: false)
 
             let integerPart: String
@@ -101,9 +111,29 @@ struct ProWorkNumberField: View {
             }
 
             var result = integerPart
-            if parts.count > 1 {
+            if parts.count > 1 && maxFractionDigits > 0 {
                 result.append(separator)
                 result.append(String(parts[1].prefix(maxFractionDigits)))
+            }
+
+            // defensive final clamp. The split-based path
+            // above already trims, but a paste containing an unusual mix of
+            // separators (multiple decimals + alternates) had edge cases
+            // where the fractional tail could survive longer than the
+            // configured maxFractionDigits. Re-clamp the final string by
+            // searching for the separator and truncating the tail to the
+            // configured digit count; integer-only configs (max==0) lose
+            // any trailing separator too.
+            if let separatorIndex = result.firstIndex(of: separator) {
+                let fractionStart = result.index(after: separatorIndex)
+                let fractionTail = result[fractionStart...]
+                if fractionTail.count > maxFractionDigits {
+                    let clampedEnd = result.index(fractionStart, offsetBy: maxFractionDigits)
+                    result = String(result[..<clampedEnd])
+                }
+                if maxFractionDigits == 0 {
+                    result = String(result[..<separatorIndex])
+                }
             }
 
             return result

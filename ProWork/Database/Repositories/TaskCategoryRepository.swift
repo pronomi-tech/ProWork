@@ -1,9 +1,6 @@
-//
 //  TaskCategoryRepository.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 import SQLite3
@@ -26,7 +23,7 @@ final class TaskCategoryRepository {
         """
 
         return try database.query(sql) { statement in
-            Self.makeCategory(from: statement)
+            try Self.makeCategory(from: statement)
         }
     }
 
@@ -42,7 +39,7 @@ final class TaskCategoryRepository {
 
         return try database.query(
             sql,
-            map: { statement in Self.makeCategory(from: statement) },
+            map: { statement in try Self.makeCategory(from: statement) },
             bind: { statement in statement.bindText(id, at: 1) }
         ).first
     }
@@ -91,7 +88,8 @@ final class TaskCategoryRepository {
         }
     }
 
-    func delete(id: String) throws {
+    /// Hard delete — test fixtures only. See CustomerRepository._hardDelete.
+    func _hardDelete(id: String) throws {
         let sql = """
         DELETE FROM task_categories
         WHERE id = ?
@@ -103,7 +101,7 @@ final class TaskCategoryRepository {
         }
     }
 
-    func softDelete(id: String, by userId: String = BuiltInUserId.defaultOwner) throws {
+    func softDelete(id: String, by userId: String) throws {
         let sql = """
         UPDATE task_categories
         SET
@@ -121,7 +119,7 @@ final class TaskCategoryRepository {
         }
     }
 
-    private static func makeCategory(from statement: SQLiteStatement) -> TaskCategory {
+    private static func makeCategory(from statement: SQLiteStatement) throws -> TaskCategory {
         TaskCategory(
             id: statement.text(at: 0) ?? UUID().uuidString,
             name: statement.text(at: 1) ?? "",
@@ -130,7 +128,7 @@ final class TaskCategoryRepository {
             sortOrder: statement.int(at: 4),
             isSystem: statement.int(at: 5) == 1,
             vatRateId: statement.text(at: 6),
-            meta: statement.readMetadata(startingAt: 7)
+            meta: try statement.readMetadata(startingAt: 7)
         )
     }
 }

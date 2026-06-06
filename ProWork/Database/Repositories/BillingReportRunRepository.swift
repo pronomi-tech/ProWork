@@ -1,9 +1,6 @@
-//
 //  BillingReportRunRepository.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 import SQLite3
@@ -15,6 +12,14 @@ final class BillingReportRunRepository {
         self.database = database
     }
 
+    /// Lifecycle service needs to wrap multi-statement
+    /// flows (e.g. createDrafts inserting N per-currency runs) atomically.
+    /// Re-exposing the underlying write transaction here keeps callers from
+    /// needing direct AppDatabase access.
+    func inWriteTransaction<T>(_ block: () throws -> T) throws -> T {
+        try database.inWriteTransaction(block)
+    }
+
     func fetchAll(organizationId: String) throws -> [BillingReportRun] {
         let sql = """
         \(Self.selectSQL)
@@ -24,7 +29,7 @@ final class BillingReportRunRepository {
 
         return try database.query(
             sql,
-            map: { Self.makeRun(from: $0) },
+            map: { try Self.makeRun(from: $0) },
             bind: { $0.bindText(organizationId, at: 1) }
         )
     }
@@ -38,7 +43,7 @@ final class BillingReportRunRepository {
 
         return try database.query(
             sql,
-            map: { Self.makeRun(from: $0) },
+            map: { try Self.makeRun(from: $0) },
             bind: { stmt in
                 stmt.bindText(organizationId, at: 1)
                 stmt.bindText(customerId, at: 2)
@@ -55,7 +60,7 @@ final class BillingReportRunRepository {
 
         return try database.query(
             sql,
-            map: { Self.makeRun(from: $0) },
+            map: { try Self.makeRun(from: $0) },
             bind: { $0.bindText(id, at: 1) }
         ).first
     }
@@ -70,7 +75,7 @@ final class BillingReportRunRepository {
 
         return try database.query(
             sql,
-            map: { Self.makeRun(from: $0) },
+            map: { try Self.makeRun(from: $0) },
             bind: { $0.bindText(organizationId, at: 1) }
         )
     }
@@ -163,62 +168,79 @@ final class BillingReportRunRepository {
         }
     }
 
-    /// Tahsilatlar değiştiğinde paidMinor/balanceMinor/paymentStatus'ı senkronize eder.
+    /// Syncs paidMinor/balanceMinor/paymentStatus when payments change.
+    ///   * In the old version the same `SUM(amountMinor)` subquery was
+    ///     repeated in each of the 4 CASE branches. Now the payment total
+    ///     is read once from the `payments` table and passed as a
+    ///     parameter to the UPDATE.
+    ///     olarak bind ediliyor — kod sade, plan deterministik.
+    ///   * The overdue check was using `date(dueDate) < date('now')`.
+    ///     `dueDate` is stored in "YYYY-MM-DD" format; when `date()`
+    ///     can't parse the format it returns NULL and the overdue state
+    ///     never triggered. Also, `date('now')` is UTC-based, which
+    ///     can shift by a day around midnight in the Türkiye TZ. We now
+    ///     produce today's Istanbul date on the Swift side and feed it
+    ///     into the comparison.
+    ///     parametre olarak veriyoruz; YYYY-MM-DD lexikografik olarak
+    ///     comparable lexicographically.
     func recalculatePayments(runId: String) throws {
+        let paidMinor = try fetchPaidMinor(runId: runId)
+        let todayDayString = Self.istanbulDayFormatter.string(from: Date())
+        let updatedAtString = DateFormatter.proWorkSQLite.string(from: Date())
+
+        // Reuse `?1` four times instead of binding `paidMinor` to four
+        // distinct positions — drift-proof if the SQL gains/loses one
+        // of the references.
         let sql = """
         UPDATE billing_report_runs
         SET
-            paidMinor = COALESCE((
-                SELECT SUM(amountMinor)
-                FROM payments
-                WHERE runId = billing_report_runs.id AND deletedAt IS NULL
-            ), 0),
-            balanceMinor = totalMinor - COALESCE((
-                SELECT SUM(amountMinor)
-                FROM payments
-                WHERE runId = billing_report_runs.id AND deletedAt IS NULL
-            ), 0),
+            paidMinor = ?1,
+            balanceMinor = totalMinor - ?1,
             paymentStatus = CASE
-                WHEN totalMinor <= COALESCE((
-                    SELECT SUM(amountMinor)
-                    FROM payments
-                    WHERE runId = billing_report_runs.id AND deletedAt IS NULL
-                ), 0) THEN 'paid'
-                WHEN COALESCE((
-                    SELECT SUM(amountMinor)
-                    FROM payments
-                    WHERE runId = billing_report_runs.id AND deletedAt IS NULL
-                ), 0) > 0 THEN 'partial'
-                WHEN dueDate IS NOT NULL AND date(dueDate) < date('now') THEN 'overdue'
+                WHEN totalMinor <= ?1 THEN 'paid'
+                WHEN ?1 > 0 THEN 'partial'
+                WHEN dueDate IS NOT NULL AND dueDate < ?2 THEN 'overdue'
                 ELSE 'unpaid'
             END,
-            updatedAt = ?,
+            updatedAt = ?3,
             rowVersion = rowVersion + 1,
             syncStatus = 'local'
-        WHERE id = ? AND deletedAt IS NULL;
+        WHERE id = ?4 AND deletedAt IS NULL;
         """
 
         try database.execute(sql) { stmt in
-            stmt.bindText(DateFormatter.proWorkSQLite.string(from: Date()), at: 1)
-            stmt.bindText(runId, at: 2)
+            stmt.bindInt(paidMinor, at: 1)
+            stmt.bindText(todayDayString, at: 2)
+            stmt.bindText(updatedAtString, at: 3)
+            stmt.bindText(runId, at: 4)
         }
     }
 
-    func softDelete(id: String, by userId: String = BuiltInUserId.defaultOwner) throws {
-        let sql = """
-        UPDATE billing_report_runs
-        SET deletedAt = ?, updatedAt = ?, updatedByUserId = ?,
-            rowVersion = rowVersion + 1, syncStatus = 'local'
-        WHERE id = ? AND deletedAt IS NULL;
-        """
+    private func fetchPaidMinor(runId: String) throws -> Int {
+        let rows = try database.query("""
+        SELECT COALESCE(SUM(amountMinor), 0)
+        FROM payments
+        WHERE runId = ? AND deletedAt IS NULL;
+        """, map: { $0.int(at: 0) }, bind: { stmt in
+            stmt.bindText(runId, at: 1)
+        })
+        return rows.first ?? 0
+    }
 
-        try database.execute(sql) { stmt in
-            let now = DateFormatter.proWorkSQLite.string(from: Date())
-            stmt.bindText(now, at: 1)
-            stmt.bindText(now, at: 2)
-            stmt.bindText(userId, at: 3)
-            stmt.bindText(id, at: 4)
-        }
+    /// Shared formatter for binding today's date (Istanbul) into the
+    /// overdue comparison. `dueDate` is written in the same format, so
+    /// the comparison is lexicographic.
+    private static let istanbulDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = AppCalendar.istanbul.timeZone
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    func softDelete(id: String, by userId: String) throws {
+        // Delegate to the central helper.
+        try database.softDelete(table: "billing_report_runs", id: id, by: userId)
     }
 
     // MARK: - Helpers
@@ -236,9 +258,12 @@ final class BillingReportRunRepository {
     FROM billing_report_runs
     """
 
-    private static func makeRun(from statement: SQLiteStatement) -> BillingReportRun {
-        // 0..19 iş alanları, 20..29 metadata
-        BillingReportRun(
+    /// 0..19 business fields, 20..29 metadata. Metadata reader is now the
+    /// centralised `readMetadata` so corruption discipline
+    /// covers this mapper too.
+    private static func makeRun(from statement: SQLiteStatement) throws -> BillingReportRun {
+        let meta = try statement.readMetadata(startingAt: 20)
+        return BillingReportRun(
             id: statement.text(at: 0) ?? UUID().uuidString,
             customerId: statement.text(at: 1) ?? "",
             periodStart: statement.text(at: 2) ?? "",
@@ -257,18 +282,18 @@ final class BillingReportRunRepository {
             dueDate: statement.text(at: 15),
             snapshotJson: statement.text(at: 16),
             notes: statement.text(at: 17),
-            finalizedAt: statement.text(at: 18).flatMap(DateFormatter.proWorkSQLite.date(from:)),
+            finalizedAt: SQLitePersistedDate.parse(statement.text(at: 18)),
             finalizedByUserId: statement.text(at: 19),
-            organizationId: statement.text(at: 20) ?? BuiltInOrganizationId.default,
-            createdByUserId: statement.text(at: 21),
-            updatedByUserId: statement.text(at: 22),
-            createdAt: DateFormatter.proWorkSQLite.date(from: statement.text(at: 23) ?? "") ?? Date(),
-            updatedAt: DateFormatter.proWorkSQLite.date(from: statement.text(at: 24) ?? "") ?? Date(),
-            deletedAt: statement.text(at: 25).flatMap(DateFormatter.proWorkSQLite.date(from:)),
-            rowVersion: statement.int(at: 26),
-            syncStatus: SyncStatus(rawValue: statement.text(at: 27) ?? "") ?? .local,
-            lastSyncedAt: statement.text(at: 28).flatMap(DateFormatter.proWorkSQLite.date(from:)),
-            originDeviceId: statement.text(at: 29)
+            organizationId: meta.organizationId,
+            createdByUserId: meta.createdByUserId,
+            updatedByUserId: meta.updatedByUserId,
+            createdAt: meta.createdAt,
+            updatedAt: meta.updatedAt,
+            deletedAt: meta.deletedAt,
+            rowVersion: meta.rowVersion,
+            syncStatus: meta.syncStatus,
+            lastSyncedAt: meta.lastSyncedAt,
+            originDeviceId: meta.originDeviceId
         )
     }
 }

@@ -1,9 +1,6 @@
-//
 //  TodoRepository.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 import SQLite3
@@ -105,7 +102,10 @@ final class TodoRepository {
             categoryColor: statement.text(at: 7),
 
             statusId: statement.text(at: 8) ?? BuiltInTodoStatusId.waiting,
-            statusName: statement.text(at: 9) ?? "Beklemede",
+            statusName: statement.text(at: 9) ?? ProWorkLocalizer.shared.string(
+                "todoStatus.waiting",
+                defaultValue: "Beklemede"
+            ),
             statusColor: statement.text(at: 10),
             statusStartsTimer: statement.int(at: 11) == 1,
             statusStopsTimer: statement.int(at: 12) == 1,
@@ -133,9 +133,9 @@ final class TodoRepository {
         )
     }
 
-    /// Tek bir todo'yu UI list item şeklinde döner (status & kategori join'leri dahil).
-    /// `WorkSessionControlService` gibi çalışma akışlarında tüm tabloyu çekmek yerine
-    /// id'ye göre SQL filtrelemesi için kullanılır.
+    /// Returns a single todo as a UI list item (with status & category joins).
+    /// Used by working-session flows like `WorkSessionControlService` so they
+    /// can SQL-filter by id instead of fetching the entire table.
     func fetchListItem(id: String) throws -> TodoListItem? {
         let sql = """
         SELECT
@@ -198,16 +198,17 @@ final class TodoRepository {
         ).first
     }
 
-    /// Birden çok id için tek sorguda toplu fetch (raporlama / faturalandırma için).
-    /// SQLite parametre limitini (`SQLITE_MAX_VARIABLE_NUMBER`, varsayılan 999) aşmamak
-    /// için id listesi 500'lük parçalara bölünüp her parça ayrı statement'ta çalıştırılır.
+    /// Bulk fetch for multiple ids in a single query (reporting / billing).
+    /// The id list is split into 500-item chunks (one statement per chunk)
+    /// so we stay under SQLite's parameter limit (`SQLITE_MAX_VARIABLE_NUMBER`,
+    /// default 999).
     func fetch(ids: [String]) throws -> [Todo] {
         guard !ids.isEmpty else { return [] }
 
         var results: [Todo] = []
         results.reserveCapacity(ids.count)
 
-        let chunkSize = 500
+        let chunkSize = SQLiteParameterLimit.inClauseChunk
         for chunkStart in stride(from: 0, to: ids.count, by: chunkSize) {
             let chunk = Array(ids[chunkStart..<min(chunkStart + chunkSize, ids.count)])
             let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
@@ -223,7 +224,7 @@ final class TodoRepository {
 
             let rows = try database.query(
                 sql,
-                map: { TodoRepository.makeTodo(from: $0) },
+                map: { try TodoRepository.makeTodo(from: $0) },
                 bind: { statement in
                     for (offset, id) in chunk.enumerated() {
                         statement.bindText(id, at: Int32(offset + 1))
@@ -236,7 +237,7 @@ final class TodoRepository {
         return results
     }
 
-    /// Düzenleme için tek todo (tüm metadata ile).
+    /// Single todo for editing (with full metadata).
     func fetch(id: String) throws -> Todo? {
         let sql = """
         SELECT
@@ -251,7 +252,7 @@ final class TodoRepository {
 
         return try database.query(
             sql,
-            map: { statement in TodoRepository.makeTodo(from: statement) },
+            map: { statement in try TodoRepository.makeTodo(from: statement) },
             bind: { statement in statement.bindText(id, at: 1) }
         ).first
     }
@@ -348,27 +349,14 @@ final class TodoRepository {
         }
     }
 
-    func softDelete(id: String, by userId: String = BuiltInUserId.defaultOwner) throws {
-        let sql = """
-        UPDATE todos
-        SET
-            deletedAt = ?, updatedAt = ?, updatedByUserId = ?,
-            rowVersion = rowVersion + 1, syncStatus = 'local'
-        WHERE id = ? AND deletedAt IS NULL;
-        """
-
-        try database.execute(sql) { statement in
-            let now = Self.formatDate(Date()) ?? ""
-            statement.bindText(now, at: 1)
-            statement.bindText(now, at: 2)
-            statement.bindText(userId, at: 3)
-            statement.bindText(id, at: 4)
-        }
+    func softDelete(id: String, by userId: String) throws {
+        // delegate to the central helper.
+        try database.softDelete(table: "todos", id: id, by: userId)
     }
 
     // MARK: - Mapping
 
-    private static func makeTodo(from statement: SQLiteStatement) -> Todo {
+    private static func makeTodo(from statement: SQLiteStatement) throws -> Todo {
         Todo(
             id: statement.text(at: 0) ?? UUID().uuidString,
             customerId: statement.text(at: 1),
@@ -383,23 +371,17 @@ final class TodoRepository {
             estimatedMinutes: statement.optionalInt(at: 10),
             isBillable: statement.int(at: 11) == 1,
             completedAt: parseDate(statement.text(at: 12)),
-            meta: statement.readMetadata(startingAt: 13)
+            meta: try statement.readMetadata(startingAt: 13)
         )
     }
 }
 
 private extension TodoRepository {
     static func parseDate(_ value: String?) -> Date? {
-        guard let value, !value.isEmpty else {
-            return nil
-        }
-        return DateFormatter.proWorkSQLite.date(from: value)
+        SQLitePersistedDate.parse(value)
     }
 
     static func formatDate(_ value: Date?) -> String? {
-        guard let value else {
-            return nil
-        }
-        return DateFormatter.proWorkSQLite.string(from: value)
+        SQLitePersistedDate.format(value)
     }
 }

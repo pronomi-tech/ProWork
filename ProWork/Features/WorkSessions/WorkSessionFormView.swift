@@ -1,9 +1,6 @@
-//
 //  WorkSessionFormView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
@@ -99,8 +96,8 @@ struct WorkSessionFormView: View {
             title: mode.title(using: settingsStore),
             subtitle: headerSubtitle,
             systemImage: "clock.badge",
-            width: 760,
-            height: 768
+            width: FormSheetSize.workSessionForm.width,
+            height: FormSheetSize.workSessionForm.height
         ) {
             headerDurationSummary
         } content: {
@@ -565,7 +562,7 @@ struct WorkSessionFormView: View {
             note = session.note ?? ""
             isManual = session.isManual
 
-            if !Calendar.current.isDate(endedAt, inSameDayAs: startedAt) {
+            if !AppCalendar.istanbul.isDate(endedAt, inSameDayAs: startedAt) {
                 endDayOffset = 1
             } else {
                 endDayOffset = 0
@@ -603,7 +600,7 @@ struct WorkSessionFormView: View {
         let newEnd = startedAt.addingTimeInterval(TimeInterval(minutes * 60))
         endedAt = newEnd
 
-        if !Calendar.current.isDate(newEnd, inSameDayAs: workDate) {
+        if !AppCalendar.istanbul.isDate(newEnd, inSameDayAs: workDate) {
             endDayOffset = 1
         } else {
             endDayOffset = 0
@@ -616,7 +613,7 @@ struct WorkSessionFormView: View {
             with: newWorkDate
         )
 
-        let endBaseDate = Calendar.current.date(
+        let endBaseDate = AppCalendar.istanbul.date(
             byAdding: .day,
             value: endDayOffset,
             to: newWorkDate
@@ -629,7 +626,7 @@ struct WorkSessionFormView: View {
     }
 
     private func syncEndDateToOffset(_ offset: Int) {
-        let targetDate = Calendar.current.date(
+        let targetDate = AppCalendar.istanbul.date(
             byAdding: .day,
             value: offset,
             to: workDate
@@ -645,12 +642,12 @@ struct WorkSessionFormView: View {
         of source: Date,
         with targetDate: Date
     ) -> Date {
-        var dateComponents = Calendar.current.dateComponents(
+        var dateComponents = AppCalendar.istanbul.dateComponents(
             [.year, .month, .day],
             from: targetDate
         )
 
-        let timeComponents = Calendar.current.dateComponents(
+        let timeComponents = AppCalendar.istanbul.dateComponents(
             [.hour, .minute],
             from: source
         )
@@ -659,11 +656,11 @@ struct WorkSessionFormView: View {
         dateComponents.minute = timeComponents.minute
         dateComponents.second = 0
 
-        return Calendar.current.date(from: dateComponents) ?? source
+        return AppCalendar.istanbul.date(from: dateComponents) ?? source
     }
 
     private func roundedToFiveMinutes(_ date: Date) -> Date {
-        let calendar = Calendar.current
+        let calendar = AppCalendar.istanbul
 
         var components = calendar.dateComponents(
             [.year, .month, .day, .hour, .minute],
@@ -679,12 +676,12 @@ struct WorkSessionFormView: View {
 
     private func save() {
         guard canSave else {
-            viewModel.errorMessage = settingsStore.localized("workSessions.form.error.invalidRange", defaultValue: "Yapılacak iş seçilmeli ve bitiş zamanı başlangıçtan sonra olmalıdır.")
+            viewModel.reportError(settingsStore.localized("workSessions.form.error.invalidRange", defaultValue: "Yapılacak iş seçilmeli ve bitiş zamanı başlangıçtan sonra olmalıdır."))
             return
         }
 
         guard !isActiveEditMode else {
-            viewModel.errorMessage = settingsStore.localized("workSessions.form.error.activeEdit", defaultValue: "Aktif çalışma kaydı düzenlenemez. Önce çalışmayı durdurmalısınız.")
+            viewModel.reportError(settingsStore.localized("workSessions.form.error.activeEdit", defaultValue: "Aktif çalışma kaydı düzenlenemez. Önce çalışmayı durdurmalısınız."))
             return
         }
 

@@ -1,9 +1,6 @@
-//
 //  ExchangeRatesView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
@@ -73,13 +70,12 @@ struct ExchangeRatesView: View {
     @State private var isShowingFilters = false
     @State private var filterRange: DateRangeFilter = .all
     @State private var selectedCurrencyFilter: String = "ALL"
-    @State private var filterCustomStart: Date = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: Date())) ?? Date()
+    @State private var filterCustomStart: Date = AppCalendar.istanbul.date(from: AppCalendar.istanbul.dateComponents([.year, .month], from: Date())) ?? Date()
     @State private var filterCustomEnd: Date = Date()
     @State private var importMode: ExchangeRateImportMode = .today
     @State private var isShowingImportModePicker = false
     @State private var importStartDate: Date = Date()
     @State private var importEndDate: Date = Date()
-    @State private var tableViewportWidth: CGFloat = 0
     @State private var editingRate: ExchangeRate?
     @State private var confirmation: ProWorkConfirmation?
 
@@ -105,7 +101,7 @@ struct ExchangeRatesView: View {
             ExchangeRateFormView(mode: .create) { rate in
                 if viewModel.add(rate, notice: settingsStore.localized("exchangeRates.notice.created", defaultValue: "Manuel kur kaydedildi.")) {
                     isShowingNew = false
-                    scheduleNoticeClear()
+                    // VM-side NoticeScheduler handles auto-dismiss.
                 }
             }
         }
@@ -113,7 +109,7 @@ struct ExchangeRatesView: View {
             ExchangeRateFormView(mode: .edit(rate)) { updated in
                 if viewModel.update(updated, notice: settingsStore.localized("exchangeRates.notice.updated", defaultValue: "Kur kaydı güncellendi.")) {
                     editingRate = nil
-                    scheduleNoticeClear()
+                    // VM-side NoticeScheduler handles auto-dismiss.
                 }
             }
         }
@@ -149,19 +145,11 @@ struct ExchangeRatesView: View {
                     filterPanel
                 }
 
-                if filteredRates.isEmpty {
-                    SettingsEmptyState(
-                        systemImage: "arrow.left.arrow.right.circle",
-                        title: settingsStore.localized("exchangeRates.empty.title", defaultValue: "Kayıt bulunamadı"),
-                        message: selectedTab == .manual
-                            ? settingsStore.localized("exchangeRates.empty.manual", defaultValue: "Manuel tabında henüz kayıt yok veya filtre sonucu boş.")
-                            : settingsStore.localized("exchangeRates.empty.filtered", defaultValue: "Seçili kaynak ve filtre için kur kaydı bulunamadı.")
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                } else {
-                    table
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                }
+                // Empty state is shown inside ProWorkGrid, so we removed the
+                // outer branching; column headers and grid chrome stay
+                // visible even when there's no data.
+                table
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
@@ -263,7 +251,49 @@ struct ExchangeRatesView: View {
             Text(String(format: settingsStore.localized("exchangeRates.supportedCurrencies", defaultValue: "Çekilen para birimleri: %@"), supportedCurrencyCodes.joined(separator: ", ")))
                 .proWorkTextStyle(.caption)
                 .foregroundStyle(.secondary)
+
+            // Sticky import-failure banner. The transient
+            // toast clears in seconds, which is too short for a user who
+            // looked away during a long sync. This banner stays until the
+            // user dismisses it or the next import succeeds.
+            if let failure = viewModel.lastImportError, failure.source == source {
+                importErrorBanner(failure)
+            }
         }
+    }
+
+    private func importErrorBanner(_ failure: ExchangeRatesViewModel.ImportFailure) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .proWorkFont(size: 14)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(settingsStore.localized("exchangeRates.import.error.title", defaultValue: "İçe aktarma başarısız"))
+                    .proWorkTextStyle(.callout, weight: .medium)
+                Text(failure.message)
+                    .proWorkTextStyle(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button {
+                viewModel.dismissLastImportError()
+            } label: {
+                Image(systemName: "xmark")
+                    .proWorkFont(size: 11)
+                    .padding(6)
+            }
+            .buttonStyle(.plain)
+            .help(settingsStore.localized("common.dismiss", defaultValue: "Kapat"))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Color.orange.opacity(0.12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.orange.opacity(0.4), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     private var importModeMenu: some View {
@@ -422,24 +452,52 @@ struct ExchangeRatesView: View {
     }
 
     private var table: some View {
-        SettingsTableContainer {
-            ScrollView([.vertical, .horizontal], showsIndicators: true) {
-                VStack(spacing: 0) {
-                    tableHeader
-                    Divider()
-                    ForEach(Array(filteredRates.enumerated()), id: \.element.id) { index, rate in
-                        row(rate, index: index)
-                        if index < filteredRates.count - 1 {
-                            Divider()
-                        }
-                    }
-                }
-                .frame(width: tableContentWidth, alignment: .leading)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(maxHeight: .infinity, alignment: .topLeading)
-        .background(tableViewportReader)
+        // Full ProWorkGrid migration. Pinned header is natural in the
+        // horizontalScrollBody variant: `header()` is inside the
+        // outer H-ScrollView but outside the inner V-ScrollView —
+        // pinned in V-scroll, scrolls with rows in H-scroll.
+        // Eskiden `noteColumnWidth` ve `tableContentWidth`'i viewport'a
+        // previously calculated manually; now we set the notes column to
+        // `maxWidth: .infinity` so it fills the remaining space between
+        // the fixed columns. `minTableWidth` is the minimum; on wider
+        // viewports GeometryReader provides the actual width.
+        ProWorkGrid(
+            items: indexedRates,
+            minTableWidth: minimumTableWidth,
+            header: { tableHeader },
+            emptyContent: {
+                ProWorkGridEmptyState(
+                    systemImage: "arrow.triangle.2.circlepath",
+                    title: hasActiveFilters
+                        ? settingsStore.localized("exchangeRates.empty.filtered", defaultValue: "Filtreyle eşleşen kur kaydı yok")
+                        : settingsStore.localized("exchangeRates.empty.title", defaultValue: "Henüz kur kaydı yok"),
+                    message: hasActiveFilters
+                        ? settingsStore.localized("exchangeRates.empty.filteredMessage", defaultValue: "Farklı filtre veya tarih aralığı deneyin.")
+                        : settingsStore.localized("exchangeRates.empty.message", defaultValue: "TCMB veya Frankfurter kaynağından kur içe aktarın ya da manuel ekleyin.")
+                )
+            },
+            row: { indexed in row(indexed.rate, index: indexed.index) }
+        )
+    }
+
+    /// Small wrapper that keeps the index for row-background zebra-striping
+    /// and the id for ForEach identity. ProWorkGrid requires
+    /// `Item: Identifiable`; we can't pass an `(index, rate)` tuple directly.
+    private struct IndexedRate: Identifiable {
+        let index: Int
+        let rate: ExchangeRate
+        var id: String { rate.id }
+    }
+
+    private var indexedRates: [IndexedRate] {
+        filteredRates.enumerated().map { IndexedRate(index: $0.offset, rate: $0.element) }
+    }
+
+    /// Sum of the fixed columns + the notes column's minimum width
+    /// (320). If the viewport is wider, the notes column flexes to
+    /// fill the remaining space; if narrower, horizontal scroll kicks in.
+    private var minimumTableWidth: CGFloat {
+        140 + 120 + 120 + 120 + 140 + 140 + 110 + 320 + 96 + 9 * 12 + 28
     }
 
     private var tableHeader: some View {
@@ -451,14 +509,14 @@ struct ExchangeRatesView: View {
             Text(settingsStore.localized("exchangeRates.column.cashBuying", defaultValue: "Efektif Alış")).frame(width: 140, alignment: .trailing)
             Text(settingsStore.localized("exchangeRates.column.cashSelling", defaultValue: "Efektif Satış")).frame(width: 140, alignment: .trailing)
             Text(settingsStore.localized("exchangeRates.column.source", defaultValue: "Kaynak")).frame(width: 110, alignment: .leading)
-            Text(settingsStore.localized("exchangeRates.column.note", defaultValue: "Not")).frame(width: noteColumnWidth, alignment: .leading)
-            Text("").frame(width: 90)
+            Text(settingsStore.localized("exchangeRates.column.note", defaultValue: "Not"))
+                .frame(minWidth: 320, maxWidth: .infinity, alignment: .leading)
+            Color.gridHeaderSpacer(width: 90)
         }
         .proWorkTextStyle(.caption)
         .foregroundStyle(.secondary)
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .frame(width: tableContentWidth, alignment: .leading)
         .background(.quaternary.opacity(0.35))
     }
 
@@ -501,7 +559,7 @@ struct ExchangeRatesView: View {
                 .proWorkTextStyle(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
-                .frame(width: noteColumnWidth, alignment: .leading)
+                .frame(minWidth: 320, maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 6) {
                 if rate.source == .manual {
@@ -522,7 +580,6 @@ struct ExchangeRatesView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .frame(width: tableContentWidth, alignment: .leading)
         .background(index.isMultiple(of: 2) ? Color.clear : Color.secondary.opacity(0.045))
     }
 
@@ -563,7 +620,7 @@ struct ExchangeRatesView: View {
     private func clearFilters() {
         filterRange = .all
         selectedCurrencyFilter = "ALL"
-        filterCustomStart = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: Date())) ?? Date()
+        filterCustomStart = AppCalendar.istanbul.date(from: AppCalendar.istanbul.dateComponents([.year, .month], from: Date())) ?? Date()
         filterCustomEnd = Date()
     }
 
@@ -585,37 +642,7 @@ struct ExchangeRatesView: View {
 
         let today = Date()
         importEndDate = today
-        importStartDate = Calendar.current.date(byAdding: .day, value: -6, to: today) ?? today
-    }
-
-    private var tableContentWidth: CGFloat {
-        fixedTableWidth + noteColumnWidth
-    }
-
-    private var noteColumnWidth: CGFloat {
-        max(320, tableViewportWidth - fixedTableWidth)
-    }
-
-    private var fixedTableWidth: CGFloat {
-        140 + 120 + 120 + 120 + 140 + 140 + 110 + 90 + 96 + 28
-    }
-
-    private var tableViewportReader: some View {
-        GeometryReader { proxy in
-            Color.clear
-                .onAppear {
-                    updateTableViewportWidth(proxy.size.width)
-                }
-                .onChange(of: proxy.size.width) { _, newWidth in
-                    updateTableViewportWidth(newWidth)
-                }
-        }
-    }
-
-    private func updateTableViewportWidth(_ width: CGFloat) {
-        let normalizedWidth = max(width, 0)
-        guard normalizedWidth != tableViewportWidth else { return }
-        tableViewportWidth = normalizedWidth
+        importStartDate = AppCalendar.istanbul.date(byAdding: .day, value: -6, to: today) ?? today
     }
 
     private func askDelete(_ rate: ExchangeRate) {
@@ -630,7 +657,7 @@ struct ExchangeRatesView: View {
                 id: rate.id,
                 notice: settingsStore.localized("exchangeRates.notice.deleted", defaultValue: "Kur kaydı silindi.")
             )
-            scheduleNoticeClear()
+            // VM-side NoticeScheduler handles auto-dismiss.
         }
     }
 
@@ -645,23 +672,18 @@ struct ExchangeRatesView: View {
                 endDate: endDate,
                 currencies: supportedCurrencyCodes
             ) {
-                viewModel.savedNotice = makeImportNotice(from: result, source: source)
-                scheduleNoticeClear()
+                // Route through the VM scheduler so the
+                // import notice auto-dismisses through the same
+                // generation-counter path as add/update/delete.
+                viewModel.showSavedNotice(makeImportNotice(from: result, source: source))
             }
         }
     }
 
-    /// Notice 2 saniye sonra otomatik temizlensin diye View tarafında
-    /// asyncAfter ile zamanlıyoruz (ViewModel ne SwiftUI Task lifecycle'a
-    /// ne de DispatchQueue.main.asyncAfter'a bu kadar yakın olmalı).
-    private func scheduleNoticeClear() {
-        let snapshot = viewModel.savedNotice
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            if viewModel.savedNotice == snapshot {
-                viewModel.savedNotice = nil
-            }
-        }
-    }
+    /// Scheduling moved into the ViewModel's
+    /// `NoticeScheduler`. The View now only triggers the show; the VM
+    /// owns the auto-dismiss timer with a race-resistant generation
+    /// counter.
 
     private func makeImportNotice(from result: TCMBExchangeRateSyncResult, source: ExchangeRateAutoSource) -> String {
         let skippedCount = result.skippedDates.count
@@ -682,12 +704,16 @@ struct ExchangeRatesView: View {
         )
     }
 
+    /// Previously this computed property allocated a fresh
+    /// NumberFormatter on every read — i.e. once per row per body render.
+    /// A 100-row table on each tick allocated 100 NSFormatters. Cache by
+    /// locale identifier so a sequence of renders with the same locale
+    /// reuse one instance.
     private var rateFormatter: NumberFormatter {
-        let formatter = NumberFormatter()
-        formatter.locale = settingsStore.locale
-        formatter.numberStyle = .decimal
-        formatter.minimumFractionDigits = 4
-        formatter.maximumFractionDigits = 4
-        return formatter
+        ProWorkFormatters.cachedDecimalFormatter(
+            localeIdentifier: settingsStore.locale.identifier,
+            minimumFractionDigits: 4,
+            maximumFractionDigits: 4
+        )
     }
 }

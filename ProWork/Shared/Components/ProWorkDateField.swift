@@ -1,9 +1,6 @@
-//
 //  ProWorkDateField.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
@@ -55,21 +52,14 @@ struct ProWorkDateField: View {
                     .proWorkFont(size: 11)
                     .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, ProWorkLayout.scaled(12, using: settingsStore))
-            .padding(.vertical, ProWorkLayout.scaled(6, using: settingsStore))
-            .frame(
-                maxWidth: .infinity,
-                minHeight: ProWorkLayout.scaled(40, using: settingsStore),
-                alignment: .leading
-            )
-            .background(.background.opacity(0.82))
-            .clipShape(RoundedRectangle(cornerRadius: ProWorkLayout.scaled(10, using: settingsStore)))
-            .overlay(
-                RoundedRectangle(cornerRadius: ProWorkLayout.scaled(10, using: settingsStore))
-                    .stroke(
-                        isShowingDatePicker ? Color.accentColor : Color.secondary.opacity(0.18),
-                        lineWidth: isShowingDatePicker ? 1.4 : 1
-                    )
+            .proWorkFieldContainer(
+                backgroundOpacity: 0.82,
+                alignment: .leading,
+                fillsWidth: true,
+                strokeColor: AnyShapeStyle(
+                    isShowingDatePicker ? Color.accentColor : Color.secondary.opacity(0.18)
+                ),
+                strokeLineWidth: isShowingDatePicker ? 1.4 : 1
             )
         }
         .buttonStyle(.plain)

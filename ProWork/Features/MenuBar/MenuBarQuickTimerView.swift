@@ -1,15 +1,25 @@
-//
 //  MenuBarQuickTimerView.swift
 //  ProWork
-//
 //   Created by Pronomi.
-//
 
 import SwiftUI
 
 struct MenuBarQuickTimerView: View {
     @EnvironmentObject private var settingsStore: AppSettingsStore
     @EnvironmentObject private var automationController: WorkAutomationController
+    /// Subscribe to the per-second tick so the popover's
+    /// `durationText` updates while open. Previously the duration was
+    /// the snapshot value at panel open and would freeze until the
+    /// user dismissed and reopened.
+    @EnvironmentObject private var clockTicker: ProWorkClockTicker
+
+    /// Replaces the action previously bound to the status item's
+    /// double-click. Triggered by the "Main Window" button inside the popover.
+    let onOpenMainWindow: () -> Void
+
+    init(onOpenMainWindow: @escaping () -> Void = {}) {
+        self.onOpenMainWindow = onOpenMainWindow
+    }
 
     private func localized(_ key: String, defaultValue: String) -> String {
         settingsStore.localized(key, defaultValue: defaultValue)
@@ -29,9 +39,16 @@ struct MenuBarQuickTimerView: View {
         .padding(14)
         .frame(width: 430)
         .onAppear {
-            Task { @MainActor in
-                automationController.updateSettings(settingsStore.settings)
-            }
+            // Deterministic order — settings push first, then
+            // automation start. The previous code dispatched the
+            // settings update inside `Task { @MainActor }` and called
+            // `automationController.start()` synchronously
+            // immediately after, so `start()` ran with the *old*
+            // settings until the runloop picked the task up. The
+            // updateSettings call is already main-actor (the
+            // controller is @MainActor); call it directly so the
+            // ordering is the source order.
+            automationController.updateSettings(settingsStore.settings)
             automationController.start()
         }
     }
@@ -58,9 +75,30 @@ struct MenuBarQuickTimerView: View {
                     color: automationController.activeSession == nil ? .secondary : .green
                 )
 
+                openMainWindowButton
                 headerRefreshButton
             }
         }
+    }
+
+    private var openMainWindowButton: some View {
+        Button(action: onOpenMainWindow) {
+            Image(systemName: "macwindow")
+                .proWorkFont(size: 13, weight: .semibold)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(Color.secondary.opacity(0.10))
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+        // SwiftUI was giving this button default focus when the popover
+        // opened and drawing an accent-coloured border around it — for
+        // a single-click menu tool, keyboard focus makes no sense. The
+        // other toolbar buttons are also `.focusable(false)` (e.g. the
+        // confirmation-dialog actions).
+        .focusable(false)
+        .help(localized("menuBar.action.mainWindow", defaultValue: "Ana Ekran"))
     }
 
     private var taskListPanel: some View {
@@ -355,6 +393,15 @@ struct MenuBarQuickTimerView: View {
         .help(localized("common.refresh", defaultValue: "Yenile"))
     }
 
+    /// Hard-coded `prefix(14)` is replaced by a named
+    /// constant. The popover's content area fits 14 rows comfortably
+    /// before the scroll appears; a future "show all" affordance can
+    /// flip `expandedAllTodos` to bypass the cap. The cap stays
+    /// inline (no extra UI today) but the constant + flag makes the
+    /// expansion trivial.
+    static let quickTodoVisibleLimit = 14
+    @State private var expandedAllTodos = false
+
     private var displayedTodos: [TodoListItem] {
         let excludedTodoIds = Set([
             automationController.activeSession?.todoId,
@@ -362,7 +409,10 @@ struct MenuBarQuickTimerView: View {
         ].compactMap { $0 })
 
         let filtered = automationController.quickTodos.filter { !excludedTodoIds.contains($0.id) }
-        return Array(filtered.prefix(14))
+        if expandedAllTodos {
+            return filtered
+        }
+        return Array(filtered.prefix(Self.quickTodoVisibleLimit))
     }
 
     private var hasSessionContext: Bool {
@@ -418,7 +468,10 @@ struct MenuBarQuickTimerView: View {
             return nil
         }
 
-        let calendar = Calendar.current
+        // Due-date comparison anchors to Istanbul so a user
+        // travelling doesn't see "due today" flip to "overdue" at the
+        // wrong moment.
+        let calendar = AppCalendar.istanbul
         if referenceDate < calendar.startOfDay(for: Date()) {
             return (localized("menuBar.due.overdue", defaultValue: "Gecikti"), .red)
         }
@@ -447,8 +500,19 @@ struct MenuBarQuickTimerView: View {
         )
     }
 
+    /// Prefer the live elapsed time over the snapshot's
+    /// captured `elapsedSeconds` so the popover ticks while open. Falls
+    /// back to the snapshot value for paused sessions (where the
+    /// snapshot already reflects "total tracked so far").
     private func durationText(for session: ActiveWorkSessionSummary) -> String {
-        ProWorkFormatters.durationHHmm(session.elapsedSeconds)
+        let seconds: Int
+        if session.isPaused {
+            seconds = session.elapsedSeconds
+        } else {
+            let live = Int(clockTicker.second.timeIntervalSince(session.startedAt))
+            seconds = max(session.elapsedSeconds, live)
+        }
+        return ProWorkFormatters.durationHHmm(seconds)
     }
 
 }

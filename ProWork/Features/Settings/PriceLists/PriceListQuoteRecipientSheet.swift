@@ -1,13 +1,10 @@
-//
 //  PriceListQuoteRecipientSheet.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
-/// Teklif PDF'i üretmeden önce alıcı bilgisi + belge numarasını toplayan sheet.
+/// Sheet that collects recipient info and document number before generating the quote PDF.
 struct PriceListQuoteRecipientSheet: View {
     struct Result {
         var recipient: PriceListQuoteBundleBuilder.RecipientInput
@@ -205,10 +202,4 @@ private struct CustomerOption: Identifiable, Hashable {
     let id: String
     let title: String
     let subtitle: String?
-}
-
-private extension String {
-    var nilIfEmpty: String? {
-        isEmpty ? nil : self
-    }
 }

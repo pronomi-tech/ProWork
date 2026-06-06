@@ -1,9 +1,6 @@
-//
 //  ContentView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 import AppKit
@@ -12,8 +9,13 @@ struct ContentView: View {
     @EnvironmentObject private var settingsStore: AppSettingsStore
 
     @State private var selectedSection: AppSection? = .home
-    /// Settings/Definitions full-screen modundan çıkınca dönülecek bölüm.
-    @State private var previousSection: AppSection = .home
+    /// Section to return to after leaving Settings/Definitions full-screen mode.
+    /// optional so the "no previous section yet" state
+    /// (cold launch, or the user opening Settings before navigating
+    /// anywhere) is distinguishable from "the user was on Home".
+    /// `closeSettings()/closeDefinitions()` fall back to `.home` only
+    /// when `previousSection == nil`.
+    @State private var previousSection: AppSection? = nil
     @State private var isSettingsOpen: Bool = false
     @State private var isDefinitionsOpen: Bool = false
 
@@ -54,12 +56,12 @@ struct ContentView: View {
 
     private func closeSettings() {
         isSettingsOpen = false
-        selectedSection = previousSection
+        selectedSection = previousSection ?? .home
     }
 
     private func closeDefinitions() {
         isDefinitionsOpen = false
-        selectedSection = previousSection
+        selectedSection = previousSection ?? .home
     }
 
     private var sidebar: some View {
@@ -143,8 +145,8 @@ struct ContentView: View {
             ReportsView()
 
         case .definitions:
-            // Sidebar seçimi yapıldığında full-screen Definitions açılır;
-            // bu dal yalnızca geçiş anında görünür.
+            // Selecting Definitions in the sidebar opens the full-screen
+            // version; this branch is only visible during the transition.
             Color.clear
 
         case .settings:
@@ -178,30 +180,21 @@ struct ContentView: View {
         ProWorkLayout.scale(using: settingsStore)
     }
 
+    /// Derive min dimensions from `fontScale` instead of
+    /// maintaining a per-fontSize lookup table. The previous table
+    /// would drift if anyone tweaked the layout — every cell needed
+    /// to be re-measured. Base values (normal scale) match the
+    /// historical normal-row, and `fontScale` already encapsulates
+    /// the per-fontSize multiplier (`ProWorkLayout.scale(using:)`).
+    private static let appBaseMinWidth: CGFloat = 1392
+    private static let appBaseMinHeight: CGFloat = 768
+
     private var appMinWidth: CGFloat {
-        switch settingsStore.settings.fontSize {
-        case .small:
-            return 1305
-        case .normal:
-            return 1392
-        case .large:
-            return 1525
-        case .extraLarge:
-            return 1669
-        }
+        ProWorkLayout.scaled(Self.appBaseMinWidth, using: settingsStore)
     }
 
     private var appMinHeight: CGFloat {
-        switch settingsStore.settings.fontSize {
-        case .small:
-            return 850
-        case .normal:
-            return 920
-        case .large:
-            return 1024
-        case .extraLarge:
-            return 1140
-        }
+        ProWorkLayout.scaled(Self.appBaseMinHeight, using: settingsStore)
     }
 
     private var sidebarMinWidth: CGFloat {

@@ -1,13 +1,9 @@
-//
 //  BillingDraftPickerViewModel.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
-//  BillingDraftPickerSheet için domain state + repository orkestrasyonu.
-//  Sheet, BillingRunsView içinde nested halde yaşıyor; bu yüzden iki view'ın
-//  ViewModel'leri kardeş olarak duruyor.
-//
+//  Domain state + repository orchestration for BillingDraftPickerSheet.
+//  The sheet is nested inside BillingRunsView, so the two views' ViewModels
+//  live as siblings.
 
 import Combine
 import Foundation
@@ -30,13 +26,26 @@ final class BillingDraftPickerViewModel: ObservableObject {
     private let tcmbSyncService: TCMBExchangeRateSyncService
     private let globalSyncService: GlobalExchangeRateSyncService
 
+    /// LoadPreview is debounced so customer / period drag changes don't
+    /// fire a separate `previewDraft` for every tick.
+    private var pendingPreviewTask: Task<Void, Never>?
+    private let previewDebounceInterval: UInt64 = 300_000_000
+
+    private let services: AppServices
+
+    /// Nested `BillingRunLifecycleService` now wires through
+    /// the injected `services` container by default, so test mocks
+    /// propagate. Callers that already construct a custom
+    /// `BillingRunLifecycleService` can still pass it via the
+    /// optional argument and override the convenience routing.
     init(
         services: AppServices = .shared,
         lifecycleService: BillingRunLifecycleService? = nil,
         tcmbSyncService: TCMBExchangeRateSyncService? = nil,
         globalSyncService: GlobalExchangeRateSyncService? = nil
     ) {
-        self.lifecycleService = lifecycleService ?? BillingRunLifecycleService()
+        self.services = services
+        self.lifecycleService = lifecycleService ?? BillingRunLifecycleService(services: services)
         self.customerRepository = services.customerRepository
         self.priceListRepository = services.priceListRepository
         self.organizationRepository = services.organizationRepository
@@ -46,17 +55,18 @@ final class BillingDraftPickerViewModel: ObservableObject {
 
     // MARK: - Loading
 
-    /// Sheet ilk açıldığında çağrılır. Yerel müşteri listesi ve para birimleri
-    /// repository'lerden çekilir; hata olursa caller'ın geçtiği fallback
-    /// listeleri kullanılır (sheet sundan önce yüklenmiş `customers` /
-    /// `customerCurrencies` argümanları).
+    /// Called when the sheet first opens. The local customer list and
+    /// currencies are fetched from the repositories; on error the
+    /// fallback lists passed by the caller are used (`customers` /
+    /// `customerCurrencies` arguments preloaded before the sheet).
     func loadCustomers(
         fallback customers: [Customer],
         fallbackCurrencies: [String: String]
     ) {
         do {
             let loadedCustomers = try customerRepository.fetchAll()
-            let organizationCurrency = try organizationRepository.fetchDefault()?.masterCurrency ?? "TRY"
+            // Master currency cached in AppServices.
+            let organizationCurrency = services.cachedMasterCurrency()
             let priceLists = try priceListRepository.fetchAll(organizationId: BuiltInOrganizationId.default)
 
             availableCustomers = loadedCustomers
@@ -79,19 +89,38 @@ final class BillingDraftPickerViewModel: ObservableObject {
         }
     }
 
-    /// Belirtilen müşteri / dönem için önizleme satırlarını çeker.
-    /// Boş customerId verilirse mevcut preview temizlenir.
+    /// Fetches preview lines for the given customer / period.
+    /// If an empty customerId is passed, the current preview is cleared.
     func loadPreview(
         customerId: String,
         periodStart: Date,
         periodEnd: Date
     ) {
         guard !customerId.isEmpty else {
+            pendingPreviewTask?.cancel()
+            pendingPreviewTask = nil
             preview = nil
             previewErrorMessage = nil
             return
         }
 
+        pendingPreviewTask?.cancel()
+        pendingPreviewTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: self?.previewDebounceInterval ?? 300_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.performLoadPreview(
+                customerId: customerId,
+                periodStart: periodStart,
+                periodEnd: periodEnd
+            )
+        }
+    }
+
+    private func performLoadPreview(
+        customerId: String,
+        periodStart: Date,
+        periodEnd: Date
+    ) {
         isLoadingPreview = true
         defer { isLoadingPreview = false }
 
@@ -111,14 +140,22 @@ final class BillingDraftPickerViewModel: ObservableObject {
     }
 
     func clearPreview() {
+        pendingPreviewTask?.cancel()
+        pendingPreviewTask = nil
         preview = nil
         previewErrorMessage = nil
     }
 
     // MARK: - Rate import
 
-    /// Önizleme için bugünkü kurları çeker. Tercih edilen kaynakta veri yoksa
+    /// Fetches today's rates for the preview. If the preferred source has no data,
     /// alternatif kaynak (TCMB ↔ Global) ile yeniden dener.
+    ///
+    /// When the preferred source returns empty / fails and the
+    /// fallback succeeds, surface a notice so the user knows the
+    /// fetched rates came from the secondary provider — previously the
+    /// fallback ran silently, which surfaced as "Frankfurter rates
+    /// pretending to be TCMB" in support tickets.
     func importTodayRates(
         currencies: [String],
         preferredSource: ExchangeRateAutoSource
@@ -136,10 +173,26 @@ final class BillingDraftPickerViewModel: ObservableObject {
                 return (preferredSource, result)
             }
             let fallbackResult = try await syncTodayRates(for: fallbackSource, currencies: currencies)
+            previewNoticeMessage = String(
+                format: ProWorkLocalizer.shared.string(
+                    "billingDraftPicker.notice.fallbackUsed",
+                    defaultValue: "%@ tarafından bugün için veri yok; kurlar %@ kaynağından alındı."
+                ),
+                preferredSource.title,
+                fallbackSource.title
+            )
             return (fallbackSource, fallbackResult)
         } catch let primaryError {
             do {
                 let fallbackResult = try await syncTodayRates(for: fallbackSource, currencies: currencies)
+                previewNoticeMessage = String(
+                    format: ProWorkLocalizer.shared.string(
+                        "billingDraftPicker.notice.fallbackUsedAfterError",
+                        defaultValue: "%@ kaynağı hata verdi; kurlar %@ kaynağından alındı."
+                    ),
+                    preferredSource.title,
+                    fallbackSource.title
+                )
                 return (fallbackSource, fallbackResult)
             } catch let fallbackError {
                 previewErrorMessage = CompositeRateImportError(
@@ -168,13 +221,13 @@ final class BillingDraftPickerViewModel: ObservableObject {
     // MARK: - Master currency helper
 
     func masterCurrency() -> String {
-        ((try? organizationRepository.fetchDefault())?.masterCurrency ?? "TRY").uppercased()
+        services.cachedMasterCurrency()
     }
 }
 
-/// İki kaynak da başarısız olunca üretilen birleşik hata mesajı.
-/// Daha önce BillingDraftPickerSheet'in private nested struct'ıydı; ViewModel
-/// taşınınca buraya çıkarıldı.
+/// Combined error message produced when both sources fail.
+/// Was a private nested struct of BillingDraftPickerSheet; promoted to
+/// top-level here when the ViewModel was moved out.
 struct CompositeRateImportError: LocalizedError {
     let primarySource: ExchangeRateAutoSource
     let primaryMessage: String

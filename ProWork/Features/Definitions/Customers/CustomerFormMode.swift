@@ -1,31 +1,29 @@
-//
 //  CustomerFormMode.swift
 //  ProWork
-//
-//  Created by Pronomi.
-//
+//  Type-alias over the generic `FormMode<Entity>`.
 
 import Foundation
 
-enum CustomerFormMode {
-    case create
-    case edit(Customer)
+typealias CustomerFormMode = FormMode<Customer>
 
+extension FormMode where Entity == Customer {
     func title(using settingsStore: AppSettingsStore) -> String {
-        switch self {
-        case .create:
-            return settingsStore.localized("customers.form.mode.create", defaultValue: "Yeni Müşteri")
-        case .edit:
-            return settingsStore.localized("customers.form.mode.edit", defaultValue: "Müşteri Düzenle")
-        }
+        title(
+            using: settingsStore,
+            createKey: "customers.form.mode.create",
+            createDefault: "Yeni Müşteri",
+            editKey: "customers.form.mode.edit",
+            editDefault: "Müşteri Düzenle"
+        )
     }
 
     func saveButtonTitle(using settingsStore: AppSettingsStore) -> String {
-        switch self {
-        case .create:
-            return settingsStore.localized("common.save", defaultValue: "Kaydet")
-        case .edit:
-            return settingsStore.localized("customers.form.save.update", defaultValue: "Güncelle")
-        }
+        saveButtonTitle(
+            using: settingsStore,
+            createKey: "common.save",
+            createDefault: "Kaydet",
+            editKey: "customers.form.save.update",
+            editDefault: "Güncelle"
+        )
     }
 }

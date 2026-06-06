@@ -1,9 +1,6 @@
-//
 //  CompanyProfileRepository.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 import SQLite3
@@ -29,7 +26,7 @@ final class CompanyProfileRepository {
 
         return try database.query(
             sql,
-            map: { Self.makeProfile(from: $0) },
+            map: { try Self.makeProfile(from: $0) },
             bind: { $0.bindText(organizationId, at: 1) }
         ).first
     }
@@ -87,8 +84,8 @@ final class CompanyProfileRepository {
         }
     }
 
-    private static func makeProfile(from statement: SQLiteStatement) -> CompanyProfile {
-        let meta = statement.readMetadata(startingAt: 11)
+    private static func makeProfile(from statement: SQLiteStatement) throws -> CompanyProfile {
+        let meta = try statement.readMetadata(startingAt: 11)
         return CompanyProfile(
             id: statement.text(at: 0) ?? UUID().uuidString,
             legalName: statement.text(at: 1) ?? "",

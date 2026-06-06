@@ -1,9 +1,6 @@
-//
 //  TodoStatusesView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
@@ -20,14 +17,14 @@ struct TodoStatusesView: View {
             title: settingsStore.localized("todoStatuses.title", defaultValue: "İş Akışı Statüleri"),
             subtitle: settingsStore.localized("todoStatuses.subtitle", defaultValue: "Yapılacak listesi kolonları, görünürlük ve süre başlatma/durdurma davranışlarını yönetin."),
             errorMessage: viewModel.errorMessage,
+            contentScrollBehavior: .fixed,
             toolbar: {
-                Button {
+                SettingsCRUDToolbarButton(
+                    title: settingsStore.localized("todoStatuses.action.new", defaultValue: "Yeni Statü"),
+                    systemImage: "plus"
+                ) {
                     isShowingCreateForm = true
-                } label: {
-                    ProWorkButtonLabel(title: settingsStore.localized("todoStatuses.action.new", defaultValue: "Yeni Statü"), systemImage: "plus", minHeight: 32)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
             }
         ) {
             statusTable
@@ -35,57 +32,51 @@ struct TodoStatusesView: View {
         .onAppear {
             viewModel.load()
         }
-        .sheet(isPresented: $isShowingCreateForm) {
-            TodoStatusFormView(mode: .create) { status in
-                if viewModel.create(status) {
-                    isShowingCreateForm = false
+        .settingsCRUDPresenter(
+            isShowingCreate: $isShowingCreateForm,
+            editingItem: $editingStatus,
+            confirmation: $confirmation,
+            createForm: {
+                TodoStatusFormView(mode: .create) { status in
+                    if viewModel.create(status) {
+                        isShowingCreateForm = false
+                    }
                 }
-            }
-        }
-        .sheet(item: $editingStatus) { status in
-            TodoStatusFormView(mode: .edit(status)) { updatedStatus in
-                if viewModel.update(updatedStatus) {
-                    editingStatus = nil
-                }
-            }
-        }
-        .proWorkConfirmationDialog($confirmation)
-    }
-
-    private var statusTable: some View {
-        SettingsTableContainer {
-            tableHeader
-
-            Divider()
-
-            if viewModel.statuses.isEmpty {
-                emptyState
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(viewModel.statuses) { status in
-                            TodoStatusCompactRowView(
-                                status: status,
-                                onEdit: {
-                                    editingStatus = status
-                                },
-                                onDelete: {
-                                    askDeleteStatus(status)
-                                }
-                            )
-
-                            Divider()
-                        }
+            },
+            editForm: { status in
+                TodoStatusFormView(mode: .edit(status)) { updatedStatus in
+                    if viewModel.update(updatedStatus) {
+                        editingStatus = nil
                     }
                 }
             }
-        }
+        )
+    }
+
+    private var statusTable: some View {
+        ProWorkGrid(
+            items: viewModel.statuses,
+            header: { tableHeader },
+            emptyContent: {
+                ProWorkGridEmptyState(
+                    systemImage: "rectangle.3.group",
+                    title: settingsStore.localized("todoStatuses.empty.title", defaultValue: "Henüz iş akışı statüsü yok"),
+                    message: settingsStore.localized("todoStatuses.empty.message", defaultValue: "Sağ üstten yeni statü oluşturabilirsiniz.")
+                )
+            },
+            row: { status in
+                TodoStatusCompactRowView(
+                    status: status,
+                    onEdit: { editingStatus = status },
+                    onDelete: { askDeleteStatus(status) }
+                )
+            }
+        )
     }
 
     private var tableHeader: some View {
         HStack(spacing: 12) {
-            Text("")
-                .proWorkFrame(width: 24)
+            Color.gridHeaderSpacer(width: 24)
 
             Text(settingsStore.localized("todoStatuses.column.status", defaultValue: "Statü"))
                 .proWorkFrame(maxWidth: .infinity, alignment: .leading)
@@ -99,30 +90,13 @@ struct TodoStatusesView: View {
             Text(settingsStore.localized("todoStatuses.column.source", defaultValue: "Kaynak"))
                 .proWorkFrame(width: 70, alignment: .leading)
 
-            Text("")
-                .proWorkFrame(width: 72)
+            Color.gridHeaderSpacer(width: 72)
         }
         .proWorkTextStyle(.caption)
         .foregroundStyle(.secondary)
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.quaternary.opacity(0.35))
-    }
-
-    private var emptyState: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "rectangle.3.group")
-                .proWorkFont(size: 28)
-                .foregroundStyle(.secondary)
-
-            Text(settingsStore.localized("todoStatuses.empty.title", defaultValue: "Henüz iş akışı statüsü yok"))
-                .proWorkTextStyle(.headline)
-
-            Text(settingsStore.localized("todoStatuses.empty.message", defaultValue: "Sağ üstten yeni statü oluşturabilirsiniz."))
-                .proWorkTextStyle(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .proWorkFrame(minHeight: 220, maxWidth: .infinity)
     }
 
     private func askDeleteStatus(_ status: TodoStatus) {

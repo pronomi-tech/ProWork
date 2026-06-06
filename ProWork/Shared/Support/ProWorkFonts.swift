@@ -1,9 +1,6 @@
-//
-// .proWorkFont(s.swift
+//  ProWorkFonts.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 

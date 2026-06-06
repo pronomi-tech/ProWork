@@ -1,9 +1,6 @@
-//
 //  VatRateFormView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
@@ -41,8 +38,8 @@ struct VatRateFormView: View {
             title: mode.title(using: settingsStore),
             subtitle: nil,
             systemImage: "percent",
-            width: 560,
-            height: 460
+            width: FormSheetSize.vatRateForm.width,
+            height: FormSheetSize.vatRateForm.height
         ) {
             VStack(alignment: .leading, spacing: ProWorkLayout.formScaled(14, using: settingsStore)) {
                 SettingsFormError(message: errorMessage)
@@ -132,11 +129,15 @@ struct VatRateFormView: View {
         if isExempt {
             rate = 0
         } else {
-            let formatter = NumberFormatter()
-            formatter.locale = settingsStore.locale
-            formatter.numberStyle = .decimal
-            let parsed = formatter.number(from: rateText)?.decimalValue
-                ?? Decimal(string: rateText.replacingOccurrences(of: ",", with: "."))
+            // Routed through the shared ProWorkDecimalParser
+            // so VAT and price forms share one locale + POSIX fallback
+            // path. The previous String.replacingOccurrences fallback
+            // would have corrupted en_US "1,234.56" by stripping the
+            // thousand-separator comma.
+            let localeFormatter = NumberFormatter()
+            localeFormatter.locale = settingsStore.locale
+            localeFormatter.numberStyle = .decimal
+            let parsed = ProWorkDecimalParser.parse(rateText, primary: localeFormatter, maximumFractionDigits: 4)
             guard let value = parsed, value >= 0 else {
                 errorMessage = settingsStore.localized("vat.form.error.invalidRate", defaultValue: "Oran geçersiz.")
                 return

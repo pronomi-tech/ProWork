@@ -1,9 +1,6 @@
-//
 //  ProWorkToast.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Combine
 import SwiftUI
@@ -52,6 +49,14 @@ final class ProWorkToastStore: ObservableObject {
     static let shared = ProWorkToastStore()
 
     @Published private(set) var toasts: [ProWorkToastMessage] = []
+    /// Cancellable auto-dismiss timers per toast id. The
+    /// previous `DispatchQueue.main.asyncAfter` fire was not
+    /// cancellable, so user-pressed dismiss would fire animation +
+    /// removeAll twice if the timer subsequently expired against a
+    /// stale id (no observable bug today because removeAll is
+    /// idempotent, but the indirection made the lifetime unclear).
+    /// Tasks here can be `.cancel()`'d when the user dismisses early.
+    private var dismissalTasks: [UUID: Task<Void, Never>] = [:]
 
     func show(
         _ message: String,
@@ -67,14 +72,19 @@ final class ProWorkToastStore: ObservableObject {
             toasts.append(toast)
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
-            Task { @MainActor in
+        let nanoseconds = UInt64(max(0, duration) * 1_000_000_000)
+        dismissalTasks[toast.id] = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: nanoseconds)
+            guard !Task.isCancelled else { return }
+            await MainActor.run { [weak self] in
                 self?.dismiss(id: toast.id)
             }
         }
     }
 
     func dismiss(id: UUID) {
+        dismissalTasks[id]?.cancel()
+        dismissalTasks[id] = nil
         withAnimation(.easeInOut(duration: 0.2)) {
             toasts.removeAll { $0.id == id }
         }

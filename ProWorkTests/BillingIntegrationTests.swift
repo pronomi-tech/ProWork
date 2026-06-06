@@ -1,10 +1,7 @@
-//
 //  BillingIntegrationTests.swift
 //  ProWorkTests
-//
 //  Gerçek DB üstünde uçtan uca senaryolar:
 //  BillingComputationService.computePeriod + BillingRunLifecycleService.createDraft/finalize/delete.
-//
 
 import XCTest
 @testable import ProWork

@@ -1,9 +1,6 @@
-//
 //  BillingRunExportService.swift
 //  ProWork
-//
 //   Created by Pronomi.
-//
 
 import AppKit
 import Compression
@@ -65,7 +62,13 @@ final class BillingRunExportService {
         }
     }
 
-    @MainActor
+    /// Previously @MainActor, which pinned the entire
+    /// PDF render (CPU-heavy CoreText / NSGraphicsContext work) to the
+    /// main actor even though BillingPdfRenderer itself is Sendable and
+    /// non-isolated. Drop the isolation and forward directly to the
+    /// renderer — `BillingPdfRenderer.render` already wraps its body in
+    /// `Task.detached(priority: .userInitiated)`, so the outer detached
+    /// task in this method was redundant double-wrapping.
     func exportPDF(
         bundle: BillingRunBundle,
         settings: ServiceDocumentTemplateSettings = .defaultTemplate
@@ -75,18 +78,94 @@ final class BillingRunExportService {
 
     func suggestedFilename(format: BillingExportFormat, bundle: BillingRunBundle) -> String {
         let customerName = (bundle.customer?.name ?? bundle.run.customerId)
-            .replacingOccurrences(of: " ", with: "_")
         let title = bundle.run.invoiceNumber ?? bundle.run.title ?? ProWorkLocalizer.shared.string("export.filename.default", defaultValue: "hizmet_dokumu")
-        let sanitizedTitle = title
-            .replacingOccurrences(of: " ", with: "_")
-            .replacingOccurrences(of: "/", with: "-")
-        return "\(customerName)_\(sanitizedTitle).\(format.fileExtension)"
+        let stem = "\(BillingRunExportService.sanitizeFilenameComponent(customerName))_\(BillingRunExportService.sanitizeFilenameComponent(title))"
+        return "\(stem).\(format.fileExtension)"
+    }
+
+    /// Filename sanitizer. Whitelist-only — keeps ASCII alnum and `-_.`
+    /// plus Unicode letters / digits; everything else (control bytes,
+    /// RTL/LTR overrides, spaces, path delimiters) collapses to `_`.
+    /// the flow used to interleave filter / `..` collapse
+    /// / trim / max-length / Windows-reserved-name prefix in an order that
+    /// made the contract hard to read (and applied max-length *before*
+    /// the reserved-name prefix, which could push the result one over).
+    /// The pipeline is now an explicit, single-direction sequence:
+    /// filter → collapse → trim → empty-fallback → Windows-reserve guard
+    /// → cap to maxLength. Each step has a single responsibility and the
+    /// final length cap is the last write, so the contract `result.count
+    /// <= maxLength` always holds.
+    static func sanitizeFilenameComponent(_ input: String, maxLength: Int = 120) -> String {
+        // Step 1: whitelist filter — one pass over unicode scalars.
+        let allowed = CharacterSet.alphanumerics
+            .union(CharacterSet(charactersIn: "-_."))
+        var filtered = String()
+        filtered.reserveCapacity(input.unicodeScalars.count)
+        for scalar in input.unicodeScalars {
+            let isControl = scalar.value < 0x20 || scalar.value == 0x7F
+            let isBidiOverride = (0x200E...0x202E).contains(scalar.value)
+                || (0x2066...0x2069).contains(scalar.value)
+            let isSpace = scalar == " "
+            let isAllowed = !isControl
+                && !isBidiOverride
+                && !isSpace
+                && (allowed.contains(scalar)
+                    || CharacterSet.letters.contains(scalar)
+                    || CharacterSet.decimalDigits.contains(scalar))
+            if isAllowed {
+                filtered.unicodeScalars.append(scalar)
+            } else {
+                filtered.append("_")
+            }
+        }
+
+        // Step 2: collapse `..` runs so no path-traversal segment survives.
+        while filtered.contains("..") {
+            filtered = filtered.replacingOccurrences(of: "..", with: "_")
+        }
+
+        // Step 3: trim Windows-hostile leading / trailing characters.
+        let trimSet = CharacterSet(charactersIn: ". _")
+        var result = filtered.trimmingCharacters(in: trimSet)
+
+        // Step 4: empty fallback before any subsequent prefix mutation.
+        if result.isEmpty {
+            result = "untitled"
+        }
+
+        // Step 5: Windows reserves CON, PRN, AUX, NUL, COM1…9, LPT1…9
+        // case-insensitively, with or without extension. Prefix `_` when
+        // the stem matches; the extension can stay untouched.
+        let baseName = result.split(separator: ".").first.map(String.init) ?? result
+        let reserved: Set<String> = [
+            "CON", "PRN", "AUX", "NUL",
+            "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        ]
+        if reserved.contains(baseName.uppercased()) {
+            result = "_" + result
+        }
+
+        // Step 6: final length cap (applied last so the contract
+        // result.count <= maxLength always holds, even after step 5).
+        if result.count > maxLength {
+            result = String(result.prefix(maxLength))
+        }
+
+        return result
     }
 
     private func jsonData(for bundle: BillingRunBundle) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
+        // Foundation's JSONEncoder pipes `Decimal`
+        // through `Double`, which would corrupt the audit snapshot. The
+        // payload only encodes integer (`Int`) money fields and the
+        // string-wrapped `Decimal` (`AuditDecimal`) for the VAT rate, so
+        // no Double round-trip can occur. Any future Decimal field added
+        // to `BillingRunExportPayload` MUST use `AuditDecimal` (or string)
+        // to preserve the invariant.
         return try encoder.encode(BillingRunExportPayload(bundle: bundle))
     }
 
@@ -107,9 +186,12 @@ final class BillingRunExportService {
             ProWorkLocalizer.shared.string("reports.summary.grandTotal", defaultValue: "Toplam"),
             ProWorkLocalizer.shared.string("export.column.currency", defaultValue: "Para Birimi")
         ]
+        // CRLF line separator for Excel/Windows compatibility.
+        // The BOM is already written; \r\n termination is required for
+        // full RFC 4180 + Excel expectations, otherwise it opens as "one line".
         let csv = ([header] + rows)
             .map { $0.map(Self.escapeCSVField).joined(separator: ",") }
-            .joined(separator: "\n")
+            .joined(separator: "\r\n")
         var data = Data([0xEF, 0xBB, 0xBF])
         data.append(Data(csv.utf8))
         return data
@@ -179,38 +261,58 @@ final class BillingRunExportService {
         }
     }
 
+    /// Escapes a single CSV cell value.
+    /// the order matters and the dependency between the
+    /// two steps is intentional but was previously undocumented. Step 1
+    /// is `SpreadsheetCellSanitizer.escape`, which neutralises formula-
+    /// injection prefixes (`=`, `+`, `-`, `@`, `|`, TAB, CR) by prepending
+    /// a leading `'`. Step 2 is CSV-quote escaping (`"` → `""` and wrap
+    /// in `"…"` when the field contains comma / quote / newline). These
+    /// MUST run in this order — running CSV escape first would leave the
+    /// dangerous prefix character at position 0 of the cell that Excel
+    /// imports, defeating the formula-injection guard.
     nonisolated private static func escapeCSVField(_ value: String) -> String {
-        // CSV injection koruması: `=`, `+`, `-`, `@`, TAB veya CR ile başlayan
-        // hücreler Excel / LibreOffice tarafından formül olarak yürütülüyor
-        // (örn. `=cmd|' /C calc'!A0` müşteri başlığında). Başına tek tırnak
-        // ekleyerek hücreyi metin yapıyoruz; Excel açılışta apostrofu gizler.
-        let dangerousLeaders: Set<Character> = ["=", "+", "-", "@", "\t", "\r"]
-        let sanitized: String
-        if let first = value.first, dangerousLeaders.contains(first) {
-            sanitized = "'\(value)"
-        } else {
-            sanitized = value
-        }
-
+        // Step 1: spreadsheet-safe sanitisation (formula injection guard).
+        let sanitized = SpreadsheetCellSanitizer.escape(value)
+        // Step 2: CSV quoting on top of the sanitised value.
         let needsQuotes = sanitized.contains(",") || sanitized.contains("\"") || sanitized.contains("\n")
         let escaped = sanitized.replacingOccurrences(of: "\"", with: "\"\"")
         return needsQuotes ? "\"\(escaped)\"" : escaped
     }
 
+    /// CSV / XLSX dates are emitted in ISO 8601 with a POSIX
+    /// locale so Excel (and any other consumer) parses them deterministically
+    /// regardless of system locale. Hardcoded `tr_TR` formatting previously
+    /// produced `dd.MM.yyyy` text that downstream tools imported as strings
+    /// instead of dates.
     nonisolated private static func displayDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "tr_TR")
-        formatter.dateFormat = "dd.MM.yyyy HH:mm"
-        return formatter.string(from: date)
+        Self.exportDateTimeFormatter.string(from: date)
     }
 
     nonisolated private static func displayDateTimeWithSeconds(_ date: Date?) -> String {
         guard let date else { return "—" }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "tr_TR")
-        formatter.dateFormat = "dd.MM.yyyy HH:mm:ss"
-        return formatter.string(from: date)
+        return Self.exportDateTimeWithSecondsFormatter.string(from: date)
     }
+
+    /// `nonisolated(unsafe)`: DateFormatter is thread-safe per Apple
+    /// docs (iOS 7+ / macOS 10.9+) but not Sendable in Swift's type
+    /// system. This formatter is used from nonisolated `displayDate(_:)`
+    /// and `displayDateTimeWithSeconds(_:)` helpers — avoids the cost
+    /// of pulling MainActor isolation inward.
+    /// unsafe opt-out kabul edilebilir.
+    nonisolated private static let exportDateTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return formatter
+    }()
+
+    nonisolated private static let exportDateTimeWithSecondsFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter
+    }()
 }
 
 private struct BillingRunExportPayload: Encodable {
@@ -226,6 +328,25 @@ private struct BillingRunExportPayload: Encodable {
         self.companyProfile = bundle.companyProfile.map(CompanyProfilePayload.init)
         self.lines = bundle.lines.map(LinePayload.init)
         self.payments = bundle.payments.map(PaymentPayload.init)
+    }
+
+    /// Shared ISO 8601 formatter for export payloads. Pinned to UTC and the
+    /// `withInternetDateTime` option set so consumers see a single uniform
+    /// shape across `finalizedAt`, line-level timestamps, etc.
+    /// `nonisolated(unsafe)`: ISO8601DateFormatter is documented as
+    /// thread-safe by Apple (macOS 10.12+) but lacks Sendable conformance
+    /// in Swift's type system. The shared-formatter pattern here is
+    /// intentional (avoids allocating a new instance per export call) —
+    /// the unsafe opt-out is acceptable because there is no actual race.
+    nonisolated(unsafe) static let iso8601Formatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        return formatter
+    }()
+
+    nonisolated static func iso8601String(_ date: Date) -> String {
+        iso8601Formatter.string(from: date)
     }
 
     struct RunPayload: Encodable {
@@ -244,7 +365,12 @@ private struct BillingRunExportPayload: Encodable {
         let balanceMinor: Int
         let paymentStatus: String
         let dueDate: String?
-        let finalizedAt: Date?
+        /// Previously a raw `Date`, which JSONEncoder encoded
+        /// as a different string flavour from the day-only `periodStart` /
+        /// `periodEnd` / `dueDate` siblings — consumers had to branch on type.
+        /// Encode as ISO 8601 string so every date-shaped field in the run
+        /// payload is the same JSON shape (`null` or `String`).
+        let finalizedAt: String?
 
         nonisolated init(run: BillingReportRun) {
             id = run.id
@@ -262,7 +388,7 @@ private struct BillingRunExportPayload: Encodable {
             balanceMinor = run.balanceMinor
             paymentStatus = run.paymentStatus.rawValue
             dueDate = run.dueDate
-            finalizedAt = run.finalizedAt
+            finalizedAt = run.finalizedAt.map(BillingRunExportPayload.iso8601String)
         }
     }
 
@@ -299,37 +425,65 @@ private struct BillingRunExportPayload: Encodable {
     struct LinePayload: Encodable {
         let workTitle: String
         let note: String?
-        let startedAt: Date?
-        let endedAt: Date?
+        /// Encoded as ISO 8601 string so the on-disk shape
+        /// matches the run-level period/dueDate/finalizedAt siblings.
+        let startedAt: String?
+        let endedAt: String?
         let serviceType: String
         let timeType: String
         let billableMinutes: Int
         let unitPriceMinor: Int
         let fixedFeeMinor: Int
         let amountMinor: Int
+        /// Y10: We embed the VAT rate into the snapshot as a string; Decimal
+        /// olarak encode etmek `Double` round-trip riski getirirdi.
+        let vatRate: AuditDecimal
         let vatMinor: Int
         let totalMinor: Int
         let currency: String
+        let isVatExempt: Bool
 
         nonisolated init(_ line: BillingReportLine) {
             workTitle = line.todoTitle
             note = line.note
-            startedAt = line.startedAt
-            endedAt = line.endedAt
+            startedAt = line.startedAt.map(BillingRunExportPayload.iso8601String)
+            endedAt = line.endedAt.map(BillingRunExportPayload.iso8601String)
             serviceType = line.serviceType.rawValue
             timeType = line.timeType.rawValue
             billableMinutes = line.billableMinutes
             unitPriceMinor = line.unitPriceMinor
             fixedFeeMinor = line.fixedFeeMinor ?? 0
             amountMinor = line.amountMinor
+            vatRate = AuditDecimal(line.vatRate)
             vatMinor = line.vatMinor
             totalMinor = line.totalMinor
             currency = line.currency
+            isVatExempt = line.isVatExempt
+        }
+    }
+
+    /// Wrapper that always encodes `Decimal` as a canonical string.
+    /// Foundation's JSONEncoder implementation serialises Decimal via
+    /// Double; unacceptable for a financial snapshot.
+    /// `nonisolated`: called from the enclosing `BillingRunExportPayload`'s
+    /// nonisolated init, so it must stay outside the MainActor isolation default.
+    nonisolated struct AuditDecimal: Encodable {
+        let value: Decimal
+
+        init(_ value: Decimal) {
+            self.value = value
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            try container.encode(NSDecimalNumber(decimal: value).stringValue)
         }
     }
 
     struct PaymentPayload: Encodable {
-        let paidAt: Date
+        /// Encoded as ISO 8601 string for shape parity with
+        /// other date-shaped fields in the export payload.
+        let paidAt: String
         let amountMinor: Int
         let currency: String
         let method: String
@@ -337,7 +491,7 @@ private struct BillingRunExportPayload: Encodable {
         let note: String?
 
         nonisolated init(_ payment: Payment) {
-            paidAt = payment.paidAt
+            paidAt = BillingRunExportPayload.iso8601String(payment.paidAt)
             amountMinor = payment.amountMinor
             currency = payment.currency
             method = payment.method.rawValue
@@ -409,7 +563,13 @@ private enum MinimalXLSXWriter {
         let sheetRows = rows.enumerated().map { rowIndex, columns in
             let cells = columns.enumerated().map { columnIndex, value in
                 let cellRef = "\(columnName(columnIndex + 1))\(rowIndex + 1)"
-                return "<c r=\"\(cellRef)\" t=\"inlineStr\"><is><t>\(escapeXML(value))</t></is></c>"
+                // Inline string cells must be sanitized for spreadsheet
+                // formula injection. A field like
+                // "=cmd|' /C calc'!A1" is interpreted as a formula even
+                // through an inline string; prefixing with an apostrophe
+                // forces text mode.
+                let safe = SpreadsheetCellSanitizer.escape(value)
+                return "<c r=\"\(cellRef)\" t=\"inlineStr\"><is><t>\(escapeXML(safe))</t></is></c>"
             }.joined()
 
             return "<row r=\"\(rowIndex + 1)\">\(cells)</row>"
@@ -444,38 +604,78 @@ private enum MinimalXLSXWriter {
     }
 }
 
+enum ZIPWriterError: LocalizedError {
+    case tooManyEntries(Int)
+    case entryTooLarge(path: String, bytes: Int)
+    case entryNameTooLong(path: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .tooManyEntries(let n):
+            return "ZIP archive entry count exceeds 65535 (got \(n)). ZIP64 not supported."
+        case .entryTooLarge(let path, let bytes):
+            return "ZIP archive entry '\(path)' is \(bytes) bytes which exceeds the 4 GiB ZIP-32 limit. ZIP64 not supported."
+        case .entryNameTooLong(let path):
+            return "ZIP archive entry name '\(path)' exceeds 65535 bytes."
+        }
+    }
+}
+
 private enum ZIPWriter {
-    // PKZIP format imzaları (PK\03\04, PK\01\02, PK\05\06)
+    // PKZIP format signatures (PK\03\04, PK\01\02, PK\05\06)
     private static let localFileHeaderSignature: UInt32 = 0x04034b50
     private static let centralDirectoryHeaderSignature: UInt32 = 0x02014b50
     private static let endOfCentralDirectorySignature: UInt32 = 0x06054b50
 
     // ZIP spec: "version needed to extract" / "version made by".
-    // 20 = 2.0 (DEFLATE desteği için minimum).
+    // 20 = 2.0 (minimum for DEFLATE support).
     private static let versionNeededToExtract: UInt16 = 20
     private static let versionMadeBy: UInt16 = 20
 
-    // General purpose bit flag — 0: hiçbir bayrak set değil.
-    private static let generalPurposeBitFlag: UInt16 = 0
+    // General purpose bit flag.
+    // Bit 11 (Language encoding flag, EFS) = 1 signals that file names
+    // are stored as UTF-8 instead of the legacy CP437. Today every
+    // archive we emit (XLSX inner paths, exported workbook entries)
+    // uses ASCII-only names, so the practical impact is nil — but
+    // setting the flag is the defensive future-proof choice the moment
+    // anyone introduces a non-ASCII filename (Turkish customer names in
+    // filenames are a realistic next step).
+    private static let generalPurposeBitFlagLanguageEncodingUTF8: UInt16 = 1 << 11
+    private static let generalPurposeBitFlag: UInt16 = generalPurposeBitFlagLanguageEncodingUTF8
 
-    // Compression method kodları (APPNOTE 4.4.5):
-    //   0 = STORE (sıkıştırma yok), 8 = DEFLATE.
+    // Compression method codes (APPNOTE 4.4.5):
+    //   0 = STORE (no compression), 8 = DEFLATE.
     private static let compressionMethodStore: UInt16 = 0
     private static let compressionMethodDeflate: UInt16 = 8
 
     static func archive(entries: [(String, Data)]) throws -> Data {
+        // We don't support ZIP64, so size fields can't exceed UInt32 /
+        // UInt16 limits. If a single file starts to exceed 4 GiB or
+        // more than 65,535 entries are generated, the format silently
+        // overflows (the lower 32 bits get truncated); catch this early.
+        // tespit edip throw'la.
+        guard entries.count <= Int(UInt16.max) else {
+            throw ZIPWriterError.tooManyEntries(entries.count)
+        }
+
         var fileData = Data()
         var centralDirectory = Data()
         var offset: UInt32 = 0
 
         for (path, data) in entries {
+            guard data.count <= Int(UInt32.max) else {
+                throw ZIPWriterError.entryTooLarge(path: path, bytes: data.count)
+            }
             let pathData = Data(path.utf8)
+            guard pathData.count <= Int(UInt16.max) else {
+                throw ZIPWriterError.entryNameTooLong(path: path)
+            }
             let crc = CRC32.checksum(data: data)
             let uncompressedSize = UInt32(data.count)
 
-            // DEFLATE'i dene; küçülmeyen blob'larda STORE'a düş. Boş veri ya
-            // da rastgele/önceden sıkıştırılmış byte'lar için STORE daha küçük
-            // çıkar (header overhead'i nedeniyle).
+            // Try DEFLATE; fall back to STORE on blobs that don't shrink.
+            // For empty data or random / already-compressed bytes, STORE
+            // comes out smaller (because of the header overhead).
             let payload: Data
             let compressionMethod: UInt16
             if let deflated = ZIPDeflater.deflate(data), deflated.count < data.count {
@@ -484,6 +684,9 @@ private enum ZIPWriter {
             } else {
                 payload = data
                 compressionMethod = compressionMethodStore
+            }
+            guard payload.count <= Int(UInt32.max) else {
+                throw ZIPWriterError.entryTooLarge(path: path, bytes: payload.count)
             }
             let compressedSize = UInt32(payload.count)
 
@@ -543,15 +746,21 @@ private enum ZIPWriter {
 }
 
 private enum ZIPDeflater {
-    /// Raw DEFLATE encoding (zlib header/trailer'sız) — ZIP compression
-    /// method 8 tam olarak bunu bekler. Apple'ın `COMPRESSION_ZLIB` algoritması
-    /// raw DEFLATE üretir; level 5'e karşılık gelir.
+    /// Raw DEFLATE encoding (without zlib header/trailer) — ZIP compression
+    /// method 8 tam olarak bunu bekler.
+    /// Apple's `COMPRESSION_ZLIB` algorithm is documented to produce raw
+    /// DEFLATE ("encoded data has no header or trailer"). We still
+    /// defensively check: if the output looks like an RFC 1950 zlib
+    /// stream (2-byte header with 0x78 marker + 4-byte adler32 trailer)
+    /// we strip the wrapping. If Apple ever changes the behaviour or
+    /// there is an emulator/platform difference, this keeps the XLSX
+    /// output parseable in strict parsers like LibreOffice.
     static func deflate(_ source: Data) -> Data? {
         guard !source.isEmpty else { return nil }
 
-        // Destination buffer'ın "input + 64 byte" olması güvenli bir üst sınır:
-        // pathological input için DEFLATE çıktısı kaynaktan biraz daha büyük
-        // olabilir; yeterince büyük tampon ayırıyoruz.
+        // Sizing the destination buffer to "input + 64 bytes" is a safe
+        // upper bound: for pathological inputs DEFLATE output can be
+        // slightly larger than the source, so we allocate a generous buffer.
         let destinationCapacity = source.count + 64
         let destination = UnsafeMutablePointer<UInt8>.allocate(capacity: destinationCapacity)
         defer { destination.deallocate() }
@@ -571,7 +780,29 @@ private enum ZIPDeflater {
         }
 
         guard compressedSize > 0 else { return nil }
-        return Data(bytes: destination, count: compressedSize)
+        let buffer = Data(bytes: destination, count: compressedSize)
+        return stripZlibWrappingIfPresent(buffer)
+    }
+
+    /// RFC 1950 zlib stream tespit edilirse 2-byte header ve 4-byte adler32
+    /// strips the trailer. Detection: the low 4 bits of the first byte
+    /// method'u (CM = 8 = DEFLATE) ve `(byte0 << 8 | byte1) % 31 == 0` FCHECK
+    /// must pass the compression check (RFC 1950 §2.2). Otherwise the
+    /// output is already raw DEFLATE and is returned as-is.
+    private static func stripZlibWrappingIfPresent(_ data: Data) -> Data {
+        guard data.count >= 6 else { return data }
+        let byte0 = data[data.startIndex]
+        let byte1 = data[data.startIndex + 1]
+        let cm = byte0 & 0x0F
+        let cmf = UInt16(byte0) << 8 | UInt16(byte1)
+        guard cm == 8, cmf % 31 == 0 else {
+            return data
+        }
+        // Header (2) + raw DEFLATE + adler32 (4)
+        let rawStart = data.startIndex + 2
+        let rawEnd = data.endIndex - 4
+        guard rawStart < rawEnd else { return data }
+        return data.subdata(in: rawStart..<rawEnd)
     }
 }
 

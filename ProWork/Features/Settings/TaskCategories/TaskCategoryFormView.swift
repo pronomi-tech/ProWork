@@ -1,9 +1,6 @@
-//
 //  TaskCategoryFormView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
@@ -26,19 +23,11 @@ struct TaskCategoryFormView: View {
     let mode: TaskCategoryFormMode
     let onSave: (TaskCategory) -> Void
 
+    /// Routed through the shared `ProWorkColorPickerOptions`
+    /// so this form and TodoStatusFormView can't drift on their
+    /// color lists.
     private var colorOptions: [SearchPickerOption] {
-        [
-            SearchPickerOption(id: "blue", title: settingsStore.localized("common.color.blue", defaultValue: "Mavi")),
-            SearchPickerOption(id: "orange", title: settingsStore.localized("common.color.orange", defaultValue: "Turuncu")),
-            SearchPickerOption(id: "purple", title: settingsStore.localized("common.color.purple", defaultValue: "Mor")),
-            SearchPickerOption(id: "cyan", title: settingsStore.localized("common.color.cyan", defaultValue: "Camgöbeği")),
-            SearchPickerOption(id: "red", title: settingsStore.localized("common.color.red", defaultValue: "Kırmızı")),
-            SearchPickerOption(id: "green", title: settingsStore.localized("common.color.green", defaultValue: "Yeşil")),
-            SearchPickerOption(id: "yellow", title: settingsStore.localized("common.color.yellow", defaultValue: "Sarı")),
-            SearchPickerOption(id: "indigo", title: settingsStore.localized("common.color.indigo", defaultValue: "İndigo")),
-            SearchPickerOption(id: "mint", title: settingsStore.localized("common.color.mint", defaultValue: "Mint")),
-            SearchPickerOption(id: "gray", title: settingsStore.localized("common.color.gray", defaultValue: "Gri"))
-        ]
+        ProWorkColorPickerOptions.searchPickerOptions(localizer: settingsStore)
     }
 
     private var billableOptions: [SearchPickerOption] {
@@ -59,8 +48,8 @@ struct TaskCategoryFormView: View {
         ProWorkFormShell(
             title: mode.title(using: settingsStore),
             systemImage: "tag",
-            width: 540,
-            height: 480
+            width: FormSheetSize.taskCategoryForm.width,
+            height: FormSheetSize.taskCategoryForm.height
         ) {
             formFields
         } footer: {
@@ -211,7 +200,7 @@ struct TaskCategoryFormView: View {
     private func loadVatRateOptions() {
         let content = VatRateLabel.pickerContent(
             organizationId: BuiltInOrganizationId.default,
-            settingsStore: settingsStore
+            repository: AppServices.shared.vatRateRepository
         )
         vatRateOptions = content.options
         vatRatePlaceholder = content.defaultPlaceholder
@@ -222,7 +211,27 @@ struct TaskCategoryFormView: View {
 
     private func save() {
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let sortOrder = Int(sortOrderText.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        let trimmedOrder = sortOrderText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Previously `Int(...) ?? 0` silently coerced
+        // unparseable input to zero, so a typo flipped the row to the top
+        // of the list without feedback. Empty input still means "use the
+        // default 0"; non-empty unparseable input is surfaced.
+        let sortOrder: Int
+        if trimmedOrder.isEmpty {
+            sortOrder = 0
+        } else if let parsed = Int(trimmedOrder) {
+            sortOrder = parsed
+        } else {
+            ProWorkToastStore.shared.show(
+                settingsStore.localized(
+                    "taskCategories.form.error.invalidSortOrder",
+                    defaultValue: "Sıralama numarası tam sayı olmalı."
+                ),
+                style: .error
+            )
+            return
+        }
 
         guard !cleanName.isEmpty else {
             return

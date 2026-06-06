@@ -1,15 +1,11 @@
-//
 //  TodoRepositoryIntegrationTests.swift
 //  ProWorkTests
-//
 //  Created by Pronomi.
-//
 //  TodoRepository'nin gerçek SQLite üzerinde CRUD + bulk lookup davranışını
 //  doğrular. Sprint 5 review'unun "repository / integration testleri sıfır"
 //  saptamasının ilk çözümü; başlangıç noktası olarak en çok kullanılan
 //  repository seçildi. Diğer repository'ler benzer pattern'le ayrı dosyalarda
 //  eklenecek.
-//
 
 import XCTest
 @testable import ProWork
@@ -102,7 +98,7 @@ final class TodoRepositoryIntegrationTests: XCTestCase {
         let b = makeTodo(title: "B")
         try repository.insert(a)
         try repository.insert(b)
-        try repository.softDelete(id: a.id)
+        try repository.softDelete(id: a.id, by: BuiltInUserId.defaultOwner)
 
         let result = try repository.fetch(ids: [a.id, b.id])
         XCTAssertEqual(result.map(\.id), [b.id])
@@ -143,7 +139,7 @@ final class TodoRepositoryIntegrationTests: XCTestCase {
         try repository.insert(kept)
         try repository.insert(deleted)
 
-        try repository.softDelete(id: deleted.id)
+        try repository.softDelete(id: deleted.id, by: BuiltInUserId.defaultOwner)
 
         let remaining = try repository.fetchAll().map(\.id)
         XCTAssertEqual(remaining, [kept.id])
@@ -152,7 +148,7 @@ final class TodoRepositoryIntegrationTests: XCTestCase {
     func test_softDelete_alsoHidesFromFetchById() throws {
         let todo = makeTodo(title: "Silinecek")
         try repository.insert(todo)
-        try repository.softDelete(id: todo.id)
+        try repository.softDelete(id: todo.id, by: BuiltInUserId.defaultOwner)
 
         XCTAssertNil(try repository.fetch(id: todo.id))
         XCTAssertNil(try repository.fetchListItem(id: todo.id))

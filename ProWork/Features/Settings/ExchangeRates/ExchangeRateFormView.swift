@@ -1,9 +1,6 @@
-//
 //  ExchangeRateFormView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
@@ -25,6 +22,15 @@ struct ExchangeRateFormView: View {
 
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var settingsStore: AppSettingsStore
+    @EnvironmentObject private var services: AppServices
+
+    /// Previously the form rendered "TRY" / "1 X = TRY"
+    /// literals everywhere, ignoring organisations whose master currency
+    /// is something else. Resolve through AppServices so non-TRY tenants
+    /// see their actual rate target.
+    private var masterCurrency: String {
+        services.cachedMasterCurrency()
+    }
 
     @State private var fromCurrency: String = "USD"
     @State private var rateText: String = ""
@@ -36,7 +42,7 @@ struct ExchangeRateFormView: View {
 
     private var currencyOptions: [PickerOption] {
         Currency.allCodes
-            .filter { $0 != "TRY" }
+            .filter { $0 != masterCurrency }
             .map { PickerOption(id: $0, title: $0) }
     }
 
@@ -45,8 +51,8 @@ struct ExchangeRateFormView: View {
             title: mode.title(using: settingsStore),
             subtitle: settingsStore.localized("exchangeRates.form.subtitle", defaultValue: "Manuel kur kaydı (yalnızca para birimi → TRY)"),
             systemImage: "arrow.left.arrow.right.circle",
-            width: 540,
-            height: 500
+            width: FormSheetSize.exchangeRateForm.width,
+            height: FormSheetSize.exchangeRateForm.height
         ) {
             VStack(alignment: .leading, spacing: ProWorkLayout.formScaled(14, using: settingsStore)) {
                 SettingsFormError(message: errorMessage)
@@ -65,7 +71,7 @@ struct ExchangeRateFormView: View {
                 }
 
                 SettingsFormRow(settingsStore.localized("exchangeRates.form.toCurrency", defaultValue: "Hedef Birim"), required: true) {
-                    Text("TRY")
+                    Text(masterCurrency)
                         .proWorkTextStyle(.callout, weight: .medium)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: 200, alignment: .leading)
@@ -82,7 +88,7 @@ struct ExchangeRateFormView: View {
                             style: .decimal(maxFractionDigits: 4)
                         )
                             .frame(width: 160)
-                        Text("TRY")
+                        Text(masterCurrency)
                             .proWorkTextStyle(.callout)
                             .foregroundStyle(.secondary)
                     }
@@ -128,7 +134,7 @@ struct ExchangeRateFormView: View {
         let rate = ExchangeRate(
             id: existingId,
             fromCurrency: fromCurrency,
-            toCurrency: "TRY",
+            toCurrency: masterCurrency,
             rate: n.decimalValue,
             forexBuying: n.decimalValue,
             forexSelling: n.decimalValue,
@@ -145,12 +151,17 @@ struct ExchangeRateFormView: View {
         dismiss()
     }
 
+    /// Cached per locale identifier so the form doesn't
+    /// allocate a fresh `NumberFormatter` on every render (typing into
+    /// the rate field re-evaluates `body` for every keystroke).
+    /// `ProWorkFormatters` already keeps a thread-safe shared cache
+    /// for date formatters; the same lock-backed dictionary handles
+    /// number formatters via `cachedDecimalNumberFormatter`.
     private var rateNumberFormatter: NumberFormatter {
-        let formatter = NumberFormatter()
-        formatter.locale = settingsStore.locale
-        formatter.numberStyle = .decimal
-        formatter.minimumFractionDigits = 0
-        formatter.maximumFractionDigits = 4
-        return formatter
+        ProWorkFormatters.cachedDecimalFormatter(
+            localeIdentifier: settingsStore.locale.identifier,
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 4
+        )
     }
 }

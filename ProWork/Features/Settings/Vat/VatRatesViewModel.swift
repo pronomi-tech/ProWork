@@ -1,15 +1,12 @@
-//
 //  VatRatesViewModel.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Combine
 import Foundation
 
 @MainActor
-final class VatRatesViewModel: ObservableObject {
+final class VatRatesViewModel: ObservableObject, CRUDListViewModel {
     @Published private(set) var rates: [VatRate] = []
     @Published var errorMessage: String?
 
@@ -30,37 +27,15 @@ final class VatRatesViewModel: ObservableObject {
 
     @discardableResult
     func create(_ rate: VatRate) -> Bool {
-        do {
-            try vatRateRepository.insert(rate)
-            load()
-            errorMessage = nil
-            return true
-        } catch {
-            errorMessage = error.localizedDescription
-            return false
-        }
+        performMutation { try vatRateRepository.insert(rate) }
     }
 
     @discardableResult
     func update(_ rate: VatRate) -> Bool {
-        do {
-            try vatRateRepository.update(rate)
-            load()
-            errorMessage = nil
-            return true
-        } catch {
-            errorMessage = error.localizedDescription
-            return false
-        }
+        performMutation { try vatRateRepository.update(rate) }
     }
 
     func softDelete(id: String) {
-        do {
-            try vatRateRepository.softDelete(id: id)
-            load()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        performMutation { try vatRateRepository.softDelete(id: id, by: AppServices.currentUserId) }
     }
 }

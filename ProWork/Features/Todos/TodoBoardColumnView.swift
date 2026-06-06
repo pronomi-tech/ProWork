@@ -1,9 +1,6 @@
-//
 //  TodoBoardColumnView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -46,7 +43,26 @@ struct TodoBoardColumnView: View {
                         )
                         .transition(.scale(scale: 0.98).combined(with: .opacity))
                         .onDrag {
-                            NSItemProvider(object: todo.id as NSString)
+                            // NSItemProvider's
+                            // `init(object:)` takes a legacy
+                            // NSItemProviderWriting type. Wrap the
+                            // String id in a public UTF-8 plain-text
+                            // representation explicitly so future
+                            // drop handlers (or external apps in
+                            // SwiftUI 16+) get a clean type
+                            // identifier instead of the
+                            // NSString-bridged "binary plist"
+                            // payload the legacy bridge produces.
+                            let provider = NSItemProvider()
+                            let identifier = todo.id
+                            provider.registerDataRepresentation(
+                                forTypeIdentifier: "public.utf8-plain-text",
+                                visibility: .all
+                            ) { completion in
+                                completion(Data(identifier.utf8), nil)
+                                return nil
+                            }
+                            return provider
                         }
                     }
                 }
@@ -132,7 +148,15 @@ struct TodoBoardColumnView: View {
 }
 
 private extension TodoListItem {
-    static func placeholder(id: String) -> TodoListItem {
+    /// Factory accepts a `referenceDate` (defaults to a
+    /// constant epoch) instead of capturing `Date()` at call time. The
+    /// placeholder is a transient drag-state stand-in; using "now" as
+    /// the timestamp made it look like a brand-new row to anything
+    /// downstream that sorted by createdAt and accidentally re-renders
+    /// kept producing non-equal placeholder values for the same `id`.
+    /// `Date(timeIntervalSince1970: 0)` is intentionally distinct from
+    /// real persisted rows so a leaked placeholder is obvious.
+    static func placeholder(id: String, referenceDate: Date = Date(timeIntervalSince1970: 0)) -> TodoListItem {
         TodoListItem(
             id: id,
             customerId: nil,
@@ -159,8 +183,8 @@ private extension TodoListItem {
             totalTrackedSeconds: 0,
             activeSessionStartedAt: nil,
             isBillable: true,
-            createdAt: Date(),
-            updatedAt: Date(),
+            createdAt: referenceDate,
+            updatedAt: referenceDate,
             completedAt: nil
         )
     }

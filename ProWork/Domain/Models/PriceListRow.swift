@@ -1,30 +1,39 @@
-//
 //  PriceListRow.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 
-/// Bir fiyat listesinin tek satırı.
-/// Eşleştirme öncelik sırası (özelden genele):
-///  - tam kategori + zaman tipi + hizmet tipi + saat aralığı eşleşmesi
-///  - kategori NULL (tüm kategoriler için)
-///  - zaman tipi fallback (TimeType.fallbackOrder)
+/// A single row of a price list.
+/// Match priority (most specific to most general):
+///  - exact category + time type + service type + time-range match
+///  - category NULL (applies to all categories)
+///  - time-type fallback (TimeType.fallbackOrder)
 struct PriceListRow: Identifiable, Hashable {
     let id: String
     var priceListId: String
     var serviceType: ServiceType
     var timeType: TimeType
     var categoryId: String?
-    /// Bitmask: bit0=Pzt ... bit6=Paz. nil ise tüm günler.
+    /// Bitmask: bit0=Mon ... bit6=Sun. nil means all days.
+    /// When read from the SQL console, values like `weekdayMask=63` are
+    /// hard to interpret (Mon–Fri) — annoying for debugging.
+    /// `Set<Weekday>` JSON storage would be more readable, but the migration
+    /// + update of every comparison site is expensive; for now we keep the
+    /// bitmask format and route through the `Weekday.fromMask(_:)` / `toMask`
+    /// helpers. JSON conversion should be revisited later.
     var weekdayMask: Int?
     var startTime: TimeOfDay?
     var endTime: TimeOfDay?
-    /// Saatlik birim ücret — minor unit (kuruş).
+    /// Hourly unit price — minor units (e.g. kuruş).
     var unitPriceMinor: Int
     var currency: String
+    /// Persisted but **NOT** consulted by
+    /// `BillingCalculator`. Session-level window resolution now comes
+    /// from Project/Customer.defaultMinBillingMinutes. The field is
+    /// kept here so existing rows round-trip cleanly through repo +
+    /// schema; do not start writing new values without re-wiring the
+    /// calculator first.
     var minimumWindowMinutes: Int?
     var validFrom: String?
     var validTo: String?
@@ -69,7 +78,7 @@ struct PriceListRow: Identifiable, Hashable {
         rowVersion: Int = 0,
         syncStatus: SyncStatus = .local,
         lastSyncedAt: Date? = nil,
-        originDeviceId: String? = nil
+        originDeviceId: String? = DeviceIdentity.current
     ) {
         self.id = id
         self.priceListId = priceListId
@@ -101,7 +110,7 @@ struct PriceListRow: Identifiable, Hashable {
 }
 
 extension PriceListRow {
-    /// Saatlik ücreti `Money` olarak döner.
+    /// Returns the hourly unit price as `Money`.
     var unitPrice: Money {
         Money(minorUnits: unitPriceMinor, currency: currency)
     }
@@ -121,7 +130,7 @@ extension PriceListRow {
         )
     }
 
-    /// weekdayMask kontrol helper'ı: bu satır verilen güne uygulanır mı?
+    /// WeekdayMask check: does this row apply to the given weekday?
     func appliesTo(weekday: Weekday) -> Bool {
         guard let mask = weekdayMask else { return true }
         let bit = 1 << (weekday.rawValue - 1)

@@ -1,9 +1,6 @@
-//
 //  TodoStatusRepository.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 import Foundation
 import SQLite3
 
@@ -27,7 +24,7 @@ final class TodoStatusRepository {
         """
 
         return try database.query(sql) { statement in
-            Self.makeStatus(from: statement)
+            try Self.makeStatus(from: statement)
         }
     }
 
@@ -45,7 +42,7 @@ final class TodoStatusRepository {
 
         return try database.query(
             sql,
-            map: { statement in Self.makeStatus(from: statement) },
+            map: { statement in try Self.makeStatus(from: statement) },
             bind: { statement in statement.bindText(id, at: 1) }
         ).first
     }
@@ -108,7 +105,8 @@ final class TodoStatusRepository {
         }
     }
 
-    func delete(id: String) throws {
+    /// Hard delete — test fixtures only. See CustomerRepository._hardDelete.
+    func _hardDelete(id: String) throws {
         let sql = """
         DELETE FROM todo_statuses
         WHERE id = ?
@@ -120,7 +118,7 @@ final class TodoStatusRepository {
         }
     }
 
-    func softDelete(id: String, by userId: String = BuiltInUserId.defaultOwner) throws {
+    func softDelete(id: String, by userId: String) throws {
         let sql = """
         UPDATE todo_statuses
         SET
@@ -138,7 +136,7 @@ final class TodoStatusRepository {
         }
     }
 
-    private static func makeStatus(from statement: SQLiteStatement) -> TodoStatus {
+    private static func makeStatus(from statement: SQLiteStatement) throws -> TodoStatus {
         TodoStatus(
             id: statement.text(at: 0) ?? UUID().uuidString,
             systemKey: statement.text(at: 1),
@@ -153,7 +151,7 @@ final class TodoStatusRepository {
             marksOpen: statement.int(at: 10) == 1,
             marksCompleted: statement.int(at: 11) == 1,
             marksCancelled: statement.int(at: 12) == 1,
-            meta: statement.readMetadata(startingAt: 13)
+            meta: try statement.readMetadata(startingAt: 13)
         )
     }
 }

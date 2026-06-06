@@ -1,9 +1,6 @@
-//
 //  ExchangeRateRepositoryIntegrationTests.swift
 //  ProWorkTests
-//
 //  Created by Pronomi.
-//
 
 import XCTest
 @testable import ProWork
@@ -114,7 +111,7 @@ final class ExchangeRateRepositoryIntegrationTests: XCTestCase {
         let rate = makeRate(from: "CHF", to: "TRY", rate: 35, date: "2026-04-01", source: .tcmb)
         try repository.upsert(rate)
 
-        try repository.softDelete(id: rate.id)
+        try repository.softDelete(id: rate.id, by: BuiltInUserId.defaultOwner)
 
         let latest = try repository.fetchLatest(
             organizationId: BuiltInOrganizationId.default,

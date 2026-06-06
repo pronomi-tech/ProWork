@@ -1,9 +1,6 @@
-//
 //  CustomerRepositoryIntegrationTests.swift
 //  ProWorkTests
-//
 //  Created by Pronomi.
-//
 
 import XCTest
 @testable import ProWork
@@ -71,7 +68,7 @@ final class CustomerRepositoryIntegrationTests: XCTestCase {
         try repository.insert(kept)
         try repository.insert(deleted)
 
-        try repository.softDelete(id: deleted.id)
+        try repository.softDelete(id: deleted.id, by: BuiltInUserId.defaultOwner)
 
         let remaining = try repository.fetchAll().map(\.name)
         XCTAssertEqual(remaining, ["Kalan"])
@@ -80,7 +77,7 @@ final class CustomerRepositoryIntegrationTests: XCTestCase {
     func test_softDelete_hidesFromFetchById() throws {
         let customer = Customer(name: "Silinecek")
         try repository.insert(customer)
-        try repository.softDelete(id: customer.id)
+        try repository.softDelete(id: customer.id, by: BuiltInUserId.defaultOwner)
 
         XCTAssertNil(try repository.fetch(id: customer.id))
     }
@@ -88,7 +85,7 @@ final class CustomerRepositoryIntegrationTests: XCTestCase {
     func test_hardDelete_removesRowEntirely() throws {
         let customer = Customer(name: "Silinecek")
         try repository.insert(customer)
-        try repository.delete(id: customer.id)
+        try repository._hardDelete(id: customer.id)
 
         XCTAssertNil(try repository.fetch(id: customer.id))
         XCTAssertEqual(try repository.fetchAll().count, 0)

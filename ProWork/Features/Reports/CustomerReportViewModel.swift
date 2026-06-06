@@ -1,9 +1,6 @@
-//
 //  CustomerReportViewModel.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Combine
 import Foundation
@@ -19,6 +16,12 @@ final class CustomerReportViewModel: ObservableObject {
     private let computation: BillingComputationService
     private let currencyResolver: PricingCurrencyResolver
 
+    /// A custom-date-range picker drag was producing ~5–10 `compute(...)`
+    /// calls per second; this task waits 300 ms so consecutive calls
+    /// collapse into a single `computePeriod` run.
+    private var pendingComputeTask: Task<Void, Never>?
+    private let debounceInterval: UInt64 = 300_000_000
+
     init(
         services: AppServices = .shared,
         computation: BillingComputationService? = nil,
@@ -26,7 +29,7 @@ final class CustomerReportViewModel: ObservableObject {
     ) {
         self.customerRepository = services.customerRepository
         self.computation = computation ?? BillingComputationService()
-        self.currencyResolver = currencyResolver ?? PricingCurrencyResolver()
+        self.currencyResolver = currencyResolver ?? services.pricingCurrencyResolver
     }
 
     func loadCustomers() {
@@ -43,9 +46,29 @@ final class CustomerReportViewModel: ObservableObject {
         periodEnd: Date
     ) {
         guard !selectedCustomerId.isEmpty else {
+            pendingComputeTask?.cancel()
+            pendingComputeTask = nil
             report = nil
             return
         }
+
+        pendingComputeTask?.cancel()
+        pendingComputeTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: self?.debounceInterval ?? 300_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.performCompute(
+                selectedCustomerId: selectedCustomerId,
+                periodStart: periodStart,
+                periodEnd: periodEnd
+            )
+        }
+    }
+
+    private func performCompute(
+        selectedCustomerId: String,
+        periodStart: Date,
+        periodEnd: Date
+    ) {
         guard let customer = customers.first(where: { $0.id == selectedCustomerId }) else {
             return
         }

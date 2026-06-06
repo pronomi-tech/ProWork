@@ -1,9 +1,6 @@
-//
 //  TodoStatusFormView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
@@ -27,19 +24,10 @@ struct TodoStatusFormView: View {
     let mode: TodoStatusFormMode
     let onSave: (TodoStatus) -> Void
 
+    /// Shared with TaskCategoryFormView via
+    /// `ProWorkColorPickerOptions`.
     private var colorOptions: [SearchPickerOption] {
-        [
-            SearchPickerOption(id: "blue", title: settingsStore.localized("common.color.blue", defaultValue: "Mavi")),
-            SearchPickerOption(id: "orange", title: settingsStore.localized("common.color.orange", defaultValue: "Turuncu")),
-            SearchPickerOption(id: "purple", title: settingsStore.localized("common.color.purple", defaultValue: "Mor")),
-            SearchPickerOption(id: "cyan", title: settingsStore.localized("common.color.cyan", defaultValue: "Camgöbeği")),
-            SearchPickerOption(id: "red", title: settingsStore.localized("common.color.red", defaultValue: "Kırmızı")),
-            SearchPickerOption(id: "green", title: settingsStore.localized("common.color.green", defaultValue: "Yeşil")),
-            SearchPickerOption(id: "yellow", title: settingsStore.localized("common.color.yellow", defaultValue: "Sarı")),
-            SearchPickerOption(id: "indigo", title: settingsStore.localized("common.color.indigo", defaultValue: "İndigo")),
-            SearchPickerOption(id: "mint", title: settingsStore.localized("common.color.mint", defaultValue: "Mint")),
-            SearchPickerOption(id: "gray", title: settingsStore.localized("common.color.gray", defaultValue: "Gri"))
-        ]
+        ProWorkColorPickerOptions.searchPickerOptions(localizer: settingsStore)
     }
 
     private var timerOptions: [SearchPickerOption] {
@@ -76,8 +64,8 @@ struct TodoStatusFormView: View {
         ProWorkFormShell(
             title: mode.title(using: settingsStore),
             systemImage: "rectangle.3.group",
-            width: 640,
-            height: 640
+            width: FormSheetSize.todoStatusForm.width,
+            height: FormSheetSize.todoStatusForm.height
         ) {
             formFields
         } footer: {
@@ -250,7 +238,26 @@ struct TodoStatusFormView: View {
 
     private func save() {
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let sortOrder = Int(sortOrderText.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        let trimmedOrder = sortOrderText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // See TaskCategoryFormView — silent ?? 0 coerced
+        // typos into "top of the list" with no feedback. Empty stays at 0;
+        // non-empty unparseable input is surfaced.
+        let sortOrder: Int
+        if trimmedOrder.isEmpty {
+            sortOrder = 0
+        } else if let parsed = Int(trimmedOrder) {
+            sortOrder = parsed
+        } else {
+            ProWorkToastStore.shared.show(
+                settingsStore.localized(
+                    "todoStatuses.form.error.invalidSortOrder",
+                    defaultValue: "Sıralama numarası tam sayı olmalı."
+                ),
+                style: .error
+            )
+            return
+        }
 
         guard !cleanName.isEmpty else {
             return

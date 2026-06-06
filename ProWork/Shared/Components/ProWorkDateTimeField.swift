@@ -1,9 +1,6 @@
-//
 //  ProWorkDateTimeField.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 

@@ -1,9 +1,6 @@
-//
 //  TCMBExchangeRateSyncService.swift
 //  ProWork
-//
 //  Created by Pronomi
-//
 
 import Foundation
 
@@ -73,18 +70,18 @@ final class TCMBExchangeRateSyncService {
     private let userId: String
     private let session: URLSession
 
-    /// 404 sonrası kuru "ileri taşımak" için en fazla geriye gidilecek gün
-    /// sayısı. TCMB hafta sonu ve resmi tatillerde kur yayımlamaz; pratik
-    /// olarak bir önceki iş gününün kuru kullanılır. 7 gün, art arda gelen
-    /// resmi tatil + hafta sonu kombinasyonlarını rahatlıkla karşılar.
-    private static let carryForwardLookbackDays = 7
+    /// The currently in-flight sync task. Y12: if the user clicks the
+    /// button twice or two UI sites trigger it, the second call awaits
+    /// the first's result instead of starting a new network flow — the
+    /// same date range is never fetched twice.
+    private var activeSyncTask: Task<TCMBExchangeRateSyncResult, Error>?
 
-    /// Geçici ağ hataları için exponential backoff: 1s, 2s, 4s.
-    private static let retryDelaysNanoseconds: [UInt64] = [
-        1_000_000_000,
-        2_000_000_000,
-        4_000_000_000
-    ]
+    /// Maximum number of days to walk backward when "carrying forward"
+    /// a rate after a 404. TCMB doesn't publish rates on weekends or
+    /// public holidays; in practice the previous business day's rate
+    /// is used. 7 days comfortably covers consecutive public-holiday +
+    /// weekend combinations.
+    private static let carryForwardLookbackDays = BillingDefaults.exchangeRateCarryForwardDays
 
     init(
         repository: ExchangeRateRepository? = nil,
@@ -95,16 +92,21 @@ final class TCMBExchangeRateSyncService {
         self.repository = repository ?? ExchangeRateRepository()
         self.organizationId = organizationId ?? BuiltInOrganizationId.default
         self.userId = userId ?? BuiltInUserId.defaultOwner
-        // Varsayılan URLSession.shared timeout'u 60s. Yıllık sync ~365 istek
-        // demek; tek bir hata 6+ saat bekleme yaratabiliyor. 15s istek / 30s
-        // resource limitiyle hızlı başarısızlık + retry akışına geçiyoruz.
+        // TLS certificate pinning for TCMB is not active right now.
+        // To add it, a URLSessionDelegate would validate the host's
+        // public-key SHA-256 hash against pinned constants inside
+        // `urlSession(_:didReceive:completionHandler:)`. Certificate
+        // rotation isn't tracked, so for now we trust the system trust
+        // store; backend MITM risk is low in production (TCMB doesn't
+        // serve its HTTPS endpoints without a certificate), but a
+        // future e-Invoice flow may require this.
+        // Session configuration is now shared via ExchangeRateSyncSupport
+        // so TCMB and Global services cannot drift on
+        // timeout values.
         if let session {
             self.session = session
         } else {
-            let configuration = URLSessionConfiguration.default
-            configuration.timeoutIntervalForRequest = 15
-            configuration.timeoutIntervalForResource = 30
-            self.session = URLSession(configuration: configuration)
+            self.session = ExchangeRateSyncSupport.makeDefaultSession()
         }
     }
 
@@ -117,8 +119,43 @@ final class TCMBExchangeRateSyncService {
         to endDate: Date,
         currencies: [String]? = nil
     ) async throws -> TCMBExchangeRateSyncResult {
-        let normalizedStart = Calendar.current.startOfDay(for: startDate)
-        let normalizedEnd = Calendar.current.startOfDay(for: endDate)
+        // Y12: parallel sync deduplication. @MainActor already provides
+        // thread isolation, but at await points a second sync call
+        // could interleave and refetch the same date range.
+        if let active = activeSyncTask {
+            return try await active.value
+        }
+        let task = Task<TCMBExchangeRateSyncResult, Error> { [weak self] in
+            // the previous version cleared activeSyncTask
+            // from a detached Task inside `defer`, which could run before the
+            // outer `task.value` resumed — a third caller could then start a
+            // parallel sync. Cleanup is now performed in the @MainActor caller
+            // below, after task.value resolves, with an identity check so we
+            // never clobber a freshly-installed task.
+            return try await self?.performSync(
+                from: startDate,
+                to: endDate,
+                currencies: currencies
+            ) ?? TCMBExchangeRateSyncResult(importedRateCount: 0, importedDayCount: 0, skippedDates: [])
+        }
+        activeSyncTask = task
+        defer {
+            // Task identity via Equatable; if the slot was overwritten by a
+            // fresher caller while we awaited, leave it alone.
+            if activeSyncTask == task {
+                activeSyncTask = nil
+            }
+        }
+        return try await task.value
+    }
+
+    private func performSync(
+        from startDate: Date,
+        to endDate: Date,
+        currencies: [String]?
+    ) async throws -> TCMBExchangeRateSyncResult {
+        let normalizedStart = AppCalendar.istanbul.startOfDay(for: startDate)
+        let normalizedEnd = AppCalendar.istanbul.startOfDay(for: endDate)
         guard normalizedStart <= normalizedEnd else {
             throw TCMBExchangeRateSyncError.invalidDateRange
         }
@@ -137,9 +174,10 @@ final class TCMBExchangeRateSyncService {
         while cursor <= normalizedEnd {
             let dayString = AppDateFormatters.sqliteDay.string(from: cursor)
             do {
-                // Önce talep edilen güne dene; 404 ise N gün geriye doğru
-                // yürüyüp ilk yayımlanmış kuru "ileri taşı". Bu, TCMB'nin
-                // hafta sonu / tatil davranışını uygulama tarafında simüle eder.
+                // Try the requested day first; on 404, walk back up to N
+                // days and "carry forward" the first published rate.
+                // This simulates TCMB's weekend / holiday behaviour on
+                // the application side.
                 let (rates, carriedFromDate) = try await fetchRatesWithCarryForward(
                     for: cursor,
                     currencies: requestedCurrencies
@@ -155,7 +193,7 @@ final class TCMBExchangeRateSyncService {
                 skippedDates.append(dayString)
             }
 
-            cursor = Calendar.current.date(byAdding: .day, value: 1, to: cursor) ?? normalizedEnd.addingTimeInterval(1)
+            cursor = AppCalendar.istanbul.date(byAdding: .day, value: 1, to: cursor) ?? normalizedEnd.addingTimeInterval(1)
         }
 
         return TCMBExchangeRateSyncResult(
@@ -165,10 +203,11 @@ final class TCMBExchangeRateSyncService {
         )
     }
 
-    /// Önce talep edilen tarihi dener. 404 ile karşılaşırsa
-    /// `carryForwardLookbackDays` kadar geriye yürüyüp ilk yayımlanmış kuru
-    /// döner. Hiçbir gün yayımlanmamışsa `.ratesNotPublished` fırlatır.
-    /// İkinci tuple elemanı, kur "ileri taşındıysa" kaynak tarihtir.
+    /// Tries the requested date first. On 404, walks back up to
+    /// `carryForwardLookbackDays` days and returns the first published
+    /// rate. If nothing was published in any of those days,
+    /// `.ratesNotPublished` is thrown. The second tuple element is the
+    /// source date when a rate was "carried forward".
     private func fetchRatesWithCarryForward(
         for date: Date,
         currencies: Set<String>
@@ -177,12 +216,12 @@ final class TCMBExchangeRateSyncService {
             let rates = try await fetchPublishedTRYRates(for: date, currencies: currencies)
             return (rates, nil)
         } catch TCMBExchangeRateSyncError.ratesNotPublished {
-            // Hafta sonu / tatil — geriye doğru en yakın iş gününü bul.
+            // Weekend / holiday — find the nearest preceding business day.
         }
 
         var probe = date
         for _ in 1...Self.carryForwardLookbackDays {
-            guard let previous = Calendar.current.date(byAdding: .day, value: -1, to: probe) else {
+            guard let previous = AppCalendar.istanbul.date(byAdding: .day, value: -1, to: probe) else {
                 break
             }
             probe = previous
@@ -243,6 +282,13 @@ final class TCMBExchangeRateSyncService {
         let parser = TCMBRatesXMLParser()
         let xmlParser = XMLParser(data: data)
         xmlParser.delegate = parser
+        // explicitly reject any external entity / DTD
+        // reference in the TCMB payload — defence in depth against an
+        // upstream that gets compromised or trojaned with an XXE-style
+        // DOCTYPE. TCMB never returns external entities legitimately.
+        xmlParser.shouldResolveExternalEntities = false
+        xmlParser.shouldReportNamespacePrefixes = false
+        xmlParser.shouldProcessNamespaces = false
 
         guard xmlParser.parse() else {
             throw TCMBExchangeRateSyncError.parseFailed(date: dayString)
@@ -277,8 +323,8 @@ final class TCMBExchangeRateSyncService {
                 continue
             }
 
-            // Carry-forward durumunda hem kaynak hem de TCMB'nin orijinal
-            // notunu kullanıcıya gösterebilmek için birleştiriyoruz.
+            // On carry-forward, combine the source and TCMB's original
+            // note so we can surface both to the user.
             let combinedNote: String?
             switch (carryForwardNote, quote.note) {
             case let (carry?, original?):
@@ -313,37 +359,17 @@ final class TCMBExchangeRateSyncService {
         }
     }
 
-    /// Geçici ağ hatalarında 1s → 2s → 4s backoff ile en fazla 3 kez tekrar
-    /// dener. Persistent hatalar (404 vb. HTTP cevapları) retry'a sokulmaz;
-    /// onları çağıran katman zaten skip'liyor.
+    /// On transient network errors, retries up to 3 times with
+    /// 1s → 2s → 4s backoff. Persistent errors (404 etc. HTTP
+    /// responses) aren't retried; the caller layer already skips them.
+    /// 5xx HTTP responses are now included in the retry scope — TCMB
+    /// upstream gateway transient errors usually resolve on their own
+    /// within the backoff window.
+    /// (DRY): retry/backoff implementation is now shared
+    /// across TCMB and Global sync services via ExchangeRateSyncSupport
+    /// so the two sources cannot drift on transient-error handling.
     private func fetchWithRetry(url: URL) async throws -> (Data, URLResponse) {
-        var attempt = 0
-        while true {
-            do {
-                return try await session.data(from: url)
-            } catch {
-                attempt += 1
-                guard attempt <= Self.retryDelaysNanoseconds.count,
-                      Self.shouldRetry(error: error) else {
-                    throw error
-                }
-                try? await Task.sleep(nanoseconds: Self.retryDelaysNanoseconds[attempt - 1])
-            }
-        }
-    }
-
-    private static func shouldRetry(error: Error) -> Bool {
-        guard let urlError = error as? URLError else { return false }
-        switch urlError.code {
-        case .timedOut,
-             .networkConnectionLost,
-             .cannotConnectToHost,
-             .dnsLookupFailed,
-             .notConnectedToInternet:
-            return true
-        default:
-            return false
-        }
+        try await ExchangeRateSyncSupport.fetchWithRetry(url: url, session: session)
     }
 
     private func makeURLs(for date: Date) -> [URL] {
@@ -353,7 +379,7 @@ final class TCMBExchangeRateSyncService {
             "https://www.tcmb.gov.tr/kurlar/\(monthFolder)/\(fileName).xml"
         ]
 
-        if Calendar.current.isDate(date, inSameDayAs: Date()) {
+        if AppCalendar.istanbul.isDate(date, inSameDayAs: Date()) {
             candidates.append("https://www.tcmb.gov.tr/kurlar/today.xml")
         }
 
@@ -381,7 +407,7 @@ final class TCMBExchangeRateSyncService {
     private static let monthFolderFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
+        formatter.timeZone = AppCalendar.istanbul.timeZone
         formatter.dateFormat = "yyyyMM"
         return formatter
     }()
@@ -389,7 +415,7 @@ final class TCMBExchangeRateSyncService {
     private static let fileNameFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
+        formatter.timeZone = AppCalendar.istanbul.timeZone
         formatter.dateFormat = "ddMMyyyy"
         return formatter
     }()

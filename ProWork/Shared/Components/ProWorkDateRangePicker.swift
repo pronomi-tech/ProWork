@@ -1,17 +1,12 @@
-//
 //  ProWorkDateRangePicker.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
-//  WorkSessionsView ve Reports ekranlarında ortak tarih aralığı seçici.
-//  - Bugün / Dün / Bu Hafta / Bu Ay quick chip'leri
-//  - "Geçmiş" menü (1–6 ay)
-//  - "Özel" popover (başlangıç + bitiş)
-//
-//  Caller `range`, `customStart`, `customEnd` binding'lerini taşır.
-//  `showsAllOption` ile "Tümü" eklenip eklenmeyeceği belirlenir.
-//
+//  Shared date-range picker used in WorkSessionsView and the Reports screens.
+//  - Today / Yesterday / This Week / This Month quick chips
+//  - "Past" menu (1–6 months)
+//  - "Custom" popover (start + end)
+//  Caller owns the `range`, `customStart`, `customEnd` bindings.
+//  `showsAllOption` toggles whether "All" is included.
 
 import SwiftUI
 
@@ -134,17 +129,22 @@ struct ProWorkDateRangePicker: View {
         }
     }
 
+    /// K16 cache adoption. Custom range popover re-renders on
+    /// every date tweak — allocating fresh formatters here showed up
+    /// as visible jank on slower Macs.
     private var customRangeLabel: String {
-        let fmt = DateFormatter()
-        fmt.dateFormat = "d MMM"
-        fmt.locale = settingsStore.locale
+        let fmt = ProWorkFormatters.cachedDateFormatter(
+            localeIdentifier: settingsStore.locale.identifier,
+            dateFormat: "d MMM"
+        )
         return "\(fmt.string(from: customStart)) – \(fmt.string(from: customEnd))"
     }
 
     private var customRangeTooltip: String {
-        let fmt = DateFormatter()
-        fmt.dateStyle = .long
-        fmt.locale = settingsStore.locale
+        let fmt = ProWorkFormatters.cachedDateFormatter(
+            localeIdentifier: settingsStore.locale.identifier,
+            dateStyle: .long
+        )
         return "\(fmt.string(from: customStart)) – \(fmt.string(from: customEnd))"
     }
 

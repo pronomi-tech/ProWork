@@ -1,13 +1,22 @@
-//
 //  ProWorkFormShell.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
 struct ProWorkFormShell<Content: View, Footer: View, HeaderTrailing: View>: View {
+    /// How the form content fills the available space. `.scrolls`
+    /// (default) is correct for most forms — vertical scroll activates
+    /// as fields grow. Forms containing a grid (`PriceListRowsEditView`)
+    /// use `.fixed`; ProWorkGrid manages its own internal ScrollView
+    /// and an outer wrapping ScrollView was overriding the grid's
+    /// `maxHeight: .infinity` frame and pinning the table header to
+    /// the surface.
+    enum ContentScrollBehavior {
+        case scrolls
+        case fixed
+    }
+
     @EnvironmentObject private var settingsStore: AppSettingsStore
 
     let title: String
@@ -15,6 +24,7 @@ struct ProWorkFormShell<Content: View, Footer: View, HeaderTrailing: View>: View
     let systemImage: String
     let width: CGFloat
     let height: CGFloat
+    let contentScrollBehavior: ContentScrollBehavior
     let headerTrailing: HeaderTrailing
     let content: Content
     let footer: Footer
@@ -25,6 +35,7 @@ struct ProWorkFormShell<Content: View, Footer: View, HeaderTrailing: View>: View
         systemImage: String = "doc.text",
         width: CGFloat = 680,
         height: CGFloat = 700,
+        contentScrollBehavior: ContentScrollBehavior = .scrolls,
         @ViewBuilder headerTrailing: () -> HeaderTrailing,
         @ViewBuilder content: () -> Content,
         @ViewBuilder footer: () -> Footer
@@ -34,6 +45,7 @@ struct ProWorkFormShell<Content: View, Footer: View, HeaderTrailing: View>: View
         self.systemImage = systemImage
         self.width = width
         self.height = height
+        self.contentScrollBehavior = contentScrollBehavior
         self.headerTrailing = headerTrailing()
         self.content = content()
         self.footer = footer()
@@ -49,12 +61,20 @@ struct ProWorkFormShell<Content: View, Footer: View, HeaderTrailing: View>: View
                 headerTrailing
             }
 
-            ScrollView {
+            switch contentScrollBehavior {
+            case .scrolls:
+                ScrollView {
+                    VStack(alignment: .leading, spacing: ProWorkLayout.formScaled(14, using: settingsStore)) {
+                        content
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, ProWorkLayout.formScaled(2, using: settingsStore))
+                }
+            case .fixed:
                 VStack(alignment: .leading, spacing: ProWorkLayout.formScaled(14, using: settingsStore)) {
                     content
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, ProWorkLayout.formScaled(2, using: settingsStore))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
 
             Divider()
@@ -76,6 +96,7 @@ extension ProWorkFormShell where HeaderTrailing == EmptyView {
         systemImage: String = "doc.text",
         width: CGFloat = 680,
         height: CGFloat = 700,
+        contentScrollBehavior: ContentScrollBehavior = .scrolls,
         @ViewBuilder content: () -> Content,
         @ViewBuilder footer: () -> Footer
     ) {
@@ -84,6 +105,7 @@ extension ProWorkFormShell where HeaderTrailing == EmptyView {
         self.systemImage = systemImage
         self.width = width
         self.height = height
+        self.contentScrollBehavior = contentScrollBehavior
         self.headerTrailing = EmptyView()
         self.content = content()
         self.footer = footer()

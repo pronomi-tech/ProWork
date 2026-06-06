@@ -1,9 +1,6 @@
-//
 //  GeneralSettingsView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
@@ -17,9 +14,25 @@ struct GeneralSettingsView: View {
             subtitle: settingsStore.localized("general.subtitle", defaultValue: "Uygulama genelinde kullanılacak tarih, saat ve yazı boyutu tercihlerini yönetin.")
         ) {
             settingsCard
-            previewCard
+            // The preview section moved into a dedicated
+            // `GeneralSettingsPreviewCard` (separate file). Further
+            // section splits (formatting / font / menu bar / idle /
+            // exchange rate) can land incrementally without touching
+            // this parent view.
+            GeneralSettingsPreviewCard()
         }
+        // Also refresh when the view re-appears (e.g. user
+        // navigates to General after tweaking a status elsewhere).
+        // `.onAppear` fires for every appearance in SwiftUI 14+, not
+        // just the first; `.task` would attach a lifetime task that
+        // gets cancelled on disappear — `.onAppear` is the right hook
+        // for a quick re-fetch.
         .onAppear { viewModel.loadTimerStartingStatuses() }
+        .onChange(of: settingsStore.settings.language) { _, _ in
+            // Language toggle changes localised strings used by the
+            // status picker; refresh so the names re-resolve.
+            viewModel.loadTimerStartingStatuses()
+        }
     }
 
     private var settingsCard: some View {
@@ -271,40 +284,6 @@ struct GeneralSettingsView: View {
         )
     }
 
-    private var previewCard: some View {
-        VStack(alignment: .leading, spacing: ProWorkLayout.scaled(12, using: settingsStore)) {
-            sectionTitle(settingsStore.localized("general.section.preview", defaultValue: "Önizleme"))
-
-            HStack(spacing: ProWorkLayout.scaled(12, using: settingsStore)) {
-                previewItem(
-                    title: settingsStore.localized("general.preview.date", defaultValue: "Tarih"),
-                    value: settingsStore.formatDate(Date()),
-                    systemImage: "calendar"
-                )
-
-                previewItem(
-                    title: settingsStore.localized("general.preview.time", defaultValue: "Saat"),
-                    value: settingsStore.formatTime(Date()),
-                    systemImage: "clock"
-                )
-
-                previewItem(
-                    title: settingsStore.localized("general.preview.dateTime", defaultValue: "Tarih + Saat"),
-                    value: settingsStore.formatDateTime(Date()),
-                    systemImage: "calendar.badge.clock"
-                )
-            }
-        }
-        .padding(ProWorkLayout.scaled(18, using: settingsStore))
-        .frame(maxWidth: ProWorkLayout.scaled(820, using: settingsStore), alignment: .leading)
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: ProWorkLayout.scaled(16, using: settingsStore)))
-        .overlay(
-            RoundedRectangle(cornerRadius: ProWorkLayout.scaled(16, using: settingsStore))
-                .stroke(.quaternary, lineWidth: 1)
-        )
-    }
-
     private func sectionTitle(_ title: String) -> some View {
         Text(title)
             .proWorkTextStyle(.headline)
@@ -331,33 +310,6 @@ struct GeneralSettingsView: View {
         }
         .proWorkFrame(minHeight: 52)
         .frame(maxWidth: .infinity)
-    }
-
-    private func previewItem(
-        title: String,
-        value: String,
-        systemImage: String
-    ) -> some View {
-        HStack(spacing: ProWorkLayout.scaled(10, using: settingsStore)) {
-            Image(systemName: systemImage)
-                .proWorkFont(size: 18)
-                .foregroundStyle(.blue)
-                .frame(width: ProWorkLayout.scaled(22, using: settingsStore))
-
-            VStack(alignment: .leading, spacing: ProWorkLayout.scaled(3, using: settingsStore)) {
-                Text(title)
-                    .proWorkTextStyle(.caption)
-                    .foregroundStyle(.secondary)
-
-                Text(value)
-                    .proWorkTextStyle(.headline)
-                    .monospacedDigit()
-            }
-        }
-        .padding(ProWorkLayout.scaled(14, using: settingsStore))
-        .frame(width: ProWorkLayout.scaled(235, using: settingsStore), alignment: .leading)
-        .background(.background.opacity(0.55))
-        .clipShape(RoundedRectangle(cornerRadius: ProWorkLayout.scaled(14, using: settingsStore)))
     }
 
     private func fontSizeTitle(for option: AppFontSizeOption) -> String {

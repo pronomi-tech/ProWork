@@ -1,9 +1,6 @@
-//
 //  ProWorkCalendarPicker.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
@@ -19,7 +16,10 @@ struct ProWorkCalendarPicker: View {
 
     @State private var visibleMonth: Date = Date()
 
-    private let calendar = Calendar.current
+    // Pinned to the Istanbul calendar because it's used in billing screens.
+    // Otherwise the selected "day" would shift with the device TZ and
+    // the period boundary would bind to the wrong DB value.
+    private let calendar = AppCalendar.istanbul
 
     init(
         title: String? = nil,
@@ -287,11 +287,13 @@ struct ProWorkCalendarPicker: View {
         return calendar.date(from: components) ?? value
     }
 
+    /// K16 cache adoption. Was allocating a fresh formatter
+    /// per render — calendar picker re-renders on every date selection.
     private func monthTitle(_ value: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = settingsStore.locale
-        formatter.dateFormat = "LLLL yyyy"
-
+        let formatter = ProWorkFormatters.cachedDateFormatter(
+            localeIdentifier: settingsStore.locale.identifier,
+            dateFormat: "LLLL yyyy"
+        )
         return formatter.string(from: value).capitalized
     }
 }

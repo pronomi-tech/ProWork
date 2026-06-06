@@ -1,9 +1,6 @@
-//
 //  WorkSessionControlService.swift
 //  ProWork
-//
 //   Created by Pronomi.
-//
 
 import Foundation
 
@@ -89,29 +86,47 @@ final class WorkSessionControlService {
         )
     }
 
+    /// Previously evaluated the same
+    /// `normalizedIds.contains(statusId) || activeSessionStartedAt != nil`
+    /// predicate twice — once to test for emptiness and once to materialise
+    /// the result. Compute it once and reuse the array.
+    /// single-pass partitioning. The previous version did two
+    /// `all.filter` passes (one for `startableTodos`, one for
+    /// `filtered`); on a busy org both walks scan thousands of rows.
+    /// One traversal pushes each row into the right bucket and the
+    /// fallback uses the already-computed `startable` set.
     func fetchQuickTodos(preferredStatusIds: [String]) throws -> [TodoListItem] {
         let all = try todoRepository.fetchAll()
         let normalizedIds = Set(preferredStatusIds)
-        let startableTodos = all.filter { $0.statusStartsTimer || $0.activeSessionStartedAt != nil }
+        let hasPreferred = !normalizedIds.isEmpty
 
-        if normalizedIds.isEmpty {
-            return sortedQuickTodos(startableTodos)
-        }
-
-        let filtered = all.filter {
-            normalizedIds.contains($0.statusId) || $0.activeSessionStartedAt != nil
-        }
-
-        if filtered.isEmpty {
-            return sortedQuickTodos(startableTodos)
-        }
-
-        return sortedQuickTodos(
-            all.filter {
-                normalizedIds.contains($0.statusId) || $0.activeSessionStartedAt != nil
+        var startable: [TodoListItem] = []
+        var preferred: [TodoListItem] = []
+        for item in all {
+            let isStartable = item.statusStartsTimer || item.activeSessionStartedAt != nil
+            if isStartable {
+                startable.append(item)
             }
-        )
+            if hasPreferred,
+               normalizedIds.contains(item.statusId) || item.activeSessionStartedAt != nil {
+                preferred.append(item)
+            }
+        }
+
+        if !hasPreferred || preferred.isEmpty {
+            return sortedQuickTodos(startable)
+        }
+        return sortedQuickTodos(preferred)
     }
+
+    // All lifecycle entry points (start/stop/pause/resume) wrap their
+    // read-then-write sequence in `sessionRepository.transactionally`. The
+    // wrapper holds the in-process recursive lock and SQLite's
+    // BEGIN IMMEDIATE for the whole flow, so menu-bar + main window
+    // double-clicks can't interleave a fetch + insert to produce two open
+    // sessions. The partial unique index on
+    // `todo_time_sessions(organizationId) WHERE endedAt IS NULL AND
+    // deletedAt IS NULL` is the last-resort guard at the DB level.
 
     func startWork(todoId: String) throws {
         guard let todo = try todoRepository.fetchListItem(id: todoId) else {
@@ -121,79 +136,89 @@ final class WorkSessionControlService {
             throw WorkSessionControlError.statusCannotStartTimer
         }
 
-        if let paused = try sessionRepository.fetchPausedSession(), paused.session.todoId == todoId {
-            try sessionRepository.resumeSession(sessionId: paused.session.id)
-            return
-        }
-
-        if let active = try sessionRepository.fetchActiveSession() {
-            if active.session.todoId == todoId {
+        try sessionRepository.transactionally {
+            if let paused = try sessionRepository.fetchPausedSession(), paused.session.todoId == todoId {
+                try sessionRepository.resumeSession(sessionId: paused.session.id)
                 return
             }
 
-            let activeStatusId = try resolveCurrentStatusId(todoId: active.session.todoId, fallback: active.session.startStatusId)
-            try sessionRepository.stopSession(
-                sessionId: active.session.id,
-                endStatusId: activeStatusId
+            if let active = try sessionRepository.fetchActiveSession() {
+                if active.session.todoId == todoId {
+                    return
+                }
+
+                let activeStatusId = try resolveCurrentStatusId(todoId: active.session.todoId, fallback: active.session.startStatusId)
+                try sessionRepository.stopSession(
+                    sessionId: active.session.id,
+                    endStatusId: activeStatusId
+                )
+            }
+
+            if let paused = try sessionRepository.fetchPausedSession() {
+                let pausedStatusId = try resolveCurrentStatusId(todoId: paused.session.todoId, fallback: paused.session.startStatusId)
+                try sessionRepository.stopSession(
+                    sessionId: paused.session.id,
+                    endStatusId: pausedStatusId
+                )
+            }
+
+            try sessionRepository.startSession(
+                todoId: todoId,
+                startStatusId: todo.statusId
             )
         }
-
-        if let paused = try sessionRepository.fetchPausedSession() {
-            let pausedStatusId = try resolveCurrentStatusId(todoId: paused.session.todoId, fallback: paused.session.startStatusId)
-            try sessionRepository.stopSession(
-                sessionId: paused.session.id,
-                endStatusId: pausedStatusId
-            )
-        }
-
-        try sessionRepository.startSession(
-            todoId: todoId,
-            startStatusId: todo.statusId
-        )
     }
 
     func stopWork(todoId: String) throws {
         let statusId = try resolveCurrentStatusId(todoId: todoId, fallback: BuiltInTodoStatusId.waiting)
-        try sessionRepository.stopOpenSession(
-            todoId: todoId,
-            endStatusId: statusId
-        )
+        try sessionRepository.transactionally {
+            try sessionRepository.stopOpenSession(
+                todoId: todoId,
+                endStatusId: statusId
+            )
+        }
     }
 
     func stopActiveWork() throws {
-        guard let active = try sessionRepository.fetchActiveSession() else {
-            return
-        }
+        try sessionRepository.transactionally {
+            guard let active = try sessionRepository.fetchActiveSession() else {
+                return
+            }
 
-        let statusId = try resolveCurrentStatusId(todoId: active.session.todoId, fallback: active.session.startStatusId)
-        try sessionRepository.stopSession(
-            sessionId: active.session.id,
-            endStatusId: statusId
-        )
+            let statusId = try resolveCurrentStatusId(todoId: active.session.todoId, fallback: active.session.startStatusId)
+            try sessionRepository.stopSession(
+                sessionId: active.session.id,
+                endStatusId: statusId
+            )
+        }
     }
 
     func pauseActiveWork() throws {
-        guard let active = try sessionRepository.fetchActiveSession() else {
-            return
-        }
+        try sessionRepository.transactionally {
+            guard let active = try sessionRepository.fetchActiveSession() else {
+                return
+            }
 
-        try sessionRepository.pauseSession(sessionId: active.session.id)
+            try sessionRepository.pauseSession(sessionId: active.session.id)
+        }
     }
 
     func resumePausedWork() throws {
-        guard let paused = try sessionRepository.fetchPausedSession() else {
-            return
-        }
+        try sessionRepository.transactionally {
+            guard let paused = try sessionRepository.fetchPausedSession() else {
+                return
+            }
 
-        if let active = try sessionRepository.fetchActiveSession(), active.session.id != paused.session.id {
-            let statusId = try resolveCurrentStatusId(
-                todoId: active.session.todoId,
-                fallback: active.session.startStatusId
-            )
-            try sessionRepository.stopSession(sessionId: active.session.id, endStatusId: statusId)
-        }
+            if let active = try sessionRepository.fetchActiveSession(), active.session.id != paused.session.id {
+                let statusId = try resolveCurrentStatusId(
+                    todoId: active.session.todoId,
+                    fallback: active.session.startStatusId
+                )
+                try sessionRepository.stopSession(sessionId: active.session.id, endStatusId: statusId)
+            }
 
-        try sessionRepository.resumeSession(sessionId: paused.session.id)
+            try sessionRepository.resumeSession(sessionId: paused.session.id)
+        }
     }
 
     private func resolveCurrentStatusId(todoId: String, fallback: String?) throws -> String {

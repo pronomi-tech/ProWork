@@ -1,9 +1,6 @@
-//
 //  PaymentFormView.swift
 //  ProWork
-//
 //   Created by Pronomi.
-//
 
 import SwiftUI
 
@@ -43,6 +40,12 @@ struct PaymentFormView: View {
     @State private var note: String
     @State private var errorMessage: String?
 
+    /// With fixed, `Currency.allCodes` now derives
+    /// from `Currency.registry.keys` (8 codes), so the workaround is
+    /// no longer needed to surface CHF/JPY/AED/SAR. The append-if-
+    /// missing branch stays around for runs that persisted a truly
+    /// non-standard ISO code (e.g. a future BRL that pre-dates
+    /// registry support) so the picker doesn't strip it.
     private var currencyOptions: [PickerOption] {
         let codes = if Currency.allCodes.contains(currency) {
             Currency.allCodes
@@ -89,8 +92,8 @@ struct PaymentFormView: View {
             title: mode.title(using: settingsStore),
             subtitle: localized("billing.paymentForm.subtitle", defaultValue: "Tahsilat kaydı"),
             systemImage: "creditcard",
-            width: 560,
-            height: 580
+            width: FormSheetSize.paymentForm.width,
+            height: FormSheetSize.paymentForm.height
         ) {
             VStack(alignment: .leading, spacing: ProWorkLayout.formScaled(14, using: settingsStore)) {
                 SettingsFormError(message: errorMessage)
@@ -177,7 +180,8 @@ struct PaymentFormView: View {
             return
         }
 
-        let paidDate = Calendar.current.startOfDay(for: paidAt)
+        // Payment day is the TR accounting day — independent of the device TZ (K3).
+        let paidDate = AppCalendar.istanbul.startOfDay(for: paidAt)
 
         onSave(
             paidDate,
@@ -190,27 +194,28 @@ struct PaymentFormView: View {
         dismiss()
     }
 
+    /// Parse via the active locale's decimal formatter
+    /// instead of TR-specific `.` / `,` swapping. The previous logic
+    /// treated `1.000` as one thousand under TR conventions but the
+    /// same input from an en-US user (where `.` is the decimal
+    /// separator) meant 1.000 = one. We try the locale formatter
+    /// first, then fall back to POSIX (canonical machine form) so
+    /// `1000.50` always parses regardless of locale.
     private func parseMinorUnits(from text: String, currency: String) -> Int? {
         let raw = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalized: String
-        if raw.contains(",") {
-            normalized = raw
-                .replacingOccurrences(of: ".", with: "")
-                .replacingOccurrences(of: ",", with: ".")
-        } else {
-            normalized = raw
+        guard !raw.isEmpty else { return nil }
+
+        let localeFormatter = ProWorkFormatters.cachedDecimalFormatter(
+            localeIdentifier: settingsStore.locale.identifier,
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 6
+        )
+        if let number = localeFormatter.number(from: raw)?.decimalValue, number >= 0 {
+            return Money(amount: number, currency: currency).minorUnits
         }
-
-        guard let decimal = Decimal(string: normalized), decimal >= 0 else {
-            return nil
+        if let posix = Decimal(string: raw, locale: Locale(identifier: "en_US_POSIX")), posix >= 0 {
+            return Money(amount: posix, currency: currency).minorUnits
         }
-
-        return Money(amount: decimal, currency: currency).minorUnits
-    }
-}
-
-private extension String {
-    var nilIfEmpty: String? {
-        isEmpty ? nil : self
+        return nil
     }
 }

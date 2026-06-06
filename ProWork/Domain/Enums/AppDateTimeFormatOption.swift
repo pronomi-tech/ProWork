@@ -1,9 +1,6 @@
-//
 //  AppDateTimeFormatOption.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 
@@ -17,11 +14,13 @@ enum AppDateTimeFormatOption: String, CaseIterable, Identifiable {
         rawValue
     }
 
+    /// Same cached-formatter + UTC-anchored sample
+    /// pattern as `AppDateFormatOption.title(locale:)`.
     func title(locale: Locale) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = locale
-        formatter.timeZone = .current
-        formatter.dateFormat = rawValue
+        let formatter = ProWorkFormatters.cachedDateFormatter(
+            localeIdentifier: locale.identifier,
+            dateFormat: rawValue
+        )
 
         var components = DateComponents()
         components.year = 2026
@@ -30,7 +29,9 @@ enum AppDateTimeFormatOption: String, CaseIterable, Identifiable {
         components.hour = 23
         components.minute = 45
 
-        let sampleDate = Calendar.current.date(from: components) ?? Date()
+        var utcCalendar = Calendar(identifier: .gregorian)
+        utcCalendar.timeZone = TimeZone(identifier: "UTC") ?? .current
+        let sampleDate = utcCalendar.date(from: components) ?? Date()
         return formatter.string(from: sampleDate)
     }
 }

@@ -1,9 +1,6 @@
-//
 //  CustomerFormView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
@@ -31,7 +28,9 @@ struct CustomerFormView: View {
     let mode: CustomerFormMode
     let onSave: (Customer) -> Void
 
-    private let priceListRepository = PriceListRepository()
+    // Shared AppServices instance, so each view-struct recreate doesn't
+    // allocate a new repository.
+    private let priceListRepository = AppServices.shared.priceListRepository
     private var serviceTypeOptions: [SearchPickerOption] {
         [
             SearchPickerOption(id: ServiceType.remote.rawValue, title: ServiceType.remote.title),
@@ -40,14 +39,11 @@ struct CustomerFormView: View {
     }
 
     private var minBillingOptions: [SearchPickerOption] {
-        [0, 15, 30, 45, 60, 90, 120, 150, 180].map { minutes in
-            SearchPickerOption(
-                id: String(minutes),
-                title: minutes == 0
-                    ? settingsStore.localized("customers.form.minBilling.none", defaultValue: "Min Zaman Yok")
-                    : String(format: settingsStore.localized("customers.form.minutes", defaultValue: "%d dk"), minutes)
-            )
-        }
+        SearchPickerOption.minimumBillingMinutes(
+            values: [0, 15, 30, 45, 60, 90, 120, 150, 180],
+            zeroTitle: settingsStore.localized("customers.form.minBilling.none", defaultValue: "Min Zaman Yok"),
+            minutesFormat: settingsStore.localized("customers.form.minutes", defaultValue: "%d dk")
+        )
     }
 
     private var minBillingBinding: Binding<String> {
@@ -61,8 +57,8 @@ struct CustomerFormView: View {
         ProWorkFormShell(
             title: mode.title(using: settingsStore),
             systemImage: "person.2",
-            width: 580,
-            height: 780
+            width: FormSheetSize.customerForm.width,
+            height: FormSheetSize.customerForm.height
         ) {
             formFields
         } footer: {
@@ -214,8 +210,17 @@ struct CustomerFormView: View {
             onCancel: { dismiss() },
             onSave: { save() },
             saveTitle: mode.saveButtonTitle(using: settingsStore),
-            saveDisabled: name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || defaultPriceListId.isEmpty
+            saveDisabled: !isFormValid
         )
+    }
+
+    /// Single source of truth for save eligibility. Both
+    /// the footer's saveDisabled state and `save()`'s guards consult this
+    /// computed property, so adding a new required field is a one-line
+    /// change instead of two-out-of-sync conditions.
+    private var isFormValid: Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !defaultPriceListId.isEmpty
     }
 
     private func loadInitialValues() {
@@ -238,15 +243,14 @@ struct CustomerFormView: View {
     }
 
     private func save() {
+        // Same validity rule the footer enforces.
+        guard isFormValid else { return }
+
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanCode = code.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanContact = contactPerson.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        guard !cleanName.isEmpty else {
-            return
-        }
 
         let normalizedDefaultPriceListId = normalizedDefaultPriceListSelection()
         guard normalizedDefaultPriceListId != nil else {
@@ -269,6 +273,11 @@ struct CustomerFormView: View {
             updatedAt: Date()
         )
 
+        // Previously edit mode had a confirmation dialog but create did
+        // not — inconsistent UX. Deliberate decision: no confirmation
+        // on create (undoing a new record is cheap, an extra click is
+        // friction). In edit, losing changes is unrecoverable so we ask.
+        // This comment marks the intentional asymmetry, not an inconsistency.
         switch mode {
         case .create:
             onSave(customer)
@@ -285,17 +294,40 @@ struct CustomerFormView: View {
         }
     }
 
+    /// Replaces the two-step `try?` silent fallback
+    /// with explicit do/catch so a DB-side fetch failure surfaces in
+    /// `errorMessage` instead of rendering an empty picker that looks
+    /// like "no price lists exist". Also re-attaches the previously
+    /// selected priceListId so an edit modal in a workspace that has
+    /// since hidden the list still renders its name (option synthesized
+    /// from the persisted value).
     private func loadPriceListOptions() {
-        let globalLists = (try? priceListRepository.fetchOwned(
-            organizationId: BuiltInOrganizationId.default,
-            ownerType: .global,
-            ownerId: nil
-        )) ?? []
-        let customerLists = (try? priceListRepository.fetchOwned(
-            organizationId: BuiltInOrganizationId.default,
-            ownerType: .customer,
-            ownerId: id
-        )) ?? []
+        let globalLists: [PriceList]
+        let customerLists: [PriceList]
+        do {
+            globalLists = try priceListRepository.fetchOwned(
+                organizationId: BuiltInOrganizationId.default,
+                ownerType: .global,
+                ownerId: nil
+            )
+            customerLists = try priceListRepository.fetchOwned(
+                organizationId: BuiltInOrganizationId.default,
+                ownerType: .customer,
+                ownerId: id
+            )
+        } catch {
+            ProWorkToastStore.shared.show(
+                String(
+                    format: settingsStore.localized(
+                        "customers.error.priceListLoadFailed",
+                        defaultValue: "Fiyat listeleri yüklenemedi: %@"
+                    ),
+                    error.localizedDescription
+                ),
+                style: .error
+            )
+            return
+        }
 
         let globalOptions = globalLists.map { list in
             SearchPickerOption(
@@ -316,14 +348,34 @@ struct CustomerFormView: View {
             )
         }
 
-        priceListOptions = globalOptions + customerOptions
+        var options = globalOptions + customerOptions
+
+        // In edit mode the customer might point at a price
+        // list that's no longer visible to the current scope (soft-
+        // deleted, archived, moved to another customer). Surface a
+        // synthetic option so the picker can render the persisted id
+        // with a "missing/archived" badge instead of silently dropping
+        // the assignment back to the default.
+        if !defaultPriceListId.isEmpty,
+           !options.contains(where: { $0.id == defaultPriceListId }) {
+            let missingTitle = String(
+                format: settingsStore.localized(
+                    "customers.form.priceListScope.missing",
+                    defaultValue: "(Erişilemeyen liste) %@"
+                ),
+                defaultPriceListId.prefix(8) + "…"
+            )
+            options.append(
+                SearchPickerOption(id: defaultPriceListId, title: missingTitle)
+            )
+        }
+
+        priceListOptions = options
 
         let defaultGlobalListId = globalLists.first(where: \.isDefault)?.id
         let firstAvailableListId = priceListOptions.first?.id
 
         if defaultPriceListId.isEmpty {
-            defaultPriceListId = defaultGlobalListId ?? firstAvailableListId ?? ""
-        } else if !priceListOptions.contains(where: { $0.id == defaultPriceListId }) {
             defaultPriceListId = defaultGlobalListId ?? firstAvailableListId ?? ""
         }
     }
@@ -336,7 +388,7 @@ struct CustomerFormView: View {
     private func loadVatRateOptions() {
         let content = VatRateLabel.pickerContent(
             organizationId: BuiltInOrganizationId.default,
-            settingsStore: settingsStore
+            repository: AppServices.shared.vatRateRepository
         )
         vatRateOptions = content.options
         vatRatePlaceholder = content.defaultPlaceholder

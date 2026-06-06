@@ -1,18 +1,14 @@
-//
 //  ProWorkFormFooter.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
-//  TÜM düzenleme/oluşturma form'larında alt buton barı standardı.
-//  Vazgeç ve Kaydet butonları aynı ebatta:
+//  Standard footer button bar used in ALL edit/create forms.
+//  Cancel and Save share the same size:
 //      ProWorkButtonLabel + minHeight 32 + .controlSize(.large)
-//      Vazgeç: .bordered, Kaydet: .borderedProminent
-//
+//      Cancel: .bordered, Save: .borderedProminent
 
 import SwiftUI
 
-/// İki butonlu (Vazgeç + Kaydet) standart form footer.
+/// Standard two-button (Cancel + Save) form footer.
 struct ProWorkFormFooter: View {
     let onCancel: () -> Void
     let onSave: () -> Void
@@ -38,6 +34,12 @@ struct ProWorkFormFooter: View {
         HStack(spacing: 12) {
             Spacer()
 
+            // every form footer now exposes stable
+            // accessibility identifiers so UI tests and VoiceOver can
+            // reach the cancel/save controls by name. Title (which
+            // doubles as the visible label) feeds the VoiceOver
+            // accessibilityLabel; the identifier is anchored to the
+            // semantic action.
             Button {
                 onCancel()
             } label: {
@@ -50,6 +52,8 @@ struct ProWorkFormFooter: View {
             .buttonStyle(.bordered)
             .controlSize(.large)
             .keyboardShortcut(.cancelAction)
+            .accessibilityIdentifier("prowork.formFooter.cancel")
+            .accessibilityLabel(effectiveCancelTitle)
 
             Button {
                 onSave()
@@ -64,11 +68,26 @@ struct ProWorkFormFooter: View {
             .controlSize(.large)
             .keyboardShortcut(.defaultAction)
             .disabled(saveDisabled)
+            .accessibilityIdentifier("prowork.formFooter.save")
+            .accessibilityLabel(effectiveSaveTitle)
         }
+        // macOS power users expect ⌘↩ to commit a form.
+        // `keyboardShortcut(.defaultAction)` above already binds Return,
+        // but does not include the Command modifier. A hidden button binds
+        // the ⌘↩ alias so both work; it lives off-screen via clipped(),
+        // keyboardShortcut still routes through the save action.
+        .background(
+            Button("", action: onSave)
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(saveDisabled)
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        )
     }
 }
 
-/// Tek butonlu (Kapat / OK gibi) standart form footer.
+/// Standard single-button (Close / OK style) form footer.
 struct ProWorkFormSingleFooter: View {
     let onPrimary: () -> Void
     var title: String = ""
@@ -107,7 +126,7 @@ struct ProWorkFormSingleFooter: View {
     }
 }
 
-/// Form içinde hata mesajı banner'ı.
+/// Error-message banner inside a form.
 struct ProWorkFormError: View {
     let message: String?
 

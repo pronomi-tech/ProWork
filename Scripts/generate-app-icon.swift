@@ -1,7 +1,6 @@
 // generate-app-icon.swift
 // ProWork uygulama ikonunu CoreGraphics ile üretir.
 // Kullanım: swift Scripts/generate-app-icon.swift <size> <output.png>
-//
 // Konsept: yeşil→mavi gradient zemin üzerinde büyük beyaz saat halkası
 // (12/3/6/9 çentikleriyle), ortasında beyaz play üçgeni.
 
@@ -13,7 +12,20 @@ guard CommandLine.arguments.count == 3,
     print("Usage: swift generate-app-icon.swift <size> <output.png>")
     exit(1)
 }
+
+// previously any size value (negative, zero, huge,
+// non-integer) was accepted silently. macOS app icons live in
+// 16…1024 pt; clamp validation here so a typo doesn't waste minutes
+// rendering a 16k bitmap or produce an empty file.
+guard size >= 16, size <= 1024, size.rounded() == size else {
+    print("error: size must be an integer between 16 and 1024 (got \(size))")
+    exit(2)
+}
 let outputPath = CommandLine.arguments[2]
+guard !outputPath.isEmpty, outputPath.hasSuffix(".png") else {
+    print("error: output path must end with .png (got '\(outputPath)')")
+    exit(3)
+}
 let s = CGFloat(size)
 
 // Palet: turkuaz → mavi (yeşil hissi azaltılmış, mavi ağırlıklı)

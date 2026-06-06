@@ -1,12 +1,8 @@
-//
 //  CustomerReportView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
-//  Spec §10–11: Tek müşteri için dönem detay raporu.
-//  Müşteri seç + dönem seç → BillingComputationService → CustomerReport özeti.
-//
+//  Spec §10–11: Period-detail report for a single customer.
+//  Select customer + period → BillingComputationService → CustomerReport summary.
 
 import SwiftUI
 
@@ -16,7 +12,7 @@ struct CustomerReportView: View {
 
     @State private var selectedCustomerId: String = ""
     @State private var range: DateRangeFilter = .thisMonth
-    @State private var customStart: Date = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: Date())) ?? Date()
+    @State private var customStart: Date = AppCalendar.istanbul.date(from: AppCalendar.istanbul.dateComponents([.year, .month], from: Date())) ?? Date()
     @State private var customEnd: Date = Date()
 
     var body: some View {
@@ -141,7 +137,7 @@ struct CustomerReportView: View {
 
             Divider()
 
-            // Süreler bloğu
+            // Durations block
             HStack(alignment: .top, spacing: 24) {
                 metricColumn(settingsStore.localized("reports.customer.group.durations", defaultValue: "Süreler")) {
                     metricRow(settingsStore.localized("reports.customer.metric.totalActual", defaultValue: "Toplam gerçek"), ProWorkFormatters.durationHM(s.totalActualSeconds))
@@ -326,7 +322,7 @@ struct CustomerReportView: View {
             return settingsStore.localized("reports.period.all", defaultValue: "Tüm dönem")
         default:
             let start = settingsStore.formatDate(periodStart)
-            let end = settingsStore.formatDate(Calendar.current.date(byAdding: .day, value: -1, to: periodEnd) ?? periodEnd)
+            let end = settingsStore.formatDate(AppCalendar.istanbul.date(byAdding: .day, value: -1, to: periodEnd) ?? periodEnd)
             return "\(start) – \(end)"
         }
     }

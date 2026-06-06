@@ -1,14 +1,25 @@
-//
 //  PriceListQuoteTemplateSettings.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 
-/// Fiyat listesini Teklif PDF'i olarak dışa aktarırken kullanılan şablon ayarları.
-/// `ServiceDocumentTemplateSettings` ile paralel; sadece teklif belgesine özgüdür.
+/// Template settings used when exporting a price list as a Quote PDF.
+/// Parallel to `ServiceDocumentTemplateSettings`; specific to the quote document.
+///
+/// Bumps a `schemaVersion` on every persisted instance so a
+/// future field rename/removal can detect a payload it can't decode
+/// rather than silently dropping it via `decodeIfPresent` (the
+/// rename target would land at the default while the renamed key
+/// silently disappears). Current shape is version 1; encode/decode
+/// keep accepting unversioned payloads as v1 for backward compat.
+///
+/// The literal Turkish defaults are kept for
+/// backward compat with the existing on-disk JSON, but the
+/// `defaultTemplate(for:)` factory below seeds an English variant
+/// when `AppLanguage` is `.english`. Switching language in Settings
+/// stamps the new defaults only when the user explicitly resets;
+/// existing customisations are preserved.
 struct PriceListQuoteTemplateSettings: Hashable, Codable {
     var documentLabel: String
     var titleTemplate: String
@@ -30,6 +41,56 @@ struct PriceListQuoteTemplateSettings: Hashable, Codable {
     var fontScale: Double
     var accentHexColor: String
     var footerCenterLine: String
+
+    /// Schema marker. Bump when the field set changes in a
+    /// non-additive way (rename, removal). The decoder rejects
+    /// payloads with a higher version than the runtime supports so a
+    /// downgrade can't silently mis-restore.
+    static let currentSchemaVersion = 1
+
+    /// Locale-aware factory. The default-template
+    /// constant remains TR-only for backward compat; new English
+    /// installations get TR-language UI today, so the existing
+    /// constant stays canonical. Calls that want a language-specific
+    /// reset should use this factory.
+    static func defaultTemplate(for language: AppLanguage) -> PriceListQuoteTemplateSettings {
+        switch language {
+        case .turkish:
+            return defaultTemplate
+        case .english:
+            return PriceListQuoteTemplateSettings(
+                documentLabel: "QUOTE",
+                titleTemplate: "{customerName} – Service Quote",
+                quoteNumberPrefix: "QTE",
+                validityDays: 7,
+                introParagraph: "The pricing for the services requested by your company is detailed below. We hope this proposal meets your expectations and look forward to a successful collaboration.",
+                closing: "Best regards",
+                signerName: "",
+                signerTitle: "",
+                commercialTerms: [
+                    "Prices are exclusive of VAT.",
+                    "This proposal is valid for {validityDays} days.",
+                    "An invoice is issued on the 10th of the following month for each month of service."
+                ],
+                serviceTerms: [
+                    "Service fees correspond to one hour of work by one staff member.",
+                    "Working time is rounded up to the next full hour.",
+                    "Travel time is included in the on-site service scope.",
+                    "Off-hours and holiday work requires prior approval."
+                ],
+                showCoverPage: true,
+                showFromToBlock: true,
+                showFinancialSummaryBar: true,
+                showSignatureBlock: false,
+                showHeaderDivider: true,
+                showLogo: true,
+                showFooter: true,
+                fontScale: 1.0,
+                accentHexColor: "#1F4E79",
+                footerCenterLine: "{address} • {phone} • {website}"
+            )
+        }
+    }
 
     nonisolated static let defaultTemplate = PriceListQuoteTemplateSettings(
         documentLabel: "TEKLİF",
@@ -79,6 +140,7 @@ struct PriceListQuoteTemplateSettings: Hashable, Codable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case schemaVersion
         case documentLabel
         case titleTemplate
         case quoteNumberPrefix
@@ -149,6 +211,22 @@ struct PriceListQuoteTemplateSettings: Hashable, Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let d = Self.defaultTemplate
 
+        // Schema-version forward-compat refusal. Same pattern
+        // as DraftLineSelectionState: an unknown future version is
+        // rejected with a typed decoding error so callers don't get
+        // an "every field reset" silent regression.
+        let decodedVersion = (try? container.decode(Int.self, forKey: .schemaVersion)) ?? 1
+        if decodedVersion > Self.currentSchemaVersion {
+            throw DecodingError.dataCorruptedError(
+                forKey: .schemaVersion,
+                in: container,
+                debugDescription: "Unsupported PriceListQuoteTemplateSettings schemaVersion \(decodedVersion); maximum supported is \(Self.currentSchemaVersion)."
+            )
+        }
+        // Synthesised encode(to:) would try to read a stored
+        // `schemaVersion` property; we own the encoder below so
+        // there's no field on the struct. Decoded versions are
+        // accepted into the runtime model implicitly as v1.
         documentLabel = try container.decodeIfPresent(String.self, forKey: .documentLabel) ?? d.documentLabel
         titleTemplate = try container.decodeIfPresent(String.self, forKey: .titleTemplate) ?? d.titleTemplate
         quoteNumberPrefix = try container.decodeIfPresent(String.self, forKey: .quoteNumberPrefix) ?? d.quoteNumberPrefix
@@ -169,5 +247,34 @@ struct PriceListQuoteTemplateSettings: Hashable, Codable {
         fontScale = try container.decodeIfPresent(Double.self, forKey: .fontScale) ?? d.fontScale
         accentHexColor = try container.decodeIfPresent(String.self, forKey: .accentHexColor) ?? d.accentHexColor
         footerCenterLine = try container.decodeIfPresent(String.self, forKey: .footerCenterLine) ?? d.footerCenterLine
+    }
+
+    /// Custom encode is required because `schemaVersion` is in CodingKeys
+    /// without a stored property — the synthesised encoder would
+    /// otherwise refuse to compile. Writes `currentSchemaVersion`
+    /// explicitly so future loads can detect the format.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(Self.currentSchemaVersion, forKey: .schemaVersion)
+        try container.encode(documentLabel, forKey: .documentLabel)
+        try container.encode(titleTemplate, forKey: .titleTemplate)
+        try container.encode(quoteNumberPrefix, forKey: .quoteNumberPrefix)
+        try container.encode(validityDays, forKey: .validityDays)
+        try container.encode(introParagraph, forKey: .introParagraph)
+        try container.encode(closing, forKey: .closing)
+        try container.encode(signerName, forKey: .signerName)
+        try container.encode(signerTitle, forKey: .signerTitle)
+        try container.encode(commercialTerms, forKey: .commercialTerms)
+        try container.encode(serviceTerms, forKey: .serviceTerms)
+        try container.encode(showCoverPage, forKey: .showCoverPage)
+        try container.encode(showFromToBlock, forKey: .showFromToBlock)
+        try container.encode(showFinancialSummaryBar, forKey: .showFinancialSummaryBar)
+        try container.encode(showSignatureBlock, forKey: .showSignatureBlock)
+        try container.encode(showHeaderDivider, forKey: .showHeaderDivider)
+        try container.encode(showLogo, forKey: .showLogo)
+        try container.encode(showFooter, forKey: .showFooter)
+        try container.encode(fontScale, forKey: .fontScale)
+        try container.encode(accentHexColor, forKey: .accentHexColor)
+        try container.encode(footerCenterLine, forKey: .footerCenterLine)
     }
 }

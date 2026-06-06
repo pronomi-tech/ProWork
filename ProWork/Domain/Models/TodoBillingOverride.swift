@@ -1,17 +1,15 @@
-//
 //  TodoBillingOverride.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
+import os
 
-/// Belirli bir todo için fiyat override tipi.
-/// Spec §3 / Soru 7 kararı uyarınca XOR — ya birim ücret ya da sabit fee.
+/// Price override type for a specific todo.
+/// Per spec §3 / Q7 the two are XOR — either a unit price or a fixed fee.
 enum TodoBillingOverrideType: String, CaseIterable, Identifiable, Hashable {
-    case unitPrice  // saatlik birim ücreti override eder
-    case fixedFee   // todo'nun toplam tutarı (süre bağımsız)
+    case unitPrice  // overrides the hourly unit price
+    case fixedFee   // total amount for the todo (duration-independent)
 
     var id: String { rawValue }
 
@@ -23,14 +21,14 @@ enum TodoBillingOverrideType: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
-/// Bir todo için fiyat override kaydı (1:1 ilişki).
+/// Price override record for a todo (1:1 relationship).
 struct TodoBillingOverride: Identifiable, Hashable {
     let id: String
     var todoId: String
     var overrideType: TodoBillingOverrideType
-    /// `unitPrice` türünde dolu; `fixedFee` türünde nil.
+    /// Set when the type is `unitPrice`; nil when the type is `fixedFee`.
     var unitPriceMinor: Int?
-    /// `fixedFee` türünde dolu; `unitPrice` türünde nil.
+    /// Set when the type is `fixedFee`; nil when the type is `unitPrice`.
     var fixedFeeMinor: Int?
     var currency: String
     var note: String?
@@ -63,13 +61,40 @@ struct TodoBillingOverride: Identifiable, Hashable {
         rowVersion: Int = 0,
         syncStatus: SyncStatus = .local,
         lastSyncedAt: Date? = nil,
-        originDeviceId: String? = nil
+        originDeviceId: String? = DeviceIdentity.current
     ) {
+        // the two price fields are XOR by spec
+        // (§3 / Q7). A row that carries both was silently resolved
+        // by BillingCalculator picking whichever field its current branch
+        // happened to read first, masking real billing-rule bugs.
+        // Normalise here so the model invariant is "exactly one of
+        // unitPriceMinor / fixedFeeMinor is non-nil, matching
+        // overrideType". In debug builds we trip an assertion so the
+        // source of the inconsistency is obvious; in release builds we
+        // drop the off-type value and log a warning rather than crash
+        // on a legacy row.
+        let (normalisedUnit, normalisedFixed): (Int?, Int?) = {
+            switch overrideType {
+            case .unitPrice:
+                if fixedFeeMinor != nil {
+                    assertionFailure("TodoBillingOverride: overrideType=.unitPrice but fixedFeeMinor is set; dropping fixedFeeMinor")
+                    ProWorkLog.database.error("TodoBillingOverride conflict (todoId=\(todoId, privacy: .private)): unitPrice override carried a fixedFee value; dropped.")
+                }
+                return (unitPriceMinor, nil)
+            case .fixedFee:
+                if unitPriceMinor != nil {
+                    assertionFailure("TodoBillingOverride: overrideType=.fixedFee but unitPriceMinor is set; dropping unitPriceMinor")
+                    ProWorkLog.database.error("TodoBillingOverride conflict (todoId=\(todoId, privacy: .private)): fixedFee override carried a unitPrice value; dropped.")
+                }
+                return (nil, fixedFeeMinor)
+            }
+        }()
+
         self.id = id
         self.todoId = todoId
         self.overrideType = overrideType
-        self.unitPriceMinor = unitPriceMinor
-        self.fixedFeeMinor = fixedFeeMinor
+        self.unitPriceMinor = normalisedUnit
+        self.fixedFeeMinor = normalisedFixed
         self.currency = currency.uppercased()
         self.note = note
         self.organizationId = organizationId

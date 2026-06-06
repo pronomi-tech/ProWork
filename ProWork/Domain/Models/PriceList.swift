@@ -1,17 +1,14 @@
-//
 //  PriceList.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 
-/// Bir fiyat listesinin sahibi.
+/// Owner of a price list.
 enum PriceListOwnerType: String, CaseIterable, Identifiable, Hashable {
-    case global    // organization seviyesi varsayılan
-    case customer  // belirli müşteri
-    case project   // belirli proje (en yüksek öncelik)
+    case global    // organization-level default
+    case customer  // a specific customer
+    case project   // a specific project (highest priority)
 
     var id: String { rawValue }
 
@@ -24,11 +21,11 @@ enum PriceListOwnerType: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
-/// Fiyat listesi başlığı. Satırlar `PriceListRow` ile ayrı tabloda tutulur.
+/// Price list header. Rows live in a separate `PriceListRow` table.
 struct PriceList: Identifiable, Hashable {
     let id: String
     var ownerType: PriceListOwnerType
-    var ownerId: String?  // global ise nil; müşteri/proje ise ilgili id
+    var ownerId: String?  // nil for global; customer/project id otherwise
     var name: String
     var currency: String
     var isActive: Bool
@@ -68,7 +65,7 @@ struct PriceList: Identifiable, Hashable {
         rowVersion: Int = 0,
         syncStatus: SyncStatus = .local,
         lastSyncedAt: Date? = nil,
-        originDeviceId: String? = nil
+        originDeviceId: String? = DeviceIdentity.current
     ) {
         self.id = id
         self.ownerType = ownerType

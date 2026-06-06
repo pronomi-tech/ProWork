@@ -1,9 +1,6 @@
-//
 //  TodoStatusRepositoryIntegrationTests.swift
 //  ProWorkTests
-//
 //  Created by Pronomi.
-//
 
 import XCTest
 @testable import ProWork
@@ -91,7 +88,7 @@ final class TodoStatusRepositoryIntegrationTests: XCTestCase {
         try repository.insert(kept)
         try repository.insert(deleted)
 
-        try repository.softDelete(id: deleted.id)
+        try repository.softDelete(id: deleted.id, by: BuiltInUserId.defaultOwner)
 
         let remaining = try repository.fetchAll()
             .filter { $0.name.hasPrefix("qa-") }
@@ -102,7 +99,7 @@ final class TodoStatusRepositoryIntegrationTests: XCTestCase {
     func test_hardDelete_removesRowEntirely() throws {
         let status = TodoStatus(name: "qa-Silinecek")
         try repository.insert(status)
-        try repository.delete(id: status.id)
+        try repository._hardDelete(id: status.id)
 
         XCTAssertNil(try repository.fetch(id: status.id))
     }

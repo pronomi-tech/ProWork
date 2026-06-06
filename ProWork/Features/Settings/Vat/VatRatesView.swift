@@ -1,12 +1,9 @@
-//
 //  VatRatesView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
-//  Adlandırılmış KDV tanımlarının yönetimi. Kullanıcı tanımı buradan oluşturur,
-//  müşteri/proje/kategori formundan atar. Atama yoksa `isDefault` tanım uygulanır.
-//
+//  Management of named VAT definitions. The user creates the definition
+//  here and assigns it from a customer/project/category form. If no
+//  assignment is in place, the `isDefault` definition applies.
 
 import SwiftUI
 
@@ -26,62 +23,53 @@ struct VatRatesView: View {
                 defaultValue: "KDV oranlarını burada tanımlayın; müşteri, proje veya kategoriye atayın. Atama yoksa varsayılan oran uygulanır."
             ),
             errorMessage: viewModel.errorMessage,
+            contentScrollBehavior: .fixed,
             toolbar: {
-                Button {
+                SettingsCRUDToolbarButton(
+                    title: settingsStore.localized("vat.action.newRate", defaultValue: "Yeni Tanım"),
+                    systemImage: "plus"
+                ) {
                     isShowingNew = true
-                } label: {
-                    ProWorkButtonLabel(
-                        title: settingsStore.localized("vat.action.newRate", defaultValue: "Yeni Tanım"),
-                        systemImage: "plus",
-                        minHeight: 32
-                    )
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
             }
         ) {
-            if viewModel.rates.isEmpty {
-                SettingsCard {
-                    SettingsEmptyState(
-                        systemImage: "percent",
-                        title: settingsStore.localized("vat.empty.title", defaultValue: "KDV tanımı yok"),
-                        message: settingsStore.localized(
-                            "vat.empty.message",
-                            defaultValue: "Sağ üstten yeni bir KDV tanımı oluşturun ve birini varsayılan olarak işaretleyin."
-                        )
-                    )
-                }
-            } else {
-                table
-            }
+            table
         }
         .onAppear { viewModel.load() }
-        .sheet(isPresented: $isShowingNew) {
-            VatRateFormView(mode: .create) { rate in
-                if viewModel.create(rate) {
-                    isShowingNew = false
+        .settingsCRUDPresenter(
+            isShowingCreate: $isShowingNew,
+            editingItem: $editingRate,
+            confirmation: $confirmation,
+            createForm: {
+                VatRateFormView(mode: .create) { rate in
+                    if viewModel.create(rate) {
+                        isShowingNew = false
+                    }
+                }
+            },
+            editForm: { rate in
+                VatRateFormView(mode: .edit(rate)) { updated in
+                    if viewModel.update(updated) {
+                        editingRate = nil
+                    }
                 }
             }
-        }
-        .sheet(item: $editingRate) { rate in
-            VatRateFormView(mode: .edit(rate)) { updated in
-                if viewModel.update(updated) {
-                    editingRate = nil
-                }
-            }
-        }
-        .proWorkConfirmationDialog($confirmation)
+        )
     }
 
     private var table: some View {
-        SettingsTableContainer {
-            tableHeader
-            Divider()
-            ForEach(viewModel.rates) { rate in
-                row(rate)
-                Divider()
-            }
-        }
+        ProWorkGrid(
+            items: viewModel.rates,
+            header: { tableHeader },
+            emptyContent: {
+                ProWorkGridEmptyState(
+                    systemImage: "percent",
+                    title: settingsStore.localized("vat.empty.title", defaultValue: "Henüz KDV tanımı yok"),
+                    message: settingsStore.localized("vat.empty.message", defaultValue: "Sağ üstten yeni KDV tanımı oluşturabilirsiniz.")
+                )
+            },
+            row: { rate in row(rate) }
+        )
     }
 
     private var tableHeader: some View {
@@ -93,8 +81,8 @@ struct VatRatesView: View {
             Text(settingsStore.localized("vat.column.default", defaultValue: "Varsayılan"))
                 .frame(width: 110, alignment: .center)
             Text(settingsStore.localized("priceLists.column.active", defaultValue: "Aktif"))
-                .frame(width: 60, alignment: .center)
-            Text("").frame(width: 76)
+                .frame(width: 90, alignment: .leading)
+            Color.gridHeaderSpacer(width: 76)
         }
         .proWorkTextStyle(.caption)
         .foregroundStyle(.secondary)
@@ -132,9 +120,8 @@ struct VatRatesView: View {
                 .frame(width: 110, alignment: .center)
                 .help(settingsStore.localized("vat.column.default.tooltip", defaultValue: "Atama yoksa uygulanır"))
 
-            Image(systemName: rate.isActive ? "checkmark.circle.fill" : "xmark.circle")
-                .foregroundStyle(rate.isActive ? .green : .secondary)
-                .frame(width: 60, alignment: .center)
+            ProWorkActivityBadge(isActive: rate.isActive)
+                .frame(width: 90, alignment: .leading)
 
             HStack(spacing: 6) {
                 Button { editingRate = rate } label: {

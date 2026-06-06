@@ -1,9 +1,6 @@
-//
 //  ProWorkTextField.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import AppKit
 import SwiftUI
@@ -49,18 +46,7 @@ struct ProWorkTextField: View {
             }
 
             inputField
-                .padding(.horizontal, ProWorkLayout.scaled(12, using: settingsStore))
-                .padding(.vertical, ProWorkLayout.scaled(6, using: settingsStore))
-                .frame(
-                    minHeight: ProWorkLayout.scaled(minHeight, using: settingsStore),
-                    alignment: .center
-                )
-                .background(.background.opacity(0.70))
-                .clipShape(RoundedRectangle(cornerRadius: ProWorkLayout.scaled(10, using: settingsStore)))
-                .overlay(
-                    RoundedRectangle(cornerRadius: ProWorkLayout.scaled(10, using: settingsStore))
-                        .stroke(.quaternary, lineWidth: 1)
-                )
+                .proWorkFieldContainer(minHeight: minHeight)
         }
     }
 
@@ -77,9 +63,19 @@ struct ProWorkTextField: View {
         )
 
         if axis == .horizontal, let inputFilter {
+            // Sanitization happens at the binding boundary so the parent
+            // state can never observe an unfiltered value. This removes
+            // the async self-correction inside `updateNSView`.
+            let filteredBinding = Binding<String>(
+                get: { text },
+                set: { newValue in
+                    let filtered = inputFilter(newValue)
+                    if text != filtered { text = filtered }
+                }
+            )
             ProWorkFilteredNSTextField(
                 placeholder: placeholder,
-                text: $text,
+                text: filteredBinding,
                 font: nsFont,
                 onSubmit: onSubmit,
                 inputFilter: inputFilter
@@ -125,14 +121,8 @@ private struct ProWorkFilteredNSTextField: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSTextField, context: Context) {
-        let filtered = inputFilter(text)
-        if text != filtered {
-            DispatchQueue.main.async {
-                text = filtered
-            }
-        }
-        if nsView.stringValue != filtered {
-            nsView.stringValue = filtered
+        if nsView.stringValue != text {
+            nsView.stringValue = text
         }
         if nsView.placeholderString != placeholder {
             nsView.placeholderString = placeholder

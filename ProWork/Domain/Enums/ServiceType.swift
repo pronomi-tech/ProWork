@@ -1,16 +1,15 @@
-//
 //  ServiceType.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 
-/// Hizmet tipi: uzaktan ya da yerinde verilen hizmet.
+/// Service type: remote or on-site.
+/// Raw value is persisted as TEXT in the DB; written
+/// explicitly so a case rename can't break the contract.
 enum ServiceType: String, CaseIterable, Identifiable, Hashable {
-    case remote
-    case onsite
+    case remote = "remote"
+    case onsite = "onsite"
 
     var id: String { rawValue }
 
@@ -28,7 +27,7 @@ enum ServiceType: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
-    /// UI'da sıralama önceliği (küçük = önce). Yerinden önce, uzaktan sonra.
+    /// Sort priority in the UI (smaller = first). On-site first, then remote.
     var sortOrder: Int {
         switch self {
         case .onsite: return 10

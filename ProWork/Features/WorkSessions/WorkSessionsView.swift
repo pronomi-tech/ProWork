@@ -1,9 +1,6 @@
-//
 //  WorkSessionsView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 import Combine
@@ -17,7 +14,10 @@ struct WorkSessionsView: View {
 
     @State private var pendingWorkStart: PendingWorkStart?
     @State private var confirmation: ProWorkConfirmation?
-    @State private var now: Date = Date()
+    // Removed @State now mirror; the open-session duration
+    // reads `clockTicker.halfMinute` directly so SwiftUI subscribes
+    // only when an open session is actually present, mirroring the
+    // TodoBoardCardView fix.
 
     // Filtreler
     @State private var filterRange: DateRangeFilter = .all
@@ -26,15 +26,16 @@ struct WorkSessionsView: View {
     @State private var filterTodoId: String = ""
     @State private var filterSource: FilterSource = .all
     @State private var filterStatus: FilterActiveStatus = .all
-    @State private var filterStartDate: Date = Calendar.current.startOfDay(for: Date())
+    @State private var filterStartDate: Date = AppCalendar.istanbul.startOfDay(for: Date())
     @State private var filterEndDate: Date = Date()
     @State private var isShowingFilters: Bool = false
+    /// Cached filter result. Body used to call
+    /// `filteredSessions` (a `O(n_session × n_todo)` lookup) on every
+    /// re-evaluation including clockTicker ticks. Now it's recomputed
+    /// only when the inputs actually change.
+    @State private var cachedFilteredSessions: [WorkSessionListItem] = []
 
-    private let timer = Timer.publish(
-        every: 30,
-        on: .main,
-        in: .common
-    ).autoconnect()
+    @EnvironmentObject private var clockTicker: ProWorkClockTicker
 
     var body: some View {
         VStack(alignment: .leading, spacing: ProWorkLayout.scaled(16, using: settingsStore)) {
@@ -56,14 +57,24 @@ struct WorkSessionsView: View {
         .proWorkToastNotifications(errorMessage: viewModel.errorMessage)
         .onAppear {
             viewModel.loadData()
+            rebuildFilteredSessionsCache()
         }
-        .onReceive(timer) { value in
-            guard viewModel.sessions.contains(where: { $0.endedAt == nil }) else {
-                return
-            }
-
-            now = value
-        }
+        // ClockTicker is consumed directly by the
+        // open-session row via `clockTicker.halfMinute`. The previous
+        // .onReceive ran on every tick even when no session was open
+        // (`guard … else { return }` was the gate, but the subscription
+        // itself was always active and woke the view).
+        // rebuild filtered cache on filter / data changes.
+        .onChange(of: viewModel.sessions) { _, _ in rebuildFilteredSessionsCache() }
+        .onChange(of: viewModel.todos) { _, _ in rebuildFilteredSessionsCache() }
+        .onChange(of: filterRange) { _, _ in rebuildFilteredSessionsCache() }
+        .onChange(of: filterCustomerId) { _, _ in rebuildFilteredSessionsCache() }
+        .onChange(of: filterProjectId) { _, _ in rebuildFilteredSessionsCache() }
+        .onChange(of: filterTodoId) { _, _ in rebuildFilteredSessionsCache() }
+        .onChange(of: filterSource) { _, _ in rebuildFilteredSessionsCache() }
+        .onChange(of: filterStatus) { _, _ in rebuildFilteredSessionsCache() }
+        .onChange(of: filterStartDate) { _, _ in rebuildFilteredSessionsCache() }
+        .onChange(of: filterEndDate) { _, _ in rebuildFilteredSessionsCache() }
         .sheet(isPresented: $isShowingCreateForm) {
             WorkSessionFormView(
                 mode: .create,
@@ -118,13 +129,33 @@ struct WorkSessionsView: View {
     // MARK: - Filtered Sessions
 
     private var filteredSessions: [WorkSessionListItem] {
-        viewModel.sessions.filter { session in
-            matchesRange(session) &&
-            matchesCustomer(session) &&
-            matchesProject(session) &&
-            matchesTodo(session) &&
-            matchesSource(session) &&
-            matchesActiveStatus(session)
+        cachedFilteredSessions
+    }
+
+    private func rebuildFilteredSessionsCache() {
+        // ID-based filter via the todo lookup. The previous
+        // name-based predicates (`session.customerName == expected`)
+        // mixed two same-named customers and missed sessions where
+        // the persisted snapshot diverged from the current name
+        // .
+        let todoLookup = Dictionary(uniqueKeysWithValues: viewModel.todos.map { ($0.id, $0) })
+        let filterByCustomer = !filterCustomerId.isEmpty
+        let filterByProject = !filterProjectId.isEmpty
+
+        cachedFilteredSessions = viewModel.sessions.filter { session in
+            guard matchesRange(session) else { return false }
+            if filterByCustomer || filterByProject {
+                guard let todo = todoLookup[session.todoId] else { return false }
+                if filterByCustomer, todo.customerId != filterCustomerId {
+                    return false
+                }
+                if filterByProject, todo.projectId != filterProjectId {
+                    return false
+                }
+            }
+            return matchesTodo(session)
+                && matchesSource(session)
+                && matchesActiveStatus(session)
         }
     }
 
@@ -134,18 +165,6 @@ struct WorkSessionsView: View {
             customStart: filterStartDate,
             customEnd: filterEndDate
         )
-    }
-
-    private func matchesCustomer(_ session: WorkSessionListItem) -> Bool {
-        guard !filterCustomerId.isEmpty else { return true }
-        guard let customerName = viewModel.customers.first(where: { $0.id == filterCustomerId })?.name else { return false }
-        return session.customerName == customerName
-    }
-
-    private func matchesProject(_ session: WorkSessionListItem) -> Bool {
-        guard !filterProjectId.isEmpty else { return true }
-        guard let projectName = viewModel.projects.first(where: { $0.id == filterProjectId })?.name else { return false }
-        return session.projectName == projectName
     }
 
     private func matchesTodo(_ session: WorkSessionListItem) -> Bool {
@@ -458,46 +477,20 @@ struct WorkSessionsView: View {
     // MARK: - Table
 
     private var table: some View {
-        GeometryReader { geometry in
-            ScrollView(.horizontal) {
-                VStack(spacing: 0) {
-                    tableHeader
-
-                    Divider()
-
-                    if filteredSessions.isEmpty {
-                        emptyState
-                    } else {
-                        ScrollView {
-                            LazyVStack(spacing: 0) {
-                                ForEach(filteredSessions) { session in
-                                    row(session)
-
-                                    Divider()
-                                }
-                            }
-                        }
-                        .frame(maxHeight: .infinity)
-                    }
-                }
-                .frame(width: max(geometry.size.width, tableMinWidth), alignment: .leading)
-                .frame(maxHeight: .infinity, alignment: .leading)
-                .background(.background)
-                .clipShape(RoundedRectangle(cornerRadius: ProWorkLayout.scaled(12, using: settingsStore)))
-                .overlay(
-                    RoundedRectangle(cornerRadius: ProWorkLayout.scaled(12, using: settingsStore))
-                        .stroke(.quaternary, lineWidth: 1)
-                )
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        }
+        ProWorkGrid(
+            items: filteredSessions,
+            minTableWidth: tableMinWidth,
+            cornerRadius: ProWorkLayout.scaled(12, using: settingsStore),
+            header: { tableHeader },
+            emptyContent: { emptyState },
+            row: { session in row(session) }
+        )
     }
 
     private var tableHeader: some View {
         HStack(spacing: ProWorkLayout.scaled(12, using: settingsStore)) {
-            Text("")
-                .proWorkFrame(width: 80, alignment: .center)
-            
+            Color.gridHeaderSpacer(width: 80)
+
             Text(settingsStore.localized("exchangeRates.column.date", defaultValue: "Tarih"))
                 .proWorkFrame(width: 95, alignment: .leading)
 
@@ -651,14 +644,16 @@ struct WorkSessionsView: View {
                 .background(.orange.opacity(0.16))
                 .clipShape(Capsule())
         } else {
-            Text("")
+            Color.clear
         }
     }
 
     private var emptyState: some View {
+        // Sits immediately below the header, taking only as much space as
+        // its content needs. Previously `Spacer + maxHeight: .infinity`
+        // centred it vertically, and when the table card stretched to
+        // fill the page a large empty band opened up in between.
         VStack(spacing: ProWorkLayout.scaled(10, using: settingsStore)) {
-            Spacer(minLength: 0)
-
             Image(systemName: "clock")
                 .proWorkFont(size: 32)
                 .foregroundStyle(.secondary)
@@ -674,10 +669,9 @@ struct WorkSessionsView: View {
             .proWorkTextStyle(.caption)
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
-
-            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, ProWorkLayout.scaled(36, using: settingsStore))
     }
 
     // MARK: - Computed
@@ -699,7 +693,7 @@ struct WorkSessionsView: View {
             return 0
         }
 
-        return max(0, Int(now.timeIntervalSince(session.startedAt)))
+        return max(0, Int(clockTicker.halfMinute.timeIntervalSince(session.startedAt)))
     }
 
     private func endTimeText(_ session: WorkSessionListItem) -> String {
@@ -756,7 +750,7 @@ struct WorkSessionsView: View {
 
     private func clearFilters() {
         filterRange = .all
-        filterStartDate = Calendar.current.startOfDay(for: Date())
+        filterStartDate = AppCalendar.istanbul.startOfDay(for: Date())
         filterEndDate = Date()
         filterCustomerId = ""
         filterProjectId = ""
@@ -827,20 +821,20 @@ private enum FilterActiveStatus: String {
     case all, active, completed
 }
 
-private struct FilterOption: Identifiable {
+/// Three identical `(id, title)` Identifiable structs were
+/// declared inline to satisfy SwiftUI's `ForEach`/`Picker` requirements
+/// with type-specific picker bindings. Collapsed into one generic
+/// shape; aliases preserve the call-site readability and let a future
+/// change to one filter's payload (e.g. adding `subtitle`) happen
+/// without touching the others.
+private struct WorkSessionFilterOption: Identifiable {
     let id: String
     let title: String
 }
 
-private struct FilterSourceOption: Identifiable {
-    let id: String
-    let title: String
-}
-
-private struct FilterStatusOption: Identifiable {
-    let id: String
-    let title: String
-}
+private typealias FilterOption = WorkSessionFilterOption
+private typealias FilterSourceOption = WorkSessionFilterOption
+private typealias FilterStatusOption = WorkSessionFilterOption
 
 private struct PendingWorkStart {
     let todoId: String

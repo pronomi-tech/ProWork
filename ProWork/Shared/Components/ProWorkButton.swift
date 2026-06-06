@@ -1,9 +1,6 @@
-//
 //  ProWorkButton.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
@@ -38,6 +35,31 @@ struct ProWorkButton: View {
     }
 
     var body: some View {
+        // Style selection goes through a @ViewBuilder switch; the previous
+        // code wrapped each branch in an AnyView via `AnyPrimitiveButtonStyle`,
+        // which broke SwiftUI's view identity and caused animation glitches
+        // and unnecessary re-renders.
+        switch style {
+        case .primary:
+            buttonContent.buttonStyle(.borderedProminent)
+        case .secondary:
+            buttonContent.buttonStyle(.bordered)
+        case .destructive:
+            // Destructive carries a `.role(.destructive)`
+            // tint so screen readers + macOS visual hierarchy can
+            // distinguish "delete" from a plain secondary action.
+            // The bordered style is preserved so the layout doesn't
+            // shift; only the foregroundStyle changes (red on macOS).
+            buttonContent
+                .buttonStyle(.bordered)
+                .tint(.red)
+        case .plain:
+            buttonContent.buttonStyle(.plain)
+        }
+    }
+
+    @ViewBuilder
+    private var buttonContent: some View {
         Button {
             action()
         } label: {
@@ -55,36 +77,7 @@ struct ProWorkButton: View {
                 minHeight: ProWorkLayout.scaled(minHeight, using: settingsStore),
                 alignment: .center
             )
-            .frame(maxWidth: style == .plain ? nil : nil)
             .contentShape(Rectangle())
         }
-        .buttonStyle(buttonStyle)
-    }
-
-    private var buttonStyle: some PrimitiveButtonStyle {
-        switch style {
-        case .primary:
-            return AnyPrimitiveButtonStyle(.borderedProminent)
-        case .secondary:
-            return AnyPrimitiveButtonStyle(.bordered)
-        case .destructive:
-            return AnyPrimitiveButtonStyle(.bordered)
-        case .plain:
-            return AnyPrimitiveButtonStyle(.plain)
-        }
-    }
-}
-
-private struct AnyPrimitiveButtonStyle: PrimitiveButtonStyle {
-    private let makeBody: (Configuration) -> AnyView
-
-    init<S: PrimitiveButtonStyle>(_ style: S) {
-        makeBody = { configuration in
-            AnyView(style.makeBody(configuration: configuration))
-        }
-    }
-
-    func makeBody(configuration: Configuration) -> some View {
-        makeBody(configuration)
     }
 }

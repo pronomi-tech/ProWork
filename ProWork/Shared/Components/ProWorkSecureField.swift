@@ -1,9 +1,6 @@
-//
 //  ProWorkSecureField.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
@@ -54,18 +51,7 @@ struct ProWorkSecureField: View {
                 .onSubmit {
                     onSubmit?()
                 }
-                .padding(.horizontal, ProWorkLayout.scaled(12, using: settingsStore))
-                .padding(.vertical, ProWorkLayout.scaled(9, using: settingsStore))
-                .frame(
-                    minHeight: ProWorkLayout.scaled(minHeight, using: settingsStore),
-                    alignment: .center
-                )
-                .clipShape(RoundedRectangle(cornerRadius: ProWorkLayout.scaled(10, using: settingsStore)))
-                .background(.background.opacity(0.70))
-                .overlay(
-                    RoundedRectangle(cornerRadius: ProWorkLayout.scaled(10, using: settingsStore))
-                        .stroke(.quaternary, lineWidth: 1)
-                )
+                .proWorkFieldContainer(minHeight: minHeight, verticalPadding: 9)
         }
     }
 }

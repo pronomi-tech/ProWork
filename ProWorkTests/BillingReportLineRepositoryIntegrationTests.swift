@@ -1,9 +1,6 @@
-//
 //  BillingReportLineRepositoryIntegrationTests.swift
 //  ProWorkTests
-//
 //  Created by Pronomi.
-//
 
 import XCTest
 @testable import ProWork

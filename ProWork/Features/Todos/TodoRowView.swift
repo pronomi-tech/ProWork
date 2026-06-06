@@ -1,9 +1,6 @@
-//
 //  TodoRowView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
@@ -84,7 +81,10 @@ struct TodoRowView: View {
         parts.append(String(format: settingsStore.localized("todos.subtitle.category", defaultValue: "Kategori: %@"), todo.categoryName))
 
         if let dueDate = todo.dueDate {
-            parts.append(String(format: settingsStore.localized("todos.subtitle.dueDate", defaultValue: "Termin: %@"), settingsStore.makeDateFormatter().string(from: dueDate)))
+            // Prefer `settingsStore.formatDate(_:)` so we hit
+            // the shared `ProWorkFormatters` cache directly instead of
+            // round-tripping through `makeDateFormatter()` per row.
+            parts.append(String(format: settingsStore.localized("todos.subtitle.dueDate", defaultValue: "Termin: %@"), settingsStore.formatDate(dueDate)))
         }
 
         if let estimatedMinutes = todo.estimatedMinutes {
@@ -120,7 +120,13 @@ extension DateFormatter {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "tr_TR")
-        formatter.timeZone = .current
+        // Anchor to Istanbul to match the billing-day
+        // timezone used everywhere else; user-locale formatting
+        // remains via `locale = tr_TR`. (The audit also notes these
+        // formatters may be dead code — verified live during this
+        // sweep; left in place so removing them is a separate cosmetic
+        // change.)
+        formatter.timeZone = AppCalendar.istanbul.timeZone
         formatter.dateStyle = .medium
         formatter.timeStyle = .none
         return formatter
@@ -130,7 +136,13 @@ extension DateFormatter {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "tr_TR")
-        formatter.timeZone = .current
+        // Anchor to Istanbul to match the billing-day
+        // timezone used everywhere else; user-locale formatting
+        // remains via `locale = tr_TR`. (The audit also notes these
+        // formatters may be dead code — verified live during this
+        // sweep; left in place so removing them is a separate cosmetic
+        // change.)
+        formatter.timeZone = AppCalendar.istanbul.timeZone
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
         return formatter

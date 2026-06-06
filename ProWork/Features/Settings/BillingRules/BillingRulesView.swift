@@ -1,9 +1,6 @@
-//
 //  BillingRulesView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
@@ -17,9 +14,14 @@ struct BillingRulesView: View {
     @State private var existingRule: BillingRule?
     @State private var errorMessage: String?
     @State private var savedNotice: String?
+    /// Replaces the asyncAfter+string-compare
+    /// pattern; race-resistant via generation counter.
+    @State private var savedNoticeScheduler = NoticeScheduler()
 
-    private let repository = BillingRuleRepository()
-    private let organizationRepository = OrganizationRepository()
+    // Repositories are taken from AppServices so that a new instance is not
+    // created every time the view struct is recreated.
+    private let repository = AppServices.shared.billingRuleRepository
+    private let organizationRepository = AppServices.shared.organizationRepository
 
     var body: some View {
         SettingsScreenScaffold(
@@ -128,24 +130,28 @@ struct BillingRulesView: View {
 
             HStack(spacing: 8) {
                 ForEach(Weekday.allCases) { weekday in
+                    // Read `weekendDays.contains(weekday)`
+                    // once per button instead of three times across
+                    // the image, fill, and stroke modifiers.
+                    let isWeekend = weekendDays.contains(weekday)
                     Button {
                         toggleWeekend(weekday)
                     } label: {
                         VStack(spacing: 6) {
                             Text(weekday.shortTitle)
                                 .proWorkTextStyle(.callout, weight: .medium)
-                            Image(systemName: weekendDays.contains(weekday) ? "checkmark.circle.fill" : "circle")
+                            Image(systemName: isWeekend ? "checkmark.circle.fill" : "circle")
                                 .proWorkFont(size: 16)
-                                .foregroundStyle(weekendDays.contains(weekday) ? Color.accentColor : .secondary)
+                                .foregroundStyle(isWeekend ? Color.accentColor : .secondary)
                         }
                         .frame(width: 64, height: 56)
                         .background(
                             RoundedRectangle(cornerRadius: 10)
-                                .fill(weekendDays.contains(weekday) ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.06))
+                                .fill(isWeekend ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.06))
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 10)
-                                .stroke(weekendDays.contains(weekday) ? Color.accentColor : Color.secondary.opacity(0.2), lineWidth: 1)
+                                .stroke(isWeekend ? Color.accentColor : Color.secondary.opacity(0.2), lineWidth: 1)
                         )
                     }
                     .buttonStyle(.plain)
@@ -253,8 +259,14 @@ struct BillingRulesView: View {
     }
 
     private func save() {
+        // Iterate weekdays in canonical order so the validation
+        // error always blames the same row when multiple weekdays fail.
+        // `Dictionary` has no guaranteed iteration order, so the
+        // previous loop could report "Wednesday end…" on one run
+        // and "Monday end…" on the next for the same inputs.
         var hours: [Weekday: DailyWorkHours] = [:]
-        for (weekday, state) in weekdayState where state.isEnabled {
+        for weekday in Weekday.allCases {
+            guard let state = weekdayState[weekday], state.isEnabled else { continue }
             let start = TimeOfDay.from(date: state.startDate)
             let end = TimeOfDay.from(date: state.endDate)
             guard end > start else {
@@ -276,17 +288,25 @@ struct BillingRulesView: View {
             createdAt: existingRule?.createdAt ?? Date()
         )
 
+        // Organization update + rule upsert must be atomic.
+        // Without the transaction a successful org update followed by
+        // a failed rule upsert leaves the org's billingWindowMode
+        // changed while the rule write rolls back at the user's eye,
+        // so refreshing the page would show inconsistent state.
         do {
-            if var organization = try organizationRepository.fetchDefault() {
-                organization.billingWindowMode = billingWindowMode
-                try organizationRepository.update(organization)
+            try AppDatabase.shared.inWriteTransaction {
+                if var organization = try organizationRepository.fetchDefault() {
+                    organization.billingWindowMode = billingWindowMode
+                    try organizationRepository.update(organization)
+                }
+                try repository.upsert(rule)
             }
-            try repository.upsert(rule)
             existingRule = rule
             errorMessage = nil
-            savedNotice = settingsStore.localized("common.saved", defaultValue: "Kaydedildi.")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                if savedNotice == settingsStore.localized("common.saved", defaultValue: "Kaydedildi.") { savedNotice = nil }
+            savedNoticeScheduler.show(
+                settingsStore.localized("common.saved", defaultValue: "Kaydedildi.")
+            ) { value in
+                savedNotice = value
             }
         } catch {
             errorMessage = error.localizedDescription

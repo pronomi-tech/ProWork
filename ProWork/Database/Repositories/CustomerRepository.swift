@@ -1,9 +1,6 @@
-//
 //  CustomerRepository.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 import SQLite3
@@ -30,7 +27,7 @@ final class CustomerRepository {
         """
 
         return try database.query(sql) { statement in
-            CustomerRepository.makeCustomer(from: statement)
+            try CustomerRepository.makeCustomer(from: statement)
         }
     }
 
@@ -48,7 +45,7 @@ final class CustomerRepository {
 
         return try database.query(
             sql,
-            map: { statement in CustomerRepository.makeCustomer(from: statement) },
+            map: { statement in try CustomerRepository.makeCustomer(from: statement) },
             bind: { statement in statement.bindText(id, at: 1) }
         ).first
     }
@@ -80,6 +77,7 @@ final class CustomerRepository {
             statement.bindText(customer.notes, at: 11)
             statement.bindMetadata(customer.meta, startingAt: 12)
         }
+        NotificationCenter.default.post(name: .proWorkCustomersDidChange, object: nil)
     }
 
     func update(_ customer: Customer) throws {
@@ -111,9 +109,16 @@ final class CustomerRepository {
             statement.bindText(DateFormatter.proWorkSQLite.string(from: Date()), at: 12)
             statement.bindText(customer.id, at: 13)
         }
+        NotificationCenter.default.post(name: .proWorkCustomersDidChange, object: nil)
     }
 
-    func delete(id: String) throws {
+    /// Hard delete. Production code should never call this — soft-delete
+    /// (with audit trail + sync semantics) is the only standard. Kept
+    /// public for integration tests that need to drop fixtures; the
+    /// underscore prefix is a stronger marker than `internal` because
+    /// Swift module access doesn't help when tests sit in the same
+    /// scheme. New call sites should fail code review.
+    func _hardDelete(id: String) throws {
         let sql = """
         DELETE FROM customers
         WHERE id = ?;
@@ -124,30 +129,23 @@ final class CustomerRepository {
         }
     }
 
-    func softDelete(id: String, by userId: String = BuiltInUserId.defaultOwner) throws {
-        let sql = """
-        UPDATE customers
-        SET
-            deletedAt = ?,
-            updatedAt = ?,
-            updatedByUserId = ?,
-            rowVersion = rowVersion + 1,
-            syncStatus = 'local'
-        WHERE id = ? AND deletedAt IS NULL;
-        """
-
-        try database.execute(sql) { statement in
-            let now = DateFormatter.proWorkSQLite.string(from: Date())
-            statement.bindText(now, at: 1)
-            statement.bindText(now, at: 2)
-            statement.bindText(userId, at: 3)
-            statement.bindText(id, at: 4)
-        }
+    func softDelete(id: String, by userId: String) throws {
+        // delegate to the central helper so a schema-wide
+        // rowVersion / timestamp tweak is a one-line edit.
+        try database.softDelete(table: "customers", id: id, by: userId)
+        NotificationCenter.default.post(name: .proWorkCustomersDidChange, object: nil)
     }
 
     // MARK: - Mapping
 
-    private static func makeCustomer(from statement: SQLiteStatement) -> Customer {
+    /// Broadcast posted after any customer mutation (insert/update/
+    /// softDelete). Because DefinitionsView's ZStack opacity pattern only
+    /// fires ProjectsView's `.onAppear` on the first mount (not on tab
+    /// selection), ProjectsViewModel observes this signal to keep the
+    /// customer list fresh. The same pattern
+    /// `proWorkExchangeRatesDidChange` ile CurrencyConverter cache'inde
+    /// is used.
+    private static func makeCustomer(from statement: SQLiteStatement) throws -> Customer {
         Customer(
             id: statement.text(at: 0) ?? UUID().uuidString,
             name: statement.text(at: 1) ?? "",
@@ -160,7 +158,16 @@ final class CustomerRepository {
             defaultMinBillingMinutes: statement.int(at: 8),
             vatRateId: statement.text(at: 9),
             notes: statement.text(at: 10),
-            meta: statement.readMetadata(startingAt: 11)
+            meta: try statement.readMetadata(startingAt: 11)
         )
     }
+}
+
+extension Notification.Name {
+    /// Posted after CustomerRepository.insert / update / softDelete.
+    /// Cross-feature view-models (e.g. ProjectsViewModel) observe this signal
+    /// observe ederek cache'lerini yeniler — DefinitionsView'in ZStack
+    /// because the opacity navigation doesn't re-fire `onAppear` after
+    /// the first mount, which was causing a stale-list issue.
+    static let proWorkCustomersDidChange = Notification.Name("ProWorkCustomersDidChange")
 }

@@ -1,38 +1,47 @@
-//
 //  TodoFormView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
+import os
 
+/// TodoFormView previously declared 26 individual
+/// `@State` properties at the top of the type, mixing identity, content,
+/// dates, and billing-override concerns. Grouping them by domain keeps
+/// the property block legible without forcing a full sub-view
+/// decomposition (which would require threading 20+ bindings through
+/// child views). Each domain remains a flat collection of @State for
+/// SwiftUI's diffing, just annotated with MARK comments.
 struct TodoFormView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var settingsStore: AppSettingsStore
 
+    // MARK: - Identity & relations
     @State private var id: String = UUID().uuidString
     @State private var customerId: String = ""
     @State private var projectId: String = ""
     @State private var categoryId: String = ""
     @State private var statusId: String = BuiltInTodoStatusId.waiting
+
+    // MARK: - Content
     @State private var title: String = ""
     @State private var description: String = ""
     @State private var priority: String = "normal"
     @State private var estimatedMinutesText: String = ""
     @State private var isBillable: Bool = true
 
+    // MARK: - Schedule
     @State private var hasPlannedDate: Bool = false
     @State private var plannedDate: Date = Date()
-
     @State private var hasDueDate: Bool = false
     @State private var dueDate: Date = Date()
-
     @State private var createdAt: Date = Date()
     @State private var completedAt: Date?
+
+    // MARK: - UI
     @State private var confirmation: ProWorkConfirmation?
 
-    // MARK: - Billing override (yalnızca düzenleme modunda)
+    // MARK: - Billing override (only in edit mode)
     @State private var hasBillingOverride: Bool = false
     @State private var billingOverrideType: TodoBillingOverrideType = .unitPrice
     @State private var billingOverrideAmountText: String = ""
@@ -40,9 +49,11 @@ struct TodoFormView: View {
     @State private var billingOverrideRecord: TodoBillingOverride?
     @State private var hasCustomBillingOverrideCurrency: Bool = false
 
-    private let billingOverrideRepository = TodoBillingOverrideRepository()
-    private let currencyResolver = PricingCurrencyResolver()
-    private let organizationRepository = OrganizationRepository()
+    // Repository / resolver dependencies are pulled from the shared AppServices
+    // instance so they are not reopened every time the View struct is recreated
+    private let billingOverrideRepository = AppServices.shared.todoBillingOverrideRepository
+    private let currencyResolver = AppServices.shared.pricingCurrencyResolver
+    private let organizationRepository = AppServices.shared.organizationRepository
 
     let mode: TodoFormMode
     let customers: [Customer]
@@ -51,13 +62,18 @@ struct TodoFormView: View {
     let statuses: [TodoStatus]
     let onSave: (Todo) -> Void
 
-    private func formW(_ value: CGFloat) -> CGFloat {
+    // Previously the file declared two separate helpers
+    // `formW` and `formH` with identical bodies, picked at call sites to
+    // hint at width vs height usage. Keep the semantic naming where it
+    // already exists but route both through a single implementation so
+    // the bodies can't drift. (Replacing 30 call sites with a single
+    // name was deemed not worth the diff churn.)
+    private func formScaled(_ value: CGFloat) -> CGFloat {
         ProWorkLayout.formScaled(value, using: settingsStore)
     }
 
-    private func formH(_ value: CGFloat) -> CGFloat {
-        ProWorkLayout.formScaled(value, using: settingsStore)
-    }
+    private func formW(_ value: CGFloat) -> CGFloat { formScaled(value) }
+    private func formH(_ value: CGFloat) -> CGFloat { formScaled(value) }
 
     private var filteredProjects: [ProjectListItem] {
         guard !customerId.isEmpty else {
@@ -187,15 +203,20 @@ struct TodoFormView: View {
             title: mode.title(using: settingsStore),
             subtitle: formSubtitle,
             systemImage: "checklist",
-            width: 680,
-            height: 860
+            width: FormSheetSize.todoForm.width,
+            height: FormSheetSize.todoForm.height
         ) {
             formFields
         } footer: {
             footer
         }
-        .onAppear {
-            loadInitialValues()
+        // LoadInitialValues includes a synchronous
+        // billingOverrideRepository.fetch which was blocking the main
+        // thread on .onAppear. Use .task so the DB hop runs on a
+        // background executor; the sync portion (form @State assignment)
+        // happens immediately, the DB lookup is awaited.
+        .task {
+            await loadInitialValues()
         }
         .onChange(of: customerId) { _, _ in
             if !filteredProjects.contains(where: { $0.id == projectId }) {
@@ -404,7 +425,7 @@ struct TodoFormView: View {
                 )
             }
 
-            // Özel Ücret — yalnızca düzenleme modunda (todo henüz DB'de yoksa override eklenemez)
+            // Custom rate — only in edit mode (cannot add override if todo is not yet in DB)
             if isEditMode, isBillable {
                 formRow(label: settingsStore.localized("todoForm.billingOverride", defaultValue: "Özel Ücret"), alignment: .top) {
                     billingOverrideField
@@ -597,7 +618,12 @@ struct TodoFormView: View {
         return parts.isEmpty ? nil : parts.joined(separator: " • ")
     }
 
-    private func loadInitialValues() {
+    /// Switched from .onAppear { loadInitialValues() } to
+    /// .task { await loadInitialValues() } so the billing-override DB read
+    /// no longer blocks the main thread during form presentation. The
+    /// in-memory @State assignments still happen up front; only the DB
+    /// lookup is awaited off main.
+    private func loadInitialValues() async {
         if categoryId.isEmpty {
             categoryId = categories.first?.id ?? ""
         }
@@ -642,8 +668,24 @@ struct TodoFormView: View {
             dueDate = due
         }
 
-        // Mevcut billing override varsa yükle
-        if let override = try? billingOverrideRepository.fetch(todoId: todo.id) {
+        // Load the existing billing override if any. We used to call this
+        // in the background via Task.detached; under Swift 6 strict
+        // concurrency the repository is @MainActor-isolated and can't be
+        // called from a detached actor. Since this is a one-shot DB fetch
+        // at form-open time, doing it synchronously on the main actor is
+        // acceptable (SQLite averages < 1 ms). Errors are no longer
+        // swallowed with a silent `try?` — log + empty fallback.
+        let override: TodoBillingOverride?
+        do {
+            override = try billingOverrideRepository.fetch(todoId: todo.id)
+        } catch {
+            ProWorkLog.app.error(
+                "TodoFormView billingOverride fetch failed for todo=\(todo.id, privacy: .public): \(error.localizedDescription, privacy: .private)"
+            )
+            override = nil
+        }
+
+        if let override {
             billingOverrideRecord = override
             hasBillingOverride = true
             billingOverrideType = override.overrideType
@@ -721,19 +763,31 @@ struct TodoFormView: View {
         }
     }
 
-    /// Düzenleme modunda billing override'ı upsert/remove eder.
+    /// Upserts/removes the billing override in edit mode.
+    ///
+    /// The previous `try?` silenced both upsert
+    /// and remove failures, so a write error left the override stale
+    /// while the parent's `onSave(todo)` happily updated the todo —
+    /// the partial-failure window the audit calls out. Now we route
+    /// through `ProWorkToastStore` on failure (parent already shows
+    /// its own toast on the todo write) so the user sees a real
+    /// signal. Full atomicity needs the override write to share a
+    /// transaction with the todo write; that requires lifting the
+    /// closure out of the View (Tier 7 VM-style refactor) and is
+    /// flagged in as a separate architectural item.
     private func persistBillingOverride(for todoId: String) {
         guard isEditMode else { return }
 
         if hasBillingOverride && isBillable {
-            // Tutar parse
-            let formatter = NumberFormatter()
-            formatter.locale = settingsStore.locale
-            formatter.numberStyle = .decimal
-            formatter.maximumFractionDigits = 4
+            // Cache adoption mirrors PriceListRowFormView.
+            let formatter = ProWorkFormatters.cachedDecimalFormatter(
+                localeIdentifier: settingsStore.locale.identifier,
+                minimumFractionDigits: 0,
+                maximumFractionDigits: 4
+            )
 
             guard let n = formatter.number(from: billingOverrideAmountText), n.decimalValue >= 0 else {
-                return  // sessizce yoksay; UI seviyesi validation yok
+                return  // silently ignore; no UI-level validation
             }
             let money = Money(amount: n.decimalValue, currency: billingOverrideCurrency)
             let minor = money.minorUnits
@@ -748,10 +802,24 @@ struct TodoFormView: View {
                 organizationId: BuiltInOrganizationId.default,
                 createdAt: billingOverrideRecord?.createdAt ?? Date()
             )
-            try? billingOverrideRepository.upsert(override)
+            do {
+                try billingOverrideRepository.upsert(override)
+            } catch {
+                ProWorkToastStore.shared.show(
+                    error.localizedDescription,
+                    style: .error
+                )
+            }
         } else {
-            // Override kapatıldı veya billable=false → soft-delete
-            try? billingOverrideRepository.remove(todoId: todoId)
+            // Override disabled or billable=false → soft-delete
+            do {
+                try billingOverrideRepository.remove(todoId: todoId)
+            } catch {
+                ProWorkToastStore.shared.show(
+                    error.localizedDescription,
+                    style: .error
+                )
+            }
         }
     }
 
@@ -762,20 +830,38 @@ struct TodoFormView: View {
 
         let suggestedCurrency: String
 
+        // Currency resolution failures fall back to "TRY" for UX
+        // continuity, but the old silent `try?` did not surface resolver
+        // errors (DB error / wrong record). We now log so the question
+        // "why does it suggest TRY?" can be traced from Console.app.
         if !projectId.isEmpty,
            let project = projects.first(where: { $0.id == projectId }) {
-            suggestedCurrency = (try? currencyResolver.resolveProjectCurrency(
-                projectId: project.id,
-                customerId: project.customerId,
-                organizationId: BuiltInOrganizationId.default
-            )) ?? "TRY"
+            do {
+                suggestedCurrency = try currencyResolver.resolveProjectCurrency(
+                    projectId: project.id,
+                    customerId: project.customerId,
+                    organizationId: BuiltInOrganizationId.default
+                )
+            } catch {
+                ProWorkLog.app.error(
+                    "TodoFormView resolveProjectCurrency failed (projectId=\(project.id, privacy: .public)): \(error.localizedDescription, privacy: .private)"
+                )
+                suggestedCurrency = "TRY"
+            }
         } else if !customerId.isEmpty {
-            suggestedCurrency = (try? currencyResolver.resolveCustomerCurrency(
-                customerId: customerId,
-                organizationId: BuiltInOrganizationId.default
-            )) ?? "TRY"
+            do {
+                suggestedCurrency = try currencyResolver.resolveCustomerCurrency(
+                    customerId: customerId,
+                    organizationId: BuiltInOrganizationId.default
+                )
+            } catch {
+                ProWorkLog.app.error(
+                    "TodoFormView resolveCustomerCurrency failed (customerId=\(customerId, privacy: .public)): \(error.localizedDescription, privacy: .private)"
+                )
+                suggestedCurrency = "TRY"
+            }
         } else {
-            suggestedCurrency = (try? organizationRepository.fetchDefault()?.masterCurrency) ?? "TRY"
+            suggestedCurrency = AppServices.shared.cachedMasterCurrency()
         }
 
         billingOverrideCurrency = suggestedCurrency

@@ -1,15 +1,12 @@
-//
 //  TodoStatusesViewModel.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Combine
 import Foundation
 
 @MainActor
-final class TodoStatusesViewModel: ObservableObject {
+final class TodoStatusesViewModel: ObservableObject, CRUDListViewModel {
     @Published private(set) var statuses: [TodoStatus] = []
     @Published var errorMessage: String?
 
@@ -30,37 +27,15 @@ final class TodoStatusesViewModel: ObservableObject {
 
     @discardableResult
     func create(_ status: TodoStatus) -> Bool {
-        do {
-            try statusRepository.insert(status)
-            load()
-            errorMessage = nil
-            return true
-        } catch {
-            errorMessage = error.localizedDescription
-            return false
-        }
+        performMutation { try statusRepository.insert(status) }
     }
 
     @discardableResult
     func update(_ status: TodoStatus) -> Bool {
-        do {
-            try statusRepository.update(status)
-            load()
-            errorMessage = nil
-            return true
-        } catch {
-            errorMessage = error.localizedDescription
-            return false
-        }
+        performMutation { try statusRepository.update(status) }
     }
 
     func delete(id: String) {
-        do {
-            try statusRepository.delete(id: id)
-            load()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        performMutation { try statusRepository.softDelete(id: id, by: AppServices.currentUserId) }
     }
 }

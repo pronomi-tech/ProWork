@@ -1,15 +1,12 @@
-//
 //  Money.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 
-/// Para tutarını ondalıklı tam hassasiyetle taşıyan tip.
-/// Domain ve UI içinde `amount` (Decimal) kullanılır.
-/// Veritabanı sınırında `minorUnits` (kuruş, INTEGER) ile dönüştürülür.
+/// Carries a money amount with full decimal precision.
+/// Domain and UI code work with `amount` (Decimal).
+/// At the DB boundary it converts to `minorUnits` (e.g. kuruş, INTEGER).
 struct Money: Hashable {
     var amount: Decimal
     var currency: String
@@ -19,8 +16,8 @@ struct Money: Hashable {
         self.currency = currency.uppercased()
     }
 
-    /// Minor unit (kuruş) cinsinden tutar oluşturur.
-    /// Örn: `Money(minorUnits: 150050, currency: "TRY")` -> 1500.50 TRY
+    /// Builds an amount from minor units (e.g. kuruş).
+    /// e.g. `Money(minorUnits: 150050, currency: "TRY")` -> 1500.50 TRY
     init(minorUnits: Int, currency: String) {
         let normalizedCode = currency.uppercased()
         let multiplier = Currency.minorMultiplier(for: normalizedCode)
@@ -34,7 +31,7 @@ struct Money: Hashable {
         self.currency = normalizedCode
     }
 
-    /// DB'ye yazılacak minor unit (kuruş) değeri. Banker's rounding uygulanır.
+    /// Minor-unit (e.g. kuruş) value written to the DB. Uses banker's rounding.
     var minorUnits: Int {
         var multiplier = Currency.minorMultiplier(for: currency)
         var rawAmount = amount
@@ -56,13 +53,23 @@ struct Money: Hashable {
     }
 }
 
-// MARK: - Aritmetik
+// MARK: - Arithmetic
 
 extension Money {
+    /// Arithmetic on heterogeneous currencies is a
+    /// **programming error** (the caller forgot to convert before adding
+    /// kuruş + cent), not a runtime data condition. We keep the
+    /// `precondition` semantics — a wrong-currency add produces a
+    /// crash report we can act on — but route the messages through the
+    /// localiser so debug Console output isn't hardcoded Turkish.
+    /// English defaults track the rest of the codebase's diagnostic
+    /// strings. Production builds elide `precondition` in -O, so the
+    /// trap only fires in DEBUG / -Onone where the caller would catch
+    /// it during development.
     static func + (lhs: Money, rhs: Money) -> Money {
         precondition(
             lhs.currency == rhs.currency,
-            "Farklı para birimleri toplanamaz: \(lhs.currency) ↔ \(rhs.currency)"
+            currencyMismatchMessage(operation: "add", lhs: lhs.currency, rhs: rhs.currency)
         )
         return Money(amount: lhs.amount + rhs.amount, currency: lhs.currency)
     }
@@ -70,7 +77,7 @@ extension Money {
     static func - (lhs: Money, rhs: Money) -> Money {
         precondition(
             lhs.currency == rhs.currency,
-            "Farklı para birimleri çıkarılamaz: \(lhs.currency) ↔ \(rhs.currency)"
+            currencyMismatchMessage(operation: "subtract", lhs: lhs.currency, rhs: rhs.currency)
         )
         return Money(amount: lhs.amount - rhs.amount, currency: lhs.currency)
     }
@@ -79,48 +86,88 @@ extension Money {
         Money(amount: -value.amount, currency: value.currency)
     }
 
+    /// Scale a money amount by a unit-less factor (e.g. a quantity, a
+    /// percentage, an FX rate). The result keeps the **left** operand's
+    /// currency — multiplying by an FX rate does **not** convert; for
+    /// conversion use `Money.convert(to:rate:)` which surfaces the
+    /// intent in the function name.
     static func * (lhs: Money, rhs: Decimal) -> Money {
         Money(amount: lhs.amount * rhs, currency: lhs.currency)
     }
 
+    /// Mirror of `Money * Decimal` for callers that prefer
+    /// `factor * money` ordering.
     static func * (lhs: Decimal, rhs: Money) -> Money {
         Money(amount: lhs * rhs.amount, currency: rhs.currency)
     }
 
+    /// Scale a money amount by an `Int` count. Currency is preserved.
     static func * (lhs: Money, rhs: Int) -> Money {
         Money(amount: lhs.amount * Decimal(rhs), currency: lhs.currency)
     }
 
     static func / (lhs: Money, rhs: Decimal) -> Money {
-        precondition(rhs != 0, "Money sıfıra bölünemez")
+        precondition(
+            rhs != 0,
+            ProWorkLocalizer.shared.string(
+                "money.error.divideByZero",
+                defaultValue: "Money cannot be divided by zero."
+            )
+        )
         return Money(amount: lhs.amount / rhs, currency: lhs.currency)
+    }
+
+    private static func currencyMismatchMessage(operation: String, lhs: String, rhs: String) -> String {
+        String(
+            format: ProWorkLocalizer.shared.string(
+                "money.error.currencyMismatch.\(operation)",
+                defaultValue: "Cannot \(operation) Money values across currencies: %@ ↔ %@"
+            ),
+            lhs,
+            rhs
+        )
     }
 }
 
-// MARK: - Karşılaştırma
+// MARK: - Comparison
 
 extension Money: Comparable {
     static func < (lhs: Money, rhs: Money) -> Bool {
         precondition(
             lhs.currency == rhs.currency,
-            "Farklı para birimleri karşılaştırılamaz: \(lhs.currency) ↔ \(rhs.currency)"
+            Self.currencyMismatchMessage(operation: "compare", lhs: lhs.currency, rhs: rhs.currency)
         )
         return lhs.amount < rhs.amount
     }
 }
 
-// MARK: - Yardımcı fabrikalar
+// MARK: - Convenience factories
 
 extension Money {
-    /// Saatlik birim ücret * dakika ile tutar üretir.
-    /// `unitPricePerHour` bir saatlik ücret. Sonuç: tutar.
+    /// Computes amount = hourly rate × minutes / 60.
+    /// Operation order matters: multiplying first and dividing last
+    /// preserves precision whenever the ratio is integer-clean and
+    /// confines the rounding to a single trailing division otherwise.
+    /// (Reversing the order — dividing the per-hour rate by 60 first —
+    /// would produce a non-terminating Decimal tail like 100 / 60 =
+    /// 1.666… which then propagates into the final minor unit on
+    /// rounding.) The "Decimal non-terminating" caveat in the previous
+    /// comment was historical from earlier Swift versions; the math
+    /// reason — divide last to keep precision — still holds, so the
+    /// shape stays the same.
     static func fromHourlyRate(_ unitPricePerHour: Money, billableMinutes: Int) -> Money {
         let minutesDecimal = Decimal(billableMinutes)
         let sixty: Decimal = 60
-        let perMinute = Money(
-            amount: unitPricePerHour.amount / sixty,
+        return Money(
+            amount: (unitPricePerHour.amount * minutesDecimal) / sixty,
             currency: unitPricePerHour.currency
         )
-        return perMinute * minutesDecimal
+    }
+
+    /// Explicit FX conversion. Use this — never `money * rate` — when the
+    /// intent is to translate the amount into `target`.
+    /// The multiplication operator preserves the source currency by design.
+    func convert(to target: String, rate: Decimal) -> Money {
+        Money(amount: amount * rate, currency: target)
     }
 }

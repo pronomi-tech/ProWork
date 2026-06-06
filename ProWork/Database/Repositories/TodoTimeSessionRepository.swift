@@ -1,9 +1,6 @@
-//
 //  TodoTimeSessionRepository.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 import SQLite3
@@ -29,9 +26,27 @@ final class TodoTimeSessionRepository {
         ProWorkLocalizer.shared.string(key, defaultValue: defaultValue)
     }
 
+    // MARK: - Transaction boundary
+    // Work-session lifecycle flows (start/stop/pause/resume) interleave
+    // read + write steps; if another thread closes the same session
+    // between the two steps, state corruption like "two active sessions"
+    // or accidentally pausing a finished session can occur (code review
+    // K5). The service layer wraps every such call in a `transactionally(_:)`
+    // block; `AppDatabase.inWriteTransaction` blocks the read-then-write
+    // race using both `NSRecursiveLock` and `BEGIN IMMEDIATE`.
+    // engeller.
+
+    func transactionally<T>(_ block: () throws -> T) throws -> T {
+        try database.inWriteTransaction(block)
+    }
+
     // MARK: - Read
 
     func fetchAllListItems() throws -> [WorkSessionListItem] {
+        // SELECT used to include `s.runningSinceAt` and `s.pausedAt`
+        // even though the mapper never consumed them — the column
+        // reads were wasted and the offset constants made the mapper
+        // brittle. Removed.
         let sql = """
         SELECT
             s.id,
@@ -50,8 +65,6 @@ final class TodoTimeSessionRepository {
             ts.marksCancelled,
 
             s.startedAt,
-            s.runningSinceAt,
-            s.pausedAt,
             s.endedAt,
             s.durationSeconds,
             s.isManual,
@@ -86,26 +99,93 @@ final class TodoTimeSessionRepository {
                 statusMarksCancelled: statement.int(at: 11) == 1,
 
                 startedAt: Self.parseDate(statement.text(at: 12)) ?? Date(),
-                endedAt: Self.parseDate(statement.text(at: 15)),
-                durationSeconds: statement.optionalInt(at: 16),
-                isManual: statement.int(at: 17) == 1,
-                note: statement.text(at: 18),
+                endedAt: Self.parseDate(statement.text(at: 13)),
+                durationSeconds: statement.optionalInt(at: 14),
+                isManual: statement.int(at: 15) == 1,
+                note: statement.text(at: 16),
 
-                createdAt: Self.parseDate(statement.text(at: 19)) ?? Date(),
-                updatedAt: Self.parseDate(statement.text(at: 20)) ?? Date()
+                createdAt: Self.parseDate(statement.text(at: 17)) ?? Date(),
+                updatedAt: Self.parseDate(statement.text(at: 18)) ?? Date()
             )
         }
     }
 
-    /// Belirli session id'leri için toplu fetch (raporlama / faturalandırma için).
-    /// `SQLITE_MAX_VARIABLE_NUMBER` limitini aşmamak için 500'lük parçalara bölünür.
+    /// Customer-scoped variant that pushes the filter into SQL
+    /// instead of fetching every org session and filtering by
+    /// customerName in Swift. Joins `todos.customerId` directly so the
+    /// pre-resolved customerIdByName lookup at the caller becomes
+    /// unnecessary; the SQL planner can use `idx_todos_customerId`.
+    func fetchAllListItems(forCustomerId customerId: String) throws -> [WorkSessionListItem] {
+        let sql = """
+        SELECT
+            s.id,
+            s.todoId,
+            t.title AS todoTitle,
+
+            c.name AS customerName,
+            p.name AS projectName,
+
+            t.statusId,
+            ts.name AS statusName,
+            ts.color AS statusColor,
+            ts.startsTimer,
+            ts.stopsTimer,
+            ts.marksCompleted,
+            ts.marksCancelled,
+
+            s.startedAt,
+            s.endedAt,
+            s.durationSeconds,
+            s.isManual,
+            s.note,
+
+            s.createdAt,
+            s.updatedAt
+        FROM todo_time_sessions s
+        INNER JOIN todos t ON t.id = s.todoId AND t.deletedAt IS NULL AND t.customerId = ?
+        INNER JOIN todo_statuses ts ON ts.id = t.statusId
+        LEFT JOIN customers c ON c.id = t.customerId AND c.deletedAt IS NULL
+        LEFT JOIN projects p ON p.id = t.projectId AND p.deletedAt IS NULL
+        WHERE s.deletedAt IS NULL
+        ORDER BY s.startedAt DESC;
+        """
+
+        return try database.query(sql, map: { statement in
+            WorkSessionListItem(
+                id: statement.text(at: 0) ?? UUID().uuidString,
+                todoId: statement.text(at: 1) ?? "",
+                todoTitle: statement.text(at: 2) ?? localized("workSessions.fallback.unknownTodo", defaultValue: "Bilinmeyen iş"),
+                customerName: statement.text(at: 3),
+                projectName: statement.text(at: 4),
+                statusId: statement.text(at: 5) ?? BuiltInTodoStatusId.waiting,
+                statusName: statement.text(at: 6) ?? localized("workSessions.status.waiting", defaultValue: "Beklemede"),
+                statusColor: statement.text(at: 7),
+                statusStartsTimer: statement.int(at: 8) == 1,
+                statusStopsTimer: statement.int(at: 9) == 1,
+                statusMarksCompleted: statement.int(at: 10) == 1,
+                statusMarksCancelled: statement.int(at: 11) == 1,
+                startedAt: Self.parseDate(statement.text(at: 12)) ?? Date(),
+                endedAt: Self.parseDate(statement.text(at: 13)),
+                durationSeconds: statement.optionalInt(at: 14),
+                isManual: statement.int(at: 15) == 1,
+                note: statement.text(at: 16),
+                createdAt: Self.parseDate(statement.text(at: 17)) ?? Date(),
+                updatedAt: Self.parseDate(statement.text(at: 18)) ?? Date()
+            )
+        }, bind: { stmt in
+            stmt.bindText(customerId, at: 1)
+        })
+    }
+
+    /// Bulk fetch for given session ids (reporting / billing).
+    /// Split into 500-item chunks so we stay under `SQLITE_MAX_VARIABLE_NUMBER`.
     func fetch(ids: [String]) throws -> [TodoTimeSession] {
         guard !ids.isEmpty else { return [] }
 
         var results: [TodoTimeSession] = []
         results.reserveCapacity(ids.count)
 
-        let chunkSize = 500
+        let chunkSize = SQLiteParameterLimit.inClauseChunk
         for chunkStart in stride(from: 0, to: ids.count, by: chunkSize) {
             let chunk = Array(ids[chunkStart..<min(chunkStart + chunkSize, ids.count)])
             let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
@@ -115,7 +195,7 @@ final class TodoTimeSessionRepository {
 
             let rows = try database.query(
                 sql,
-                map: { statement in Self.mapSession(statement) },
+                map: { statement in try Self.mapSession(statement) },
                 bind: { statement in
                     for (offset, id) in chunk.enumerated() {
                         statement.bindText(id, at: Int32(offset + 1))
@@ -136,7 +216,7 @@ final class TodoTimeSessionRepository {
 
         return try database.query(
             sql,
-            map: { statement in Self.mapSession(statement) },
+            map: { statement in try Self.mapSession(statement) },
             bind: { statement in statement.bindText(todoId, at: 1) }
         )
     }
@@ -150,7 +230,7 @@ final class TodoTimeSessionRepository {
 
         return try database.query(
             sql,
-            map: { statement in Self.mapSession(statement) },
+            map: { statement in try Self.mapSession(statement) },
             bind: { statement in statement.bindText(todoId, at: 1) }
         ).first
     }
@@ -163,7 +243,7 @@ final class TodoTimeSessionRepository {
         """
 
         return try database.query(sql) { statement in
-            Self.mapSession(statement)
+            try Self.mapSession(statement)
         }.first
     }
 
@@ -186,7 +266,7 @@ final class TodoTimeSessionRepository {
         // Title kolonu en sonda.
         let rows = try database.query(sql) { statement in
             ActiveTodoTimeSession(
-                session: Self.mapSession(statement),
+                session: try Self.mapSession(statement),
                 todoTitle: statement.text(at: 21) ?? localized("workSessions.fallback.unknownSession", defaultValue: "Bilinmeyen çalışma")
             )
         }
@@ -212,7 +292,7 @@ final class TodoTimeSessionRepository {
 
         let rows = try database.query(sql) { statement in
             PausedTodoTimeSession(
-                session: Self.mapSession(statement),
+                session: try Self.mapSession(statement),
                 todoTitle: statement.text(at: 21) ?? localized("workSessions.fallback.pausedSession", defaultValue: "Duraklatılmış çalışma")
             )
         }
@@ -222,12 +302,23 @@ final class TodoTimeSessionRepository {
 
     // MARK: - Write
 
+    /// Outcome of a `startSession` attempt. Returning a typed result
+    /// instead of `Void` lets callers distinguish "session created"
+    /// from "another open session already exists" — the previous silent
+    /// return surfaced as `success` to the UI even though nothing
+    /// changed.
+    enum StartOutcome {
+        case started
+        case alreadyOpen
+    }
+
+    @discardableResult
     func startSession(
         todoId: String,
         startStatusId: String
-    ) throws {
+    ) throws -> StartOutcome {
         if try fetchOpenSession(todoId: todoId) != nil {
-            return
+            return .alreadyOpen
         }
 
         let now = Date()
@@ -244,6 +335,7 @@ final class TodoTimeSessionRepository {
         )
 
         try insert(session)
+        return .started
     }
 
     func insertManualSession(
@@ -313,37 +405,55 @@ final class TodoTimeSessionRepository {
             statement.bindText(Self.formatDate(Date()), at: 8)
             statement.bindText(id, at: 9)
         }
+
+        // The WHERE clause requires `endedAt IS NOT NULL` (only closed
+        // sessions are editable). When the caller targets an open
+        // session the UPDATE matches zero rows and SQLite reports
+        // success — without this guard the UI would think the edit
+        // succeeded. Throwing `precondition*` lets the caller surface
+        // a clearer error.
+        guard database.lastChangedRowCount > 0 else {
+            throw TodoTimeSessionRepositoryError.preconditionUnmet
+        }
     }
 
+    /// Pause is a read-then-write flow: we fetch the currently active
+    /// session, compute its accumulated duration, then UPDATE. Without a
+    /// write transaction another caller could insert/update an open
+    /// session between the read and the update, so the duration we
+    /// compute could lag behind reality. `inWriteTransaction` serialises
+    /// the read-write pair.
     func pauseSession(
         sessionId: String,
         by userId: String = BuiltInUserId.defaultOwner
     ) throws {
-        guard let session = try fetchActiveSession()?.session else {
-            return
-        }
-        guard session.id == sessionId else {
-            return
-        }
+        try database.inWriteTransaction {
+            guard let session = try fetchActiveSession()?.session else {
+                return
+            }
+            guard session.id == sessionId else {
+                return
+            }
 
-        let pausedAt = Date()
-        let accumulated = accumulatedDuration(for: session, until: pausedAt)
+            let pausedAt = Date()
+            let accumulated = accumulatedDuration(for: session, until: pausedAt)
 
-        let sql = """
-        UPDATE todo_time_sessions
-        SET
-            pausedAt = ?, runningSinceAt = NULL, durationSeconds = ?,
-            updatedByUserId = ?, updatedAt = ?,
-            rowVersion = rowVersion + 1, syncStatus = 'local'
-        WHERE id = ? AND endedAt IS NULL AND pausedAt IS NULL AND deletedAt IS NULL;
-        """
+            let sql = """
+            UPDATE todo_time_sessions
+            SET
+                pausedAt = ?, runningSinceAt = NULL, durationSeconds = ?,
+                updatedByUserId = ?, updatedAt = ?,
+                rowVersion = rowVersion + 1, syncStatus = 'local'
+            WHERE id = ? AND endedAt IS NULL AND pausedAt IS NULL AND deletedAt IS NULL;
+            """
 
-        try database.execute(sql) { statement in
-            statement.bindText(Self.formatDate(pausedAt), at: 1)
-            statement.bindInt(accumulated, at: 2)
-            statement.bindText(userId, at: 3)
-            statement.bindText(Self.formatDate(pausedAt), at: 4)
-            statement.bindText(sessionId, at: 5)
+            try database.execute(sql) { statement in
+                statement.bindText(Self.formatDate(pausedAt), at: 1)
+                statement.bindInt(accumulated, at: 2)
+                statement.bindText(userId, at: 3)
+                statement.bindText(Self.formatDate(pausedAt), at: 4)
+                statement.bindText(sessionId, at: 5)
+            }
         }
     }
 
@@ -351,20 +461,25 @@ final class TodoTimeSessionRepository {
         sessionId: String,
         by userId: String = BuiltInUserId.defaultOwner
     ) throws {
-        let resumedAt = Date()
-        let sql = """
-        UPDATE todo_time_sessions
-        SET
-            pausedAt = NULL, runningSinceAt = ?, updatedByUserId = ?, updatedAt = ?,
-            rowVersion = rowVersion + 1, syncStatus = 'local'
-        WHERE id = ? AND endedAt IS NULL AND pausedAt IS NOT NULL AND deletedAt IS NULL;
-        """
+        // Single UPDATE but wrapped for symmetry with pause/stop; the
+        // savepoint cost is negligible and a future variant might need
+        // to read the previous state first.
+        try database.inWriteTransaction {
+            let resumedAt = Date()
+            let sql = """
+            UPDATE todo_time_sessions
+            SET
+                pausedAt = NULL, runningSinceAt = ?, updatedByUserId = ?, updatedAt = ?,
+                rowVersion = rowVersion + 1, syncStatus = 'local'
+            WHERE id = ? AND endedAt IS NULL AND pausedAt IS NOT NULL AND deletedAt IS NULL;
+            """
 
-        try database.execute(sql) { statement in
-            statement.bindText(Self.formatDate(resumedAt), at: 1)
-            statement.bindText(userId, at: 2)
-            statement.bindText(Self.formatDate(resumedAt), at: 3)
-            statement.bindText(sessionId, at: 4)
+            try database.execute(sql) { statement in
+                statement.bindText(Self.formatDate(resumedAt), at: 1)
+                statement.bindText(userId, at: 2)
+                statement.bindText(Self.formatDate(resumedAt), at: 3)
+                statement.bindText(sessionId, at: 4)
+            }
         }
     }
 
@@ -390,7 +505,7 @@ final class TodoTimeSessionRepository {
 
         let sessions = try database.query(
             sql,
-            map: { statement in Self.mapSession(statement) },
+            map: { statement in try Self.mapSession(statement) },
             bind: { statement in statement.bindText(sessionId, at: 1) }
         )
 
@@ -401,7 +516,8 @@ final class TodoTimeSessionRepository {
         try stopSession(session: session, endStatusId: endStatusId)
     }
 
-    func delete(id: String) throws {
+    /// Hard delete — test fixtures only. See CustomerRepository._hardDelete.
+    func _hardDelete(id: String) throws {
         let sql = """
         DELETE FROM todo_time_sessions
         WHERE id = ?;
@@ -412,22 +528,8 @@ final class TodoTimeSessionRepository {
         }
     }
 
-    func softDelete(id: String, by userId: String = BuiltInUserId.defaultOwner) throws {
-        let sql = """
-        UPDATE todo_time_sessions
-        SET
-            deletedAt = ?, updatedAt = ?, updatedByUserId = ?,
-            rowVersion = rowVersion + 1, syncStatus = 'local'
-        WHERE id = ? AND deletedAt IS NULL;
-        """
-
-        try database.execute(sql) { statement in
-            let now = Self.formatDate(Date()) ?? ""
-            statement.bindText(now, at: 1)
-            statement.bindText(now, at: 2)
-            statement.bindText(userId, at: 3)
-            statement.bindText(id, at: 4)
-        }
+    func softDelete(id: String, by userId: String) throws {
+        try database.softDelete(table: "todo_time_sessions", id: id, by: userId)
     }
 
     private func insert(_ session: TodoTimeSession) throws {
@@ -456,30 +558,37 @@ final class TodoTimeSessionRepository {
         }
     }
 
+    /// `stopSession` is read-then-write — duration is computed from the
+    /// passed-in session snapshot, but the underlying row could be
+    /// updated by another caller between the snapshot and the UPDATE.
+    /// Serialise the pair through `inWriteTransaction` so the snapshot
+    /// we close on matches what we read.
     private func stopSession(
         session: TodoTimeSession,
         endStatusId: String,
         by userId: String = BuiltInUserId.defaultOwner
     ) throws {
-        let endedAt = Date()
-        let durationSeconds = accumulatedDuration(for: session, until: endedAt)
+        try database.inWriteTransaction {
+            let endedAt = Date()
+            let durationSeconds = accumulatedDuration(for: session, until: endedAt)
 
-        let sql = """
-        UPDATE todo_time_sessions
-        SET
-            runningSinceAt = NULL, pausedAt = NULL, endedAt = ?, durationSeconds = ?, endStatusId = ?,
-            updatedByUserId = ?, updatedAt = ?,
-            rowVersion = rowVersion + 1, syncStatus = 'local'
-        WHERE id = ?;
-        """
+            let sql = """
+            UPDATE todo_time_sessions
+            SET
+                runningSinceAt = NULL, pausedAt = NULL, endedAt = ?, durationSeconds = ?, endStatusId = ?,
+                updatedByUserId = ?, updatedAt = ?,
+                rowVersion = rowVersion + 1, syncStatus = 'local'
+            WHERE id = ?;
+            """
 
-        try database.execute(sql) { statement in
-            statement.bindText(Self.formatDate(endedAt), at: 1)
-            statement.bindInt(durationSeconds, at: 2)
-            statement.bindText(endStatusId, at: 3)
-            statement.bindText(userId, at: 4)
-            statement.bindText(Self.formatDate(Date()), at: 5)
-            statement.bindText(session.id, at: 6)
+            try database.execute(sql) { statement in
+                statement.bindText(Self.formatDate(endedAt), at: 1)
+                statement.bindInt(durationSeconds, at: 2)
+                statement.bindText(endStatusId, at: 3)
+                statement.bindText(userId, at: 4)
+                statement.bindText(Self.formatDate(Date()), at: 5)
+                statement.bindText(session.id, at: 6)
+            }
         }
     }
 
@@ -495,18 +604,24 @@ final class TodoTimeSessionRepository {
 
 enum TodoTimeSessionRepositoryError: LocalizedError {
     case invalidDateRange
+    case preconditionUnmet
 
     var errorDescription: String? {
         switch self {
         case .invalidDateRange:
             return ProWorkLocalizer.shared.string("workSessions.error.invalidDateRange", defaultValue: "Bitiş zamanı başlangıç zamanından sonra olmalıdır.")
+        case .preconditionUnmet:
+            return ProWorkLocalizer.shared.string(
+                "workSessions.error.preconditionUnmet",
+                defaultValue: "Bu çalışma kaydı düzenlenemiyor — kayıt açık veya silinmiş olabilir."
+            )
         }
     }
 }
 
 private extension TodoTimeSessionRepository {
-    /// İş alanları + metadata kolonlarını birleştiren SELECT.
-    /// Kullanım: `selectAllColumnsSQL + " WHERE ..."`
+    /// SELECT combining business fields + metadata columns.
+    /// Usage: `selectAllColumnsSQL + " WHERE ..."`
     static let selectAllColumnsSQL = """
     SELECT
         id, todoId, startedAt, runningSinceAt, pausedAt, endedAt, durationSeconds,
@@ -515,7 +630,7 @@ private extension TodoTimeSessionRepository {
     FROM todo_time_sessions
     """
 
-    static func mapSession(_ statement: SQLiteStatement) -> TodoTimeSession {
+    static func mapSession(_ statement: SQLiteStatement) throws -> TodoTimeSession {
         TodoTimeSession(
             id: statement.text(at: 0) ?? UUID().uuidString,
             todoId: statement.text(at: 1) ?? "",
@@ -528,21 +643,15 @@ private extension TodoTimeSessionRepository {
             endStatusId: statement.text(at: 8),
             note: statement.text(at: 9),
             isManual: statement.int(at: 10) == 1,
-            meta: statement.readMetadata(startingAt: 11)
+            meta: try statement.readMetadata(startingAt: 11)
         )
     }
 
     static func parseDate(_ value: String?) -> Date? {
-        guard let value, !value.isEmpty else {
-            return nil
-        }
-        return DateFormatter.proWorkSQLite.date(from: value)
+        SQLitePersistedDate.parse(value)
     }
 
     static func formatDate(_ value: Date?) -> String? {
-        guard let value else {
-            return nil
-        }
-        return DateFormatter.proWorkSQLite.string(from: value)
+        SQLitePersistedDate.format(value)
     }
 }

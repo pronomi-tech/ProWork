@@ -1,14 +1,11 @@
-//
 //  BuiltInOrganizationId.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 
-/// Yerleşik organization sabit ID'leri.
-/// Sunucu sync devreye girene kadar tek default org üzerinde çalışılır.
+/// Built-in organization constant IDs.
+/// Until server sync is wired up, the app runs on a single default org.
 enum BuiltInOrganizationId {
     nonisolated static let `default` = "org_default"
 }

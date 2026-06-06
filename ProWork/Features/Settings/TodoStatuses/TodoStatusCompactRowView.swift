@@ -1,9 +1,6 @@
-//
 //  TodoStatusCompactRowView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 

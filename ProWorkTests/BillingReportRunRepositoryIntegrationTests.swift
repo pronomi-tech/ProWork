@@ -1,12 +1,8 @@
-//
 //  BillingReportRunRepositoryIntegrationTests.swift
 //  ProWorkTests
-//
 //  Created by Pronomi.
-//
 //  Faturalandırma çekirdeği: BillingReportRun CRUD'ı + Migration002
 //  ile gelen documentNumber + recalculatePayments() iş kuralı.
-//
 
 import XCTest
 @testable import ProWork
@@ -162,6 +158,58 @@ final class BillingReportRunRepositoryIntegrationTests: XCTestCase {
         XCTAssertEqual(fetched.paymentStatus, .paid)
     }
 
+    // MARK: - K10: overdue & paid-amount source of truth
+
+    /// `dueDate` < bugün ve hiç ödeme yoksa overdue. Önceki kodda
+    /// `date(dueDate) < date('now')` çağrısı `dueDate` formatını
+    /// tanımayınca NULL döndürüp overdue'yu hiç set etmiyordu.
+    func test_K10_recalculatePayments_setsOverdueStatus_whenDueDateInPast_andNoPayment() throws {
+        var run = makeRun(periodStart: "2026-04-01", periodEnd: "2026-04-30", total: 75_00)
+        run.status = .final
+        run.dueDate = "2026-05-01"  // bugün (2026-05-17) öncesinde
+        try repository.insert(run)
+
+        try repository.recalculatePayments(runId: run.id)
+
+        let fetched = try XCTUnwrap(try repository.fetch(id: run.id))
+        XCTAssertEqual(fetched.paidMinor, 0)
+        XCTAssertEqual(fetched.balanceMinor, 75_00)
+        XCTAssertEqual(fetched.paymentStatus, .overdue)
+    }
+
+    /// Vadesi gelmemiş, ödenmemiş kayıt → unpaid (overdue değil).
+    func test_K10_recalculatePayments_setsUnpaid_whenDueDateInFuture() throws {
+        var run = makeRun(periodStart: "2026-09-01", periodEnd: "2026-09-30", total: 50_00)
+        run.status = .final
+        run.dueDate = "2099-01-01"
+        try repository.insert(run)
+
+        try repository.recalculatePayments(runId: run.id)
+
+        let fetched = try XCTUnwrap(try repository.fetch(id: run.id))
+        XCTAssertEqual(fetched.paymentStatus, .unpaid)
+    }
+
+    /// Vadesi geçmiş ama tam ödenmiş kayıt → paid (overdue değil).
+    func test_K10_recalculatePayments_paidWinsOverOverdue() throws {
+        var run = makeRun(periodStart: "2026-04-01", periodEnd: "2026-04-30", total: 40_00)
+        run.status = .final
+        run.dueDate = "2026-05-01"
+        try repository.insert(run)
+
+        try paymentRepository.insert(Payment(
+            runId: run.id,
+            paidAt: Date(),
+            amountMinor: 40_00,
+            currency: "TRY"
+        ))
+
+        try repository.recalculatePayments(runId: run.id)
+
+        let fetched = try XCTUnwrap(try repository.fetch(id: run.id))
+        XCTAssertEqual(fetched.paymentStatus, .paid)
+    }
+
     // MARK: - Soft delete
 
     func test_softDelete_hidesRunFromFetchAll() throws {
@@ -170,7 +218,7 @@ final class BillingReportRunRepositoryIntegrationTests: XCTestCase {
         try repository.insert(kept)
         try repository.insert(deleted)
 
-        try repository.softDelete(id: deleted.id)
+        try repository.softDelete(id: deleted.id, by: BuiltInUserId.defaultOwner)
 
         let remaining = try repository.fetchAll(organizationId: BuiltInOrganizationId.default).map(\.id)
         XCTAssertTrue(remaining.contains(kept.id))

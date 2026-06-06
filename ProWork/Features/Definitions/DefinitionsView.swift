@@ -1,12 +1,9 @@
-//
 //  DefinitionsView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
-//  "Tanımlar" tam ekran sayfası. SettingsView ile aynı kalıbı kullanır:
-//  üstte geri butonlu bar, solda sidebar, sağda seçilen tanım ekranı.
-//
+//  Full-screen "Definitions" page. Same pattern as SettingsView:
+//  a top bar with a back button, a sidebar on the left, the selected
+//  definition's screen on the right.
 
 import SwiftUI
 
@@ -135,17 +132,28 @@ struct DefinitionsView: View {
 
     // MARK: - Detail
 
+    /// Switching the visible child via `switch` would tear
+    /// down and rebuild each child view (and its `@StateObject`-owned
+    /// ViewModel) on every tab change, dropping in-flight loads and
+    /// the user's scroll state. Keep all four children alive in a
+    /// ZStack and toggle visibility via opacity + allowsHitTesting;
+    /// SwiftUI keeps the @StateObject identity stable so each VM only
+    /// loads once per DefinitionsView lifetime.
     @ViewBuilder
     private var selectedContent: some View {
-        switch selectedTab {
-        case .customers:
+        ZStack {
             CustomersView()
-        case .projects:
+                .opacity(selectedTab == .customers ? 1 : 0)
+                .allowsHitTesting(selectedTab == .customers)
             ProjectsView()
-        case .taskCategories:
+                .opacity(selectedTab == .projects ? 1 : 0)
+                .allowsHitTesting(selectedTab == .projects)
             TaskCategoriesView()
-        case .todoStatuses:
+                .opacity(selectedTab == .taskCategories ? 1 : 0)
+                .allowsHitTesting(selectedTab == .taskCategories)
             TodoStatusesView()
+                .opacity(selectedTab == .todoStatuses ? 1 : 0)
+                .allowsHitTesting(selectedTab == .todoStatuses)
         }
     }
 }

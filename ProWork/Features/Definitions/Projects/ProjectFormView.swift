@@ -1,9 +1,6 @@
-//
 //  ProjectFormView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
@@ -47,14 +44,11 @@ struct ProjectFormView: View {
     }
 
     private var minBillingOptions: [SearchPickerOption] {
-        [0, 15, 30, 45, 60, 90, 120].map { minutes in
-            SearchPickerOption(
-                id: String(minutes),
-                title: minutes == 0
-                    ? settingsStore.localized("projects.form.minBilling.inheritCustomer", defaultValue: "Müşteri Ayarı Geçerli")
-                    : String(format: settingsStore.localized("projects.form.minutes", defaultValue: "%d dk"), minutes)
-            )
-        }
+        SearchPickerOption.minimumBillingMinutes(
+            values: [0, 15, 30, 45, 60, 90, 120],
+            zeroTitle: settingsStore.localized("projects.form.minBilling.inheritCustomer", defaultValue: "Müşteri Ayarı Geçerli"),
+            minutesFormat: settingsStore.localized("projects.form.minutes", defaultValue: "%d dk")
+        )
     }
 
     private var billingWindowModeOptions: [SearchPickerOption] {
@@ -81,8 +75,8 @@ struct ProjectFormView: View {
         ProWorkFormShell(
             title: mode.title(using: settingsStore),
             systemImage: "folder",
-            width: 580,
-            height: 710
+            width: FormSheetSize.projectForm.width,
+            height: FormSheetSize.projectForm.height
         ) {
             formFields
         } footer: {
@@ -274,7 +268,7 @@ struct ProjectFormView: View {
     private func loadVatRateOptions() {
         let content = VatRateLabel.pickerContent(
             organizationId: BuiltInOrganizationId.default,
-            settingsStore: settingsStore
+            repository: AppServices.shared.vatRateRepository
         )
         vatRateOptions = content.options
         if !vatRateId.isEmpty, !vatRateOptions.contains(where: { $0.id == vatRateId }) {

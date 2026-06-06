@@ -1,9 +1,6 @@
-//
 //  TaskCategoryRepositoryIntegrationTests.swift
 //  ProWorkTests
-//
 //  Created by Pronomi.
-//
 
 import XCTest
 @testable import ProWork
@@ -74,7 +71,7 @@ final class TaskCategoryRepositoryIntegrationTests: XCTestCase {
         try repository.insert(kept)
         try repository.insert(deleted)
 
-        try repository.softDelete(id: deleted.id)
+        try repository.softDelete(id: deleted.id, by: BuiltInUserId.defaultOwner)
 
         let remaining = try repository.fetchAll()
             .filter { $0.name.hasPrefix("qa-") }
@@ -85,7 +82,7 @@ final class TaskCategoryRepositoryIntegrationTests: XCTestCase {
     func test_hardDelete_removesRowEntirely() throws {
         let category = TaskCategory(name: "Silinecek")
         try repository.insert(category)
-        try repository.delete(id: category.id)
+        try repository._hardDelete(id: category.id)
 
         XCTAssertNil(try repository.fetch(id: category.id))
     }

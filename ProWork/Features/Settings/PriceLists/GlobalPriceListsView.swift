@@ -1,9 +1,6 @@
-//
 //  GlobalPriceListsView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 
@@ -19,14 +16,17 @@ struct GlobalPriceListsView: View {
     @State private var confirmation: ProWorkConfirmation?
     @State private var errorMessage: String?
 
-    private let listRepository = PriceListRepository()
-    private let rowRepository = PriceListRowRepository()
+    // Repositories come from AppServices so each view-struct recreate
+    // doesn't allocate a fresh instance.
+    private let listRepository = AppServices.shared.priceListRepository
+    private let rowRepository = AppServices.shared.priceListRowRepository
 
     var body: some View {
         SettingsScreenScaffold(
             title: settingsStore.localized("priceLists.global.title", defaultValue: "Genel Fiyat Listeleri"),
             subtitle: settingsStore.localized("priceLists.global.subtitle", defaultValue: "Varsayılan fiyat listeleri. Her liste birden fazla satır içerebilir."),
             errorMessage: errorMessage,
+            contentScrollBehavior: .fixed,
             toolbar: {
                 HStack(spacing: 10) {
                     Button {
@@ -52,17 +52,7 @@ struct GlobalPriceListsView: View {
                 }
             }
         ) {
-            if globalLists.isEmpty {
-                SettingsCard {
-                    SettingsEmptyState(
-                        systemImage: "list.bullet.rectangle.portrait",
-                        title: settingsStore.localized("priceLists.empty.title", defaultValue: "Henüz fiyat listesi yok"),
-                        message: settingsStore.localized("priceLists.global.empty.message", defaultValue: "Sağ üstten yeni liste oluşturup içine fiyat satırları ekleyebilirsiniz.")
-                    )
-                }
-            } else {
-                listTable
-            }
+            listTable
         }
         .onAppear { load() }
         .sheet(isPresented: $isShowingNewList) {
@@ -90,14 +80,18 @@ struct GlobalPriceListsView: View {
     }
 
     private var listTable: some View {
-        SettingsTableContainer {
-            tableHeader
-            Divider()
-            ForEach(globalLists) { list in
-                row(list)
-                Divider()
-            }
-        }
+        ProWorkGrid(
+            items: globalLists,
+            header: { tableHeader },
+            emptyContent: {
+                ProWorkGridEmptyState(
+                    systemImage: "list.bullet.rectangle",
+                    title: settingsStore.localized("priceLists.empty.global.title", defaultValue: "Henüz global fiyat listesi yok"),
+                    message: settingsStore.localized("priceLists.empty.global.message", defaultValue: "Sağ üstten yeni global fiyat listesi oluşturabilirsiniz.")
+                )
+            },
+            row: { list in row(list) }
+        )
     }
 
     private var tableHeader: some View {
@@ -105,8 +99,8 @@ struct GlobalPriceListsView: View {
             Text(settingsStore.localized("priceLists.column.name", defaultValue: "Ad")).frame(maxWidth: .infinity, alignment: .leading)
             Text(settingsStore.localized("priceLists.column.currency", defaultValue: "Para Birimi")).frame(width: 110, alignment: .leading)
             Text(settingsStore.localized("priceLists.column.rows", defaultValue: "Satır")).frame(width: 60, alignment: .trailing)
-            Text(settingsStore.localized("priceLists.column.active", defaultValue: "Aktif")).frame(width: 60, alignment: .center)
-            Text("").frame(width: 90)
+            Text(settingsStore.localized("priceLists.column.active", defaultValue: "Aktif")).frame(width: 90, alignment: .leading)
+            Color.gridHeaderSpacer(width: 90)
         }
         .proWorkTextStyle(.caption)
         .foregroundStyle(.secondary)
@@ -141,9 +135,8 @@ struct GlobalPriceListsView: View {
                 .proWorkTextStyle(.callout)
                 .frame(width: 60, alignment: .trailing)
 
-            Image(systemName: list.isActive ? "checkmark.circle.fill" : "xmark.circle")
-                .foregroundStyle(list.isActive ? .green : .secondary)
-                .frame(width: 60, alignment: .center)
+            ProWorkActivityBadge(isActive: list.isActive)
+                .frame(width: 90, alignment: .leading)
 
             HStack(spacing: 6) {
                 Button {
@@ -192,15 +185,20 @@ struct GlobalPriceListsView: View {
 
     // MARK: - Actions
 
+    /// Routed through `PriceListsLoader` so both views
+    /// share one load path (and pick up `fetchAll(priceListIds:)`
+    /// once it changes).
     private func load() {
         do {
-            let all = try listRepository.fetchAll(organizationId: BuiltInOrganizationId.default)
-            lists = all
-            var bucket: [String: [PriceListRow]] = [:]
-            for list in all {
-                bucket[list.id] = (try? rowRepository.fetchAll(priceListId: list.id)) ?? []
-            }
-            rowsByListId = bucket
+            let result = try PriceListsLoader.load(
+                organizationId: BuiltInOrganizationId.default,
+                ownerType: nil,
+                ownerId: nil,
+                listRepository: listRepository,
+                rowRepository: rowRepository
+            )
+            lists = result.lists
+            rowsByListId = result.rowsByListId
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -240,7 +238,7 @@ struct GlobalPriceListsView: View {
 
     private func delete(_ list: PriceList) {
         do {
-            try listRepository.softDelete(id: list.id)
+            try listRepository.softDelete(id: list.id, by: AppServices.currentUserId)
             load()
         } catch {
             errorMessage = error.localizedDescription

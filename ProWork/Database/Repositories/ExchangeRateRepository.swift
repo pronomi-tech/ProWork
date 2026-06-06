@@ -1,9 +1,6 @@
-//
 //  ExchangeRateRepository.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 import SQLite3
@@ -15,8 +12,8 @@ final class ExchangeRateRepository {
         self.database = database
     }
 
-    /// Verilen para birimi çiftine en yakın (≤ targetDate) son kuru döner.
-    /// Önce manuel, sonra TCMB; yoksa nil.
+    /// Returns the latest rate (≤ targetDate) for the given currency pair.
+    /// Tries manual first, then TCMB; nil if neither exists.
     func fetchLatest(
         organizationId: String,
         from: String,
@@ -37,7 +34,7 @@ final class ExchangeRateRepository {
 
         let rows = try database.query(
             sql,
-            map: { Self.makeRate(from: $0) },
+            map: { try Self.makeRate(from: $0) },
             bind: { stmt in
                 stmt.bindText(organizationId, at: 1)
                 stmt.bindText(from.uppercased(), at: 2)
@@ -62,7 +59,7 @@ final class ExchangeRateRepository {
 
         return try database.query(
             sql,
-            map: { Self.makeRate(from: $0) },
+            map: { try Self.makeRate(from: $0) },
             bind: { $0.bindText(organizationId, at: 1) }
         )
     }
@@ -94,16 +91,20 @@ final class ExchangeRateRepository {
             deletedAt = NULL;
         """
 
+        // Normalise the currency codes at the write boundary. `fetchLatest`
+        // already `.uppercased()`s its bind values; persisting a lowercase
+        // pair from a sloppy caller would then make the row unreachable
+        // (silently shadowed by any uppercase row that happened to exist).
         try database.execute(sql) { stmt in
             stmt.bindText(rate.id, at: 1)
             stmt.bindText(rate.organizationId, at: 2)
-            stmt.bindText(rate.fromCurrency, at: 3)
-            stmt.bindText(rate.toCurrency, at: 4)
-            stmt.bindText(NSDecimalNumber(decimal: rate.rate).stringValue, at: 5)
-            stmt.bindText(rate.forexBuying.map { NSDecimalNumber(decimal: $0).stringValue }, at: 6)
-            stmt.bindText(rate.forexSelling.map { NSDecimalNumber(decimal: $0).stringValue }, at: 7)
-            stmt.bindText(rate.banknoteBuying.map { NSDecimalNumber(decimal: $0).stringValue }, at: 8)
-            stmt.bindText(rate.banknoteSelling.map { NSDecimalNumber(decimal: $0).stringValue }, at: 9)
+            stmt.bindText(rate.fromCurrency.uppercased(), at: 3)
+            stmt.bindText(rate.toCurrency.uppercased(), at: 4)
+            stmt.bindText(DecimalPersistence.string(rate.rate), at: 5)
+            stmt.bindText(rate.forexBuying.map { DecimalPersistence.string($0) }, at: 6)
+            stmt.bindText(rate.forexSelling.map { DecimalPersistence.string($0) }, at: 7)
+            stmt.bindText(rate.banknoteBuying.map { DecimalPersistence.string($0) }, at: 8)
+            stmt.bindText(rate.banknoteSelling.map { DecimalPersistence.string($0) }, at: 9)
             stmt.bindText(rate.rateDate, at: 10)
             stmt.bindText(rate.source.rawValue, at: 11)
             stmt.bindText(DateFormatter.proWorkSQLite.string(from: rate.fetchedAt), at: 12)
@@ -118,32 +119,32 @@ final class ExchangeRateRepository {
             stmt.bindText(rate.lastSyncedAt.map(DateFormatter.proWorkSQLite.string(from:)), at: 21)
             stmt.bindText(rate.originDeviceId, at: 22)
         }
+
+        // (CurrencyConverter cache invalidation): broadcast
+        // so any long-lived converter instances flush their per-instance LRU.
+        // Posted only after `execute` returns successfully. When an outer
+        // transaction wraps the call and later rolls back, the notification
+        // would have fired against state that no longer exists; callers
+        // operating inside a transaction must post the notification
+        // themselves after commit (see BillingRunLifecycleService).
+        NotificationCenter.default.post(name: .proWorkExchangeRatesDidChange, object: nil)
     }
 
-    func softDelete(id: String, by userId: String = BuiltInUserId.defaultOwner) throws {
-        let sql = """
-        UPDATE exchange_rates
-        SET deletedAt = ?, updatedAt = ?, updatedByUserId = ?,
-            rowVersion = rowVersion + 1, syncStatus = 'local'
-        WHERE id = ? AND deletedAt IS NULL;
-        """
-
-        try database.execute(sql) { stmt in
-            let now = DateFormatter.proWorkSQLite.string(from: Date())
-            stmt.bindText(now, at: 1)
-            stmt.bindText(now, at: 2)
-            stmt.bindText(userId, at: 3)
-            stmt.bindText(id, at: 4)
-        }
+    func softDelete(id: String, by userId: String) throws {
+        try database.softDelete(table: "exchange_rates", id: id, by: userId)
+        // Same atomicity caveat as `upsert`: the post happens here for
+        // direct callers, but anyone wrapping this in a transaction is
+        // responsible for delaying the notification until after commit.
+        NotificationCenter.default.post(name: .proWorkExchangeRatesDidChange, object: nil)
     }
 
-    private static func makeRate(from statement: SQLiteStatement) -> ExchangeRate {
+    private static func makeRate(from statement: SQLiteStatement) throws -> ExchangeRate {
         let rateString = statement.text(at: 3) ?? "0"
-        let rate = Decimal(string: rateString) ?? 0
-        let forexBuying = statement.text(at: 4).flatMap { Decimal(string: $0) }
-        let forexSelling = statement.text(at: 5).flatMap { Decimal(string: $0) }
-        let banknoteBuying = statement.text(at: 6).flatMap { Decimal(string: $0) }
-        let banknoteSelling = statement.text(at: 7).flatMap { Decimal(string: $0) }
+        let rate = DecimalPersistence.decimal(from: rateString) ?? 0
+        let forexBuying = statement.text(at: 4).flatMap { DecimalPersistence.decimal(from: $0) }
+        let forexSelling = statement.text(at: 5).flatMap { DecimalPersistence.decimal(from: $0) }
+        let banknoteBuying = statement.text(at: 6).flatMap { DecimalPersistence.decimal(from: $0) }
+        let banknoteSelling = statement.text(at: 7).flatMap { DecimalPersistence.decimal(from: $0) }
 
         return ExchangeRate(
             id: statement.text(at: 0) ?? UUID().uuidString,
@@ -158,7 +159,7 @@ final class ExchangeRateRepository {
             source: ExchangeRateSource(rawValue: statement.text(at: 9) ?? "manual") ?? .manual,
             fetchedAt: DateFormatter.proWorkSQLite.date(from: statement.text(at: 10) ?? "") ?? Date(),
             note: statement.text(at: 11),
-            meta: statement.readMetadata(startingAt: 12)
+            meta: try statement.readMetadata(startingAt: 12)
         )
     }
 

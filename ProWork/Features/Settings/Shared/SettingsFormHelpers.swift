@@ -1,17 +1,14 @@
-//
 //  SettingsFormHelpers.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
-//  Settings sheet form'larında ortak label/content hizası.
-//  Footer ve hata banner'ı için generic Shared/Components/ProWorkFormFooter kullanılır.
-//
+//  Shared label/content alignment used by Settings sheet forms.
+//  The footer and error banner come from the generic
+//  Shared/Components/ProWorkFormFooter.
 
 import SwiftUI
 
-/// Sheet form'larında etiket + içerik tek satır.
-/// Label sabit (default 140) genişlik, içerik esnek.
+/// One-line label + content pair used in sheet forms.
+/// Label has a fixed width (default 140); the content is flexible.
 struct SettingsFormRow<Content: View>: View {
     let label: String
     let alignment: VerticalAlignment
@@ -57,8 +54,8 @@ struct SettingsFormRow<Content: View>: View {
     }
 }
 
-// Geriye dönük uyumluluk: eski SettingsFormFooter/SettingsFormError isimleri yeni
-// generic ProWork* tiplerine yönlendirir.
+// Backward compatibility: the old SettingsFormFooter/SettingsFormError
+// names route to the new generic ProWork* types.
 typealias SettingsFormFooter = ProWorkFormFooter
 typealias SettingsFormSingleFooter = ProWorkFormSingleFooter
 typealias SettingsFormError = ProWorkFormError

@@ -1,22 +1,35 @@
-//
 //  MenuBarController.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import AppKit
 import SwiftUI
+import os
 
 @MainActor
 final class MenuBarController: NSObject {
     private let popover = NSPopover()
     private var statusItem: NSStatusItem?
+    /// Feature flag for the right-click context menu (header
+    /// + main-window + quit). Gated off by default because there's no
+    /// UI to flip it on and the popover already exposes every action;
+    /// retained so a future tier can either ship the right-click flow
+    /// or delete the helpers (`makeHeaderItem`, `makeActionItem`,
+    /// `showContextMenu`) without a separate cleanup pass.
     private let isContextMenuEnabled = false
 
-    private weak var settingsStore: AppSettingsStore?
-    private weak var automationController: WorkAutomationController?
-    private weak var toastStore: ProWorkToastStore?
+    // Previously held as weak references, which was
+    // safe in steady state (the App scope keeps strong refs) but left a
+    // brittle window where a queued event handler could see nil during
+    // teardown. These stores live for the entire app lifecycle, so strong
+    // references match their actual ownership semantics.
+    private var settingsStore: AppSettingsStore?
+    private var automationController: WorkAutomationController?
+    private var toastStore: ProWorkToastStore?
+    /// Required so the popover's active-session duration
+    /// ticks while open. Without this the elapsed time was frozen at
+    /// the snapshot value when the popover appeared.
+    private var clockTicker: ProWorkClockTicker?
     private var openMainWindowAction: (() -> Void)?
 
     private func localized(_ key: String, defaultValue: String) -> String {
@@ -33,11 +46,13 @@ final class MenuBarController: NSObject {
         settingsStore: AppSettingsStore,
         automationController: WorkAutomationController,
         toastStore: ProWorkToastStore,
+        clockTicker: ProWorkClockTicker,
         openMainWindow: @escaping () -> Void
     ) {
         self.settingsStore = settingsStore
         self.automationController = automationController
         self.toastStore = toastStore
+        self.clockTicker = clockTicker
         openMainWindowAction = openMainWindow
         rebuildPopoverContentIfPossible()
     }
@@ -71,19 +86,58 @@ final class MenuBarController: NSObject {
 
     private func removeStatusItem() {
         guard let statusItem else { return }
+        // Target/action retain the controller via NSStatusBar.
+        // NSStatusBar.removeStatusItem releases the item, but explicitly
+        // dropping the action wiring first avoids the rare case where the
+        // bar process delivers a queued click after our removal call.
+        statusItem.button?.target = nil
+        statusItem.button?.action = nil
         NSStatusBar.system.removeStatusItem(statusItem)
         self.statusItem = nil
     }
 
+    /// Each call to this method previously replaced
+    /// `popover.contentViewController` with a fresh `NSHostingController`,
+    /// throwing away any `@State` the SwiftUI tree had built up between
+    /// openings. Build the host once on first call and only update the
+    /// environment objects via `rootView` reassignment for subsequent calls
+    /// — SwiftUI's diffing keeps the existing state intact.
     private func rebuildPopoverContentIfPossible() {
-        guard let settingsStore, let automationController, let toastStore else { return }
+        guard let settingsStore, let automationController, let toastStore, let clockTicker else {
+            // Log the early return so an unconfigured menu bar
+            // controller hitting `updateVisibility(isEnabled: true)`
+            // before `configure(_:_:_:_:)` no longer fails silently —
+            // the bar appears but clicking it would have shown an
+            // empty popover.
+            let hasSettings = self.settingsStore != nil
+            let hasAutomation = self.automationController != nil
+            let hasToasts = self.toastStore != nil
+            ProWorkLog.app.warning(
+                "MenuBarController.rebuildPopoverContentIfPossible: dependencies not configured yet (settingsStore=\(hasSettings, privacy: .public), automation=\(hasAutomation, privacy: .public), toasts=\(hasToasts, privacy: .public)); popover will stay empty until configure() is called."
+            )
+            return
+        }
 
-        popover.contentViewController = NSHostingController(
-            rootView: MenuBarQuickTimerView()
-                .environmentObject(settingsStore)
-                .environmentObject(automationController)
-                .environmentObject(toastStore)
-        )
+        let openMainWindow: () -> Void = { [weak self] in
+            self?.popover.performClose(nil)
+            self?.openMainWindowAction?()
+        }
+
+        let rootView = MenuBarQuickTimerView(onOpenMainWindow: openMainWindow)
+            .environmentObject(settingsStore)
+            .environmentObject(automationController)
+            .environmentObject(toastStore)
+            // Ticks the active-session duration while the
+            // popover is open.
+            .environmentObject(clockTicker)
+
+        if let existing = popover.contentViewController as? NSHostingController<AnyView> {
+            // SwiftUI compares the new view tree against the old and keeps
+            // @State / @StateObject identity stable across this reassignment.
+            existing.rootView = AnyView(rootView)
+        } else {
+            popover.contentViewController = NSHostingController(rootView: AnyView(rootView))
+        }
     }
 
     @objc
@@ -102,18 +156,10 @@ final class MenuBarController: NSObject {
     }
 
     private func handleLeftClick(from button: NSStatusBarButton) {
-        // Single click anında popover aç/kapat (Apple HIG'e uygun).
-        // Daha önce 180 ms `asyncAfter` ile geciktiriliyordu (çift tıklama
-        // tespiti için); kullanıcı her açılışta belirgin bir gecikme
-        // hissediyordu. Şimdi çift tıklama clickCount==2 ile gelen ikinci
-        // event'te yakalanıyor; ilk tıklama popover'ı zaten açmış olur,
-        // ikinci tıklama onu kapatıp ana pencereyi açar.
-        if NSApp.currentEvent?.clickCount == 2 {
-            popover.performClose(nil)
-            openMainWindowFromMenu()
-            return
-        }
-
+        // Apple HIG: a single click on the status item toggles the popover.
+        // The double-click flow (clickCount==2 conflicted with
+        // popover.behavior=.transient) was removed; the "Open main window"
+        // action is now a button inside the popover.
         togglePopover(from: button)
     }
 
@@ -196,36 +242,67 @@ final class MenuBarController: NSObject {
         NSApp.activate(ignoringOtherApps: true)
         openMainWindowAction?()
 
+        // `openMainWindowAction` calls SwiftUI's `openWindow(id:)`
+        // which schedules the window creation asynchronously — when this
+        // method runs synchronously the window is not yet in
+        // `NSApp.windows`. The `DispatchQueue.main.async` hop lets the
+        // window appear before we look it up. Without this, the lookup
+        // races and the menu-bar click sometimes leaves the app
+        // activated with no key window.
+        //
+        // Filter by SwiftUI scene identifier instead of the
+        // localised title. Window titles change with the active
+        // locale, so the previous `$0.title == "ProWork"` check missed
+        // the window the moment the user switched UI language.
         DispatchQueue.main.async {
-            if let window = NSApp.windows.first(where: {
-                $0.title == "ProWork" && $0.className != "NSStatusBarWindow"
+            let mainWindowIdentifier = ProWorkSceneID.mainWindow
+            if let window = NSApp.windows.first(where: { window in
+                window.className != "NSStatusBarWindow"
+                && (window.identifier?.rawValue.hasPrefix(mainWindowIdentifier) ?? false)
+            }) {
+                window.makeKeyAndOrderFront(nil)
+                return
+            }
+            // SwiftUI 14/15 occasionally renames its window identifiers
+            // (e.g. an appended `-AppWindow-1` suffix). Fall back to
+            // the first non-status, non-popover window so we still
+            // surface *something* rather than failing silently.
+            if let window = NSApp.windows.first(where: { window in
+                window.className != "NSStatusBarWindow"
+                && window.className != "NSPanel"
+                && window.canBecomeKey
             }) {
                 window.makeKeyAndOrderFront(nil)
             }
         }
     }
 
+    // Previously each accessor reached through the
+    // optional controller multiple times with separate `?.` chains. Bind
+    // once at the top of the computed property so the read is consistent
+    // and a future migration to a non-optional reference becomes a
+    // one-line change.
     private var menuHeaderTitle: String {
-        if automationController?.activeSession != nil {
+        guard let controller = automationController else { return "ProWork" }
+        if controller.activeSession != nil {
             return localized("menuBar.header.active", defaultValue: "Aktif Çalışma")
         }
-
-        if automationController?.pausedSession != nil {
+        if controller.pausedSession != nil {
             return localized("menuBar.header.paused", defaultValue: "Duraklatılmış Çalışma")
         }
-
         return "ProWork"
     }
 
     private var menuHeaderSubtitle: String {
-        if let active = automationController?.activeSession {
+        guard let controller = automationController else {
+            return localized("menuBar.subtitle.default", defaultValue: "Ana ekranı açabilirsiniz.")
+        }
+        if let active = controller.activeSession {
             return active.todoTitle
         }
-
-        if let paused = automationController?.pausedSession {
+        if let paused = controller.pausedSession {
             return paused.todoTitle
         }
-
         return localized("menuBar.subtitle.default", defaultValue: "Ana ekranı açabilirsiniz.")
     }
 

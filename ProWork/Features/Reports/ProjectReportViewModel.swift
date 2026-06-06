@@ -1,14 +1,10 @@
-//
 //  ProjectReportViewModel.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
-//  ProjectReportView domain state + hesaplama orkestrasyonu.
-//  BillingComputationService'i AppServices üzerinden enjekte etmek hâlâ
-//  uygulanmadığı için doğrudan instantiate ediyoruz; servisin kendisi
-//  AppServices.shared repository'lerini default'larla zaten çekiyor.
-//
+//  ProjectReportView domain state + computation orchestration.
+//  Injecting BillingComputationService through AppServices is still not
+//  implemented, so we instantiate it directly; the service itself already
+//  pulls AppServices.shared repositories with defaults.
 
 import Combine
 import Foundation
@@ -22,6 +18,11 @@ final class ProjectReportViewModel: ObservableObject {
 
     private let customerRepository: CustomerRepository
     private let computation: BillingComputationService
+
+    /// Debounced so we don't run a separate `computePeriod` for every event
+    /// during filter/period dragging.
+    private var pendingComputeTask: Task<Void, Never>?
+    private let debounceInterval: UInt64 = 300_000_000
 
     init(
         services: AppServices = .shared,
@@ -40,6 +41,27 @@ final class ProjectReportViewModel: ObservableObject {
     }
 
     func compute(
+        period: DateRangeFilter,
+        customStart: Date,
+        customEnd: Date,
+        customerFilter: String,
+        noProjectLabel: String
+    ) {
+        pendingComputeTask?.cancel()
+        pendingComputeTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: self?.debounceInterval ?? 300_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.performCompute(
+                period: period,
+                customStart: customStart,
+                customEnd: customEnd,
+                customerFilter: customerFilter,
+                noProjectLabel: noProjectLabel
+            )
+        }
+    }
+
+    private func performCompute(
         period: DateRangeFilter,
         customStart: Date,
         customEnd: Date,

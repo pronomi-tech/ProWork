@@ -1,10 +1,7 @@
-//
 //  BillableMinuteAllocatorTests.swift
 //  ProWorkTests
-//
 //  Süre ağırlığına göre dakika dağıtımı — toplamı korumalı,
 //  largest-remainder kararlı olmalı.
-//
 
 import XCTest
 @testable import ProWork

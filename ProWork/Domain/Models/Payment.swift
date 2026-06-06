@@ -1,18 +1,17 @@
-//
 //  Payment.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 
+// Raw value is persisted as TEXT in the DB; written
+// explicitly so a case rename can't break the contract.
 enum PaymentMethod: String, CaseIterable, Identifiable, Hashable {
     case bankTransfer = "bank_transfer"
-    case cash
-    case card
-    case check
-    case other
+    case cash = "cash"
+    case card = "card"
+    case check = "check"
+    case other = "other"
 
     var id: String { rawValue }
 
@@ -37,7 +36,7 @@ enum PaymentMethod: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
-/// Bir `BillingReportRun` için tahsilat kaydı. Parçalı tahsilat için birden fazla olabilir.
+/// Payment record for a `BillingReportRun`. There can be multiple for partial payments.
 struct Payment: Identifiable, Hashable {
     let id: String
     var runId: String
@@ -77,7 +76,7 @@ struct Payment: Identifiable, Hashable {
         rowVersion: Int = 0,
         syncStatus: SyncStatus = .local,
         lastSyncedAt: Date? = nil,
-        originDeviceId: String? = nil
+        originDeviceId: String? = DeviceIdentity.current
     ) {
         self.id = id
         self.runId = runId

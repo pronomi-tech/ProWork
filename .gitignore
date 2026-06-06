@@ -33,3 +33,10 @@ secrets/
 # Archives / exports
 *.xcarchive
 ExportOptions.plist
+
+# Claude Code workspace — keep per-developer transient state out of git
+# but allow the shared settings / agent definitions to be tracked.
+.claude/*
+!.claude/settings.json
+!.claude/agents/
+!.claude/commands/

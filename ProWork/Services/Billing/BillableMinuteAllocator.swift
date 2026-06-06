@@ -1,15 +1,12 @@
-//
 //  BillableMinuteAllocator.swift
 //  ProWork
-//
 //  Created by Pronomi
-//
 
 import Foundation
 
 enum BillableMinuteAllocator {
-    /// Toplam ücretlendirilecek dakikayı süre ağırlığına göre dağıtır.
-    /// Dağıtım toplamı korur ve stable largest-remainder kullanır.
+    /// Distributes the total billable minutes by duration weight.
+    /// The distribution preserves the total and uses stable largest-remainder.
     static func allocate(
         durationSeconds: [Int],
         totalBillableMinutes: Int
@@ -31,6 +28,14 @@ enum BillableMinuteAllocator {
         var remainders: [(index: Int, remainder: Int)] = []
         var allocatedMinutes = 0
 
+        // `seconds * totalBillableMinutes` teorik olarak
+        // Can overflow `Int.max`, but practical upper bounds make that
+        // impossible: a segment is at most 24h (86_400 s) and the total
+        // billable minutes in an accounting period is at most
+        // 31 days = 44_640 minutes → product ≈ 3.86e9, far below
+        // Int64's ~9.22e18 limit. So we don't add an explicit overflow
+        // guard, but if the daily duration cap ever changes this needs
+        // to be revisited.
         for (index, seconds) in normalizedSeconds.enumerated() {
             let weightedSeconds = seconds * totalBillableMinutes
             let minutes = weightedSeconds / totalSeconds

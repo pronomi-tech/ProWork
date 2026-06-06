@@ -1,13 +1,10 @@
-//
 //  PriceListQuoteBundle.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 
-/// Bir fiyat listesi teklif PDF'inin render edilebilmesi için gereken tüm değerler.
+/// All values required to render a price-list quote PDF.
 struct PriceListQuoteBundle: Hashable {
     var quoteNumber: String
     var issueDate: Date
@@ -25,7 +22,7 @@ struct PriceListQuoteBundle: Hashable {
 }
 
 extension PriceListQuoteBundle {
-    /// Tek bir teklif kalemi (PDF tablosunda bir satır).
+    /// A single quote line item (one row in the PDF table).
     struct Line: Hashable, Identifiable {
         var id: String { rowId }
         var rowId: String
@@ -35,7 +32,7 @@ extension PriceListQuoteBundle {
         var unitPrice: Money
     }
 
-    /// Aynı `ServiceType` altındaki satırların grubu.
+    /// A group of rows under the same `ServiceType`.
     struct Section: Hashable, Identifiable {
         var id: String { title }
         var title: String
@@ -43,7 +40,7 @@ extension PriceListQuoteBundle {
         var lines: [Line]
     }
 
-    /// Tüm satırların aynı para biriminde olduğu varsayılır; ilk satırın para birimini döner.
+    /// Assumes every line uses the same currency; returns the first line's currency.
     var currency: String {
         sections.first?.lines.first?.unitPrice.currency ?? priceList.currency
     }

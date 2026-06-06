@@ -1,19 +1,14 @@
-//
 //  TurkishIslamicHolidayGeneratorTests.swift
 //  ProWorkTests
-//
 //  Created by Pronomi.
-//
 //  Generator'ın algoritmik çıktısını (override yokken) ve override
 //  mekanizmasının davranışını doğrular.
-//
 //  Apple/ICU'da Türkiye Diyanet'in resmi takvimi için özel bir identifier
 //  yok; `islamicCivil` Diyanet'e en yakın varyant ama her yıl birebir
 //  eşleşmiyor. Bu yüzden testler tek bir yılda (2025) sıkı eşleşme bekler;
 //  diğer yıllar için yalnızca yapısal beklentileri doğrularız (gün sayısı,
 //  arefe konumu, sıralılık). Mismatch durumlarında üretimde override
 //  satırı eklenir.
-//
 
 import XCTest
 @testable import ProWork
@@ -86,12 +81,10 @@ final class TurkishIslamicHolidayGeneratorTests: XCTestCase {
         // unit test: override mekanizmasının kendisini test etmek için
         // production override listesini değil, generator'ın "shift" mantığını
         // 2025 baseline'ı üzerinde simüle ediyoruz.
-        //
         // Burada generator'ın iç override field'ına test sırasında erişim
         // yok; dolayısıyla yapısal beklentiyi şöyle doğruluyoruz: 2025
         // tarihleri zaten bilinen (Diyanet ile birebir eşleşen) çıktı veriyor
         // ve override eklenince **tüm bayram** + arefe birlikte kayıyor.
-        //
         // İlk bayramın 1. günü ile arefesi arasındaki gün farkının her zaman
         // **tam 1** olması, override kayması sonrası da bu özelliğin
         // korunacağının yapısal garantisidir.
@@ -112,12 +105,23 @@ final class TurkishIslamicHolidayGeneratorTests: XCTestCase {
     }
 
     func test_holidayCount_perYear_isAlways_9() {
-        // Her yıl tam olarak 1 + 3 (Ramazan) + 1 + 4 (Kurban) = 9 satır
-        // gelmeli — yıl içinde hicri yıl sınırı geçişi yapısal olarak ele
-        // alınmış demektir.
+        // Hicri yıl ~11 gün geriye kaydığı için bir miladi yıl
+        // içinde aynı bayram **iki kez** geçebilir; generator artık iki
+        // oluşumu da yayar (önceden ikincisini sessizce kaybediyordu).
+        // Normal yıllarda 1 Ramazan (1 arefe + 3 bayram = 4) + 1 Kurban
+        // (1 arefe + 4 bayram = 5) = **9** satır.
+        // 2033: erken-Ocak + geç-Aralık Ramazan çift düşüyor →
+        //   4 (Ocak Ramazan) + 4 (Aralık Ramazan) + 5 (Kurban) = **13**.
+        // 2039: erken-Ocak + geç-Aralık Kurban çift düşüyor →
+        //   4 (Ramazan) + 5 (Ocak Kurban) + 5 (Aralık Kurban) = **14**.
+        let expectedCounts: [Int: Int] = [
+            2033: 13,
+            2039: 14
+        ]
         for year in 2024...2040 {
             let count = TurkishIslamicHolidayGenerator.holidays(forGregorianYear: year).count
-            XCTAssertEqual(count, 9, "\(year): tatil sayısı yanlış")
+            let expected = expectedCounts[year] ?? 9
+            XCTAssertEqual(count, expected, "\(year): tatil sayısı yanlış")
         }
     }
 }

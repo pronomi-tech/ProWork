@@ -1,19 +1,18 @@
-//
 //  TimeType.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 
-/// Zaman tipi: ücretlendirme için çalışma süresinin hangi mesai dilimine düştüğünü belirtir.
-/// Spec §2 ve §5'e göre bir oturum birden fazla zaman tipine bölünebilir.
+/// Time type: indicates which working-hours bracket the work duration falls into for billing.
+/// Per spec §2 and §5, a session can be split across multiple time types.
+// Raw value is persisted as TEXT in the DB; written
+// explicitly to guard against renames.
 enum TimeType: String, CaseIterable, Identifiable, Hashable {
-    case regular     // mesai içi
-    case afterHours  // mesai dışı
-    case weekend     // hafta sonu
-    case holiday     // resmi tatil
+    case regular = "regular"        // regular hours
+    case afterHours = "afterHours"  // after hours
+    case weekend = "weekend"        // weekend
+    case holiday = "holiday"        // public holiday
 
     var id: String { rawValue }
 
@@ -35,9 +34,9 @@ enum TimeType: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
-    /// Fiyat çözümlemesinde fallback önceliği:
-    /// Tatil → Hafta sonu → Mesai dışı → Mesai içi.
-    /// Üstte tanımlanan tipler özelden genele doğru aranır; bulunmazsa bir alt tipe düşer.
+    /// Fallback priority during price resolution:
+    /// Holiday → Weekend → After-hours → Regular.
+    /// Types are searched from specific to general; if no match, falls back to the next lower type.
     var fallbackOrder: [TimeType] {
         switch self {
         case .holiday:

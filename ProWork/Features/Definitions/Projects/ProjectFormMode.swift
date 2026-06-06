@@ -1,9 +1,6 @@
-//
 //  ProjectFormMode.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 

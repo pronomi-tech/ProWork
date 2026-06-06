@@ -1,9 +1,6 @@
-//
 //  ProjectRepository.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 import SQLite3
@@ -17,7 +14,7 @@ final class ProjectRepository {
 
     // MARK: - Read
 
-    /// UI listeleme için müşteri adıyla join edilmiş projeler.
+    /// Projects joined with their customer name for UI listings.
     func fetchAll() throws -> [ProjectListItem] {
         let sql = """
         SELECT
@@ -59,15 +56,15 @@ final class ProjectRepository {
         }
     }
 
-    /// Birden çok id için toplu fetch (raporlama / faturalandırma için).
-    /// `SQLITE_MAX_VARIABLE_NUMBER` limitini aşmamak için 500'lük parçalara bölünür.
+    /// Bulk fetch for multiple ids (reporting / billing).
+    /// Split into 500-item chunks so we stay under `SQLITE_MAX_VARIABLE_NUMBER`.
     func fetch(ids: [String]) throws -> [Project] {
         guard !ids.isEmpty else { return [] }
 
         var results: [Project] = []
         results.reserveCapacity(ids.count)
 
-        let chunkSize = 500
+        let chunkSize = SQLiteParameterLimit.inClauseChunk
         for chunkStart in stride(from: 0, to: ids.count, by: chunkSize) {
             let chunk = Array(ids[chunkStart..<min(chunkStart + chunkSize, ids.count)])
             let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
@@ -83,7 +80,7 @@ final class ProjectRepository {
 
             let rows = try database.query(
                 sql,
-                map: { ProjectRepository.makeProject(from: $0) },
+                map: { try ProjectRepository.makeProject(from: $0) },
                 bind: { statement in
                     for (offset, id) in chunk.enumerated() {
                         statement.bindText(id, at: Int32(offset + 1))
@@ -96,7 +93,7 @@ final class ProjectRepository {
         return results
     }
 
-    /// Düzenleme için tek proje (tüm metadata ile).
+    /// Single project for editing (with full metadata).
     func fetch(id: String) throws -> Project? {
         let sql = """
         SELECT
@@ -111,7 +108,7 @@ final class ProjectRepository {
 
         return try database.query(
             sql,
-            map: { statement in ProjectRepository.makeProject(from: statement) },
+            map: { statement in try ProjectRepository.makeProject(from: statement) },
             bind: { statement in statement.bindText(id, at: 1) }
         ).first
     }
@@ -174,7 +171,8 @@ final class ProjectRepository {
         }
     }
 
-    func delete(id: String) throws {
+    /// Hard delete — test fixtures only. See CustomerRepository._hardDelete.
+    func _hardDelete(id: String) throws {
         let sql = """
         DELETE FROM projects
         WHERE id = ?;
@@ -185,27 +183,13 @@ final class ProjectRepository {
         }
     }
 
-    func softDelete(id: String, by userId: String = BuiltInUserId.defaultOwner) throws {
-        let sql = """
-        UPDATE projects
-        SET
-            deletedAt = ?, updatedAt = ?, updatedByUserId = ?,
-            rowVersion = rowVersion + 1, syncStatus = 'local'
-        WHERE id = ? AND deletedAt IS NULL;
-        """
-
-        try database.execute(sql) { statement in
-            let now = DateFormatter.proWorkSQLite.string(from: Date())
-            statement.bindText(now, at: 1)
-            statement.bindText(now, at: 2)
-            statement.bindText(userId, at: 3)
-            statement.bindText(id, at: 4)
-        }
+    func softDelete(id: String, by userId: String) throws {
+        try database.softDelete(table: "projects", id: id, by: userId)
     }
 
     // MARK: - Mapping
 
-    private static func makeProject(from statement: SQLiteStatement) -> Project {
+    private static func makeProject(from statement: SQLiteStatement) throws -> Project {
         Project(
             id: statement.text(at: 0) ?? UUID().uuidString,
             customerId: statement.text(at: 1) ?? "",
@@ -217,7 +201,7 @@ final class ProjectRepository {
             billingWindowMode: BillingWindowMode(rawValue: statement.text(at: 7) ?? ""),
             vatRateId: statement.text(at: 8),
             notes: statement.text(at: 9),
-            meta: statement.readMetadata(startingAt: 10)
+            meta: try statement.readMetadata(startingAt: 10)
         )
     }
 }

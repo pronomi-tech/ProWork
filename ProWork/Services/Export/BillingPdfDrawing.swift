@@ -1,55 +1,56 @@
-//
 //  BillingPdfDrawing.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
-//  BillingPdfDocument'in CGContext üzerine çizim yapan katmanı: header / başlık /
-//  bilgi kartları / satır blokları / ödeme blokları / footer / renk / font
-//  yardımcıları. Tüm pagination kararları zaten alınmış olarak gelir.
-//
+//  The CGContext drawing layer of BillingPdfDocument: header / title /
+//  info cards / line blocks / payment blocks / footer / colour / font
+//  helpers. All pagination decisions have already been made by the caller.
 
 import AppKit
 import Foundation
 
-@MainActor
 extension BillingPdfDocument {
     func draw(page: RenderPage, pageIndex: Int, totalPages: Int) {
-        var cursorY = drawHeader(at: marginTop)
+        // PriceListQuotePdfRenderer already wraps each
+        // page in an autoreleasepool to bound NSImage / CoreText
+        // allocations; multi-page BillingPdf exports leaked the same
+        // transient objects until the entire render finished. Wrap a
+        // matching pool here so peak memory stays bounded by one page.
+        autoreleasepool {
+            var cursorY = drawHeader(at: marginTop)
 
-        if pageIndex == 0 {
-            cursorY = drawTitle(at: cursorY)
-            cursorY = drawInfoCards(at: cursorY)
+            if pageIndex == 0 {
+                cursorY = drawTitle(at: cursorY)
+                cursorY = drawInfoCards(at: cursorY)
 
-            if settings.showFinancialSummary {
-                cursorY = drawSummary(at: cursorY)
+                if settings.showFinancialSummary {
+                    cursorY = drawSummary(at: cursorY)
+                }
+            } else {
+                cursorY += 8
             }
-        } else {
-            cursorY += 8
-        }
 
-        if page.showsLineSection || page.showsEmptyLines {
-            cursorY = drawLinesSection(page: page, startY: cursorY)
-        }
-
-        if page.showsPaymentsSection || page.showsEmptyPayments {
             if page.showsLineSection || page.showsEmptyLines {
-                cursorY += sectionGap
+                cursorY = drawLinesSection(page: page, startY: cursorY)
             }
-            _ = drawPaymentsSection(page: page, startY: cursorY)
-        }
 
-        drawFooter(pageIndex: pageIndex, totalPages: totalPages)
+            if page.showsPaymentsSection || page.showsEmptyPayments {
+                if page.showsLineSection || page.showsEmptyLines {
+                    cursorY += sectionGap
+                }
+                _ = drawPaymentsSection(page: page, startY: cursorY)
+            }
+
+            drawFooter(pageIndex: pageIndex, totalPages: totalPages)
+        }
     }
 
     private func drawHeader(at y: CGFloat) -> CGFloat {
         let logoFrame = CGRect(x: marginLeft, y: y, width: 220, height: 52)
-        let showsLogo = settings.showLogo &&
-            bundle.companyProfile?.logoData != nil
+        // Y6: logoImage is an NSImage downsampled once in init; we no
+        // longer decode it again via NSImage(data:) on every page.
+        let showsLogo = logoImage != nil
 
-        if settings.showLogo,
-           let data = bundle.companyProfile?.logoData,
-           let image = NSImage(data: data) {
+        if let image = logoImage {
             image.draw(in: fitRect(sourceSize: image.size, inside: logoFrame))
         } else {
             _ = drawText(
@@ -651,15 +652,8 @@ extension BillingPdfDocument {
     }
 
     private func drawRoundedRect(_ rect: CGRect, fill: NSColor, stroke: NSColor, radius: CGFloat) {
-        let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
-        fill.setFill()
-        path.fill()
-
-        if stroke != .clear {
-            stroke.setStroke()
-            path.lineWidth = 1
-            path.stroke()
-        }
+        // Shared with PriceListQuotePdfRenderer.
+        PDFDrawingPrimitives.drawRoundedRect(rect, fill: fill, stroke: stroke, radius: radius)
     }
 
     private func drawHorizontalSeparator(y: CGFloat) {
@@ -688,62 +682,87 @@ extension BillingPdfDocument {
         color: NSColor,
         alignment: NSTextAlignment = .left
     ) -> CGFloat {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = alignment
-        paragraph.lineBreakMode = .byWordWrapping
-
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: color,
-            .paragraphStyle: paragraph
-        ]
-
-        let attributed = NSAttributedString(string: text, attributes: attributes)
-        let measured = attributed.boundingRect(
-            with: NSSize(width: rect.width, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading]
-        )
-        let drawRect = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: ceil(measured.height))
-        attributed.draw(with: drawRect, options: [.usesLineFragmentOrigin, .usesFontLeading])
-        return ceil(measured.height)
+        // Shared with PriceListQuotePdfRenderer.
+        PDFDrawingPrimitives.drawText(text, at: rect, font: font, color: color, alignment: alignment)
     }
 
     func measureText(_ text: String, width: CGFloat, font: NSFont) -> CGSize {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineBreakMode = .byWordWrapping
-
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .paragraphStyle: paragraph
-        ]
-
-        let rect = NSAttributedString(string: text, attributes: attributes).boundingRect(
-            with: NSSize(width: width, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading]
-        )
-        return CGSize(width: ceil(rect.width), height: ceil(rect.height))
+        // Y5: pagination and drawing ask for the same measurement on the
+        // same row repeatedly. We memoize on (text, ceil(width),
+        // fontDescriptor) to avoid the allocation. The document instance
+        // is short-lived (one render); the cache stays very shallow.
+        return measureTextCached(text, width: width, font: font)
     }
 
-    // MARK: - Tablo sütunları
+    private func measureTextCached(_ text: String, width: CGFloat, font: NSFont) -> CGSize {
+        let key = MeasureCacheKey(
+            text: text,
+            width: ceil(width),
+            fontName: font.fontName,
+            fontSize: font.pointSize,
+            bold: font.fontDescriptor.symbolicTraits.contains(.bold)
+        )
+        if let cached = lookupMeasureCache(key) {
+            return cached
+        }
+        let computed = computeTextSize(text, width: width, font: font)
+        storeMeasureCache(key, computed)
+        return computed
+    }
+
+    private func computeTextSize(_ text: String, width: CGFloat, font: NSFont) -> CGSize {
+        // Shared with PriceListQuotePdfRenderer.
+        PDFDrawingPrimitives.measureText(text, width: width, font: font)
+    }
+
+    // MARK: - Table columns
+    // `lineColumns()` and `paymentColumns()` were being recomputed for
+    // every row — fixed metrics + localized header generation each time.
+    // Since they don't change during the document's lifetime we memoize
+    // them on the first call.
+
+    /// Column widths share the same numeric constants. Previously
+    /// the description-column arithmetic subtracted `50` while the
+    /// duration column was declared at `46`, drifting the row layout by
+    /// 4pt and silently overflowing on long quote titles. Single source
+    /// per column eliminates the drift.
+    private enum LineColumnWidth {
+        static let no: CGFloat = 20
+        static let duration: CGFloat = 46
+        static let unitPrice: CGFloat = 74
+        static let amount: CGFloat = 74
+    }
 
     func lineColumns() -> [TableColumn] {
-        [
-            .init(id: "no", title: localized("pdf.column.no", defaultValue: "No"), width: 20),
-            .init(id: "description", title: localized("pdf.column.serviceDescription", defaultValue: "Hizmet / İş Tanımı"), width: contentWidth - 20 - 50 - 74 - 74 - (lineGap * 4)),
-            .init(id: "duration", title: localized("workSessions.column.duration", defaultValue: "Süre"), width: 46, alignment: .right),
-            .init(id: "unitPrice", title: localized("pdf.column.unitPrice", defaultValue: "Birim Fiyat"), width: 74, alignment: .right),
-            .init(id: "amount", title: localized("reports.table.amount", defaultValue: "Tutar"), width: 74, alignment: .right)
+        if let cached = cachedLineColumns { return cached }
+        let descriptionWidth = contentWidth
+            - LineColumnWidth.no
+            - LineColumnWidth.duration
+            - LineColumnWidth.unitPrice
+            - LineColumnWidth.amount
+            - (lineGap * 4)
+        let columns: [TableColumn] = [
+            .init(id: "no", title: localized("pdf.column.no", defaultValue: "No"), width: LineColumnWidth.no),
+            .init(id: "description", title: localized("pdf.column.serviceDescription", defaultValue: "Hizmet / İş Tanımı"), width: descriptionWidth),
+            .init(id: "duration", title: localized("workSessions.column.duration", defaultValue: "Süre"), width: LineColumnWidth.duration, alignment: .right),
+            .init(id: "unitPrice", title: localized("pdf.column.unitPrice", defaultValue: "Birim Fiyat"), width: LineColumnWidth.unitPrice, alignment: .right),
+            .init(id: "amount", title: localized("reports.table.amount", defaultValue: "Tutar"), width: LineColumnWidth.amount, alignment: .right)
         ]
+        cachedLineColumns = columns
+        return columns
     }
 
     func paymentColumns() -> [TableColumn] {
-        [
+        if let cached = cachedPaymentColumns { return cached }
+        let columns: [TableColumn] = [
             .init(id: "no", title: localized("pdf.column.no", defaultValue: "No"), width: 24),
             .init(id: "date", title: localized("exchangeRates.column.date", defaultValue: "Tarih"), width: 118),
             .init(id: "method", title: localized("payment.column.method", defaultValue: "Yöntem"), width: 88),
             .init(id: "reference", title: localized("todoForm.description", defaultValue: "Açıklama"), width: contentWidth - 24 - 118 - 88 - 84 - (lineGap * 4)),
             .init(id: "amount", title: localized("reports.table.amount", defaultValue: "Tutar"), width: 84, alignment: .right)
         ]
+        cachedPaymentColumns = columns
+        return columns
     }
 
     func columnFrames(for columns: [TableColumn], in rect: CGRect) -> [ColumnFrame] {
@@ -798,14 +817,8 @@ extension BillingPdfDocument {
     }
 
     private func nsColor(from hex: String) -> NSColor? {
-        let cleaned = hex.replacingOccurrences(of: "#", with: "")
-        guard cleaned.count == 6, let value = UInt64(cleaned, radix: 16) else { return nil }
-        return NSColor(
-            calibratedRed: CGFloat((value & 0xFF0000) >> 16) / 255,
-            green: CGFloat((value & 0x00FF00) >> 8) / 255,
-            blue: CGFloat(value & 0x0000FF) / 255,
-            alpha: 1
-        )
+        // Shared with PriceListQuotePdfRenderer.
+        PDFDrawingPrimitives.nsColor(fromHex: hex)
     }
 
     func font(_ size: CGFloat, weight: NSFont.Weight = .regular) -> NSFont {

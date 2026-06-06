@@ -1,9 +1,6 @@
-//
-//  Untitled.swift
+//  ProWorkConfirmation.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import SwiftUI
 

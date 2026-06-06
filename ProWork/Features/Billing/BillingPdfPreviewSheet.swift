@@ -1,9 +1,6 @@
-//
 //  BillingPdfPreviewSheet.swift
 //  ProWork
-//
 //   Created by Pronomi.
-//
 
 import PDFKit
 import SwiftUI

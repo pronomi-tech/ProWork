@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "defaultMode": "auto",
+    "allow": [
+      "Bash(git *)",
+      "Bash(xcodebuild *)",
+      "Bash(npm *)"
+    ]
+  }
+}

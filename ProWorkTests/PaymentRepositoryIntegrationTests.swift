@@ -1,9 +1,6 @@
-//
 //  PaymentRepositoryIntegrationTests.swift
 //  ProWorkTests
-//
 //  Created by Pronomi.
-//
 
 import XCTest
 @testable import ProWork
@@ -144,7 +141,7 @@ final class PaymentRepositoryIntegrationTests: XCTestCase {
         try paymentRepository.insert(kept)
         try paymentRepository.insert(deleted)
 
-        try paymentRepository.softDelete(id: deleted.id)
+        try paymentRepository.softDelete(id: deleted.id, by: BuiltInUserId.defaultOwner)
 
         let remaining = try paymentRepository.fetchAll(runId: run.id).map(\.id)
         XCTAssertEqual(remaining, [kept.id])
@@ -157,7 +154,7 @@ final class PaymentRepositoryIntegrationTests: XCTestCase {
         let deleted = Payment(runId: run.id, amountMinor: 600_00, currency: "TRY")
         try paymentRepository.insert(deleted)
 
-        try paymentRepository.softDelete(id: deleted.id)
+        try paymentRepository.softDelete(id: deleted.id, by: BuiltInUserId.defaultOwner)
         try runRepository.recalculatePayments(runId: run.id)
 
         let refreshed = try XCTUnwrap(try runRepository.fetch(id: run.id))

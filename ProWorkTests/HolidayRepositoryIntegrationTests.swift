@@ -1,9 +1,6 @@
-//
 //  HolidayRepositoryIntegrationTests.swift
 //  ProWorkTests
-//
 //  Created by Pronomi.
-//
 
 import XCTest
 @testable import ProWork
@@ -146,7 +143,7 @@ final class HolidayRepositoryIntegrationTests: XCTestCase {
         let holiday = Holiday(scope: .global, dateString: "2099-07-07", name: "qa-Soft")
         try repository.insert(holiday)
 
-        try repository.softDelete(id: holiday.id)
+        try repository.softDelete(id: holiday.id, by: BuiltInUserId.defaultOwner)
 
         let remaining = try repository.fetchAll(organizationId: BuiltInOrganizationId.default, includingInactive: true)
         XCTAssertFalse(remaining.contains { $0.name == "qa-Soft" })

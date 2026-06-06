@@ -1,17 +1,14 @@
-//
 //  BillingWindowMode.swift
 //  ProWork
-//
 //  Created by Pronomi
-//
 
 import Foundation
 
-/// Minimum ücretlendirme penceresinin nasıl işletileceğini belirler.
+/// Controls how the minimum billing window is applied.
 enum BillingWindowMode: String, CaseIterable, Identifiable, Codable, Hashable {
-    /// Aynı müşteri ve aynı pencere genişliğindeki kayıtlar ortak timeline pencerelerini paylaşır.
+    /// Records for the same customer that share a window width share common timeline windows.
     case timeline
-    /// Her çalışma kaydı kendi minimum ücretlendirme penceresini ayrı açar.
+    /// Each work record opens its own minimum billing window independently.
     case session
 
     var id: String { rawValue }

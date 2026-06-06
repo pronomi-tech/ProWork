@@ -1,12 +1,20 @@
-//
 //  ExchangeRate.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 
+/// Two parallel enums are kept on purpose despite the overlap.
+/// `ExchangeRateSource` is the full domain enum (includes `.manual`,
+/// used by the rate repository and UI badges); `ExchangeRateAutoSource`
+/// is the strictly-auto-capable subset (`.tcmb` / `.global`) exposed in
+/// settings so the user cannot pick `.manual` as an auto provider.
+/// Collapsing them into a single enum with `isAutoCapable` would
+/// re-introduce the picker bug (a user could select `.manual` as an
+/// auto source) and break the type-safe split that
+/// `CurrencyConverter.sourcePriority` relies on. The cost is a
+/// rawValue collision between `.tcmb` / `.global` across both enums —
+/// audit the conversion helpers below when adding a new case.
 enum ExchangeRateSource: String, CaseIterable, Identifiable, Hashable {
     case tcmb
     case global
@@ -73,12 +81,12 @@ enum ExchangeRateAutoSource: String, CaseIterable, Identifiable, Hashable, Codab
     }
 }
 
-/// Bir tarih için iki para birimi arası kur. TCMB'den otomatik veya manuel girilebilir.
+/// Exchange rate between two currencies for a date. Auto-fetched from TCMB or entered manually.
 struct ExchangeRate: Identifiable, Hashable {
     let id: String
     var fromCurrency: String
     var toCurrency: String
-    /// "1 fromCurrency = rate toCurrency" anlamında.
+    /// Interpreted as "1 fromCurrency = rate toCurrency".
     var rate: Decimal
     var forexBuying: Decimal?
     var forexSelling: Decimal?
@@ -123,7 +131,7 @@ struct ExchangeRate: Identifiable, Hashable {
         rowVersion: Int = 0,
         syncStatus: SyncStatus = .local,
         lastSyncedAt: Date? = nil,
-        originDeviceId: String? = nil
+        originDeviceId: String? = DeviceIdentity.current
     ) {
         self.id = id
         self.fromCurrency = fromCurrency.uppercased()

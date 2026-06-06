@@ -1,23 +1,21 @@
-//
 //  BillingReportLine.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
+import os
 
-/// Bir `BillingReportRun`'un tek satırı. Finalize sonrası snapshot —
-/// kaynak kayıtlar (todo, customer, kategori) silinse bile satır sabit kalır.
+/// A single line of a `BillingReportRun`. Snapshotted at finalize time —
+/// the line stays fixed even if the source records (todo, customer, category) are deleted.
 struct BillingReportLine: Identifiable, Hashable {
     let id: String
     var runId: String
 
-    // Bağlantılar (silinmeleri sorun değil)
+    // References (deletions are tolerated)
     var sessionId: String?
     var todoId: String
 
-    // Snapshot kolonları (finalize anında kopyalanır)
+    // Snapshot columns (copied at finalize time)
     var todoTitle: String
     var projectId: String?
     var projectName: String?
@@ -26,7 +24,7 @@ struct BillingReportLine: Identifiable, Hashable {
     var categoryId: String?
     var categoryName: String?
 
-    // Hesap detayları
+    // Calculation details
     var serviceType: ServiceType
     var timeType: TimeType
     var segmentIndex: Int
@@ -36,14 +34,14 @@ struct BillingReportLine: Identifiable, Hashable {
     var fixedFeeMinor: Int?
     var amountMinor: Int
     var currency: String
-    /// "0.20" gibi Decimal string.
+    /// Decimal string such as "0.20".
     var vatRate: Decimal
     var vatMinor: Int
     var totalMinor: Int
-    /// KDV muafiyeti uygulandı mı (snapshot). PDF/raporda "Muaf" göstergesi için.
+    /// Whether VAT exemption was applied (snapshot). Used to render the "Exempt" badge in PDF/reports.
     var isVatExempt: Bool
 
-    // Bayraklar
+    // Flags
     var isBillable: Bool
     var isManual: Bool
     var isFixedFee: Bool
@@ -105,7 +103,7 @@ struct BillingReportLine: Identifiable, Hashable {
         rowVersion: Int = 0,
         syncStatus: SyncStatus = .local,
         lastSyncedAt: Date? = nil,
-        originDeviceId: String? = nil
+        originDeviceId: String? = DeviceIdentity.current
     ) {
         self.id = id
         self.runId = runId
@@ -124,7 +122,8 @@ struct BillingReportLine: Identifiable, Hashable {
         self.actualSeconds = actualSeconds
         self.billableMinutes = billableMinutes
         self.unitPriceMinor = unitPriceMinor
-        self.fixedFeeMinor = fixedFeeMinor
+        // self.fixedFeeMinor / self.isFixedFee assigned below after
+        // XOR normalisation.
         self.amountMinor = amountMinor
         self.currency = currency.uppercased()
         self.vatRate = vatRate
@@ -133,7 +132,32 @@ struct BillingReportLine: Identifiable, Hashable {
         self.isVatExempt = isVatExempt
         self.isBillable = isBillable
         self.isManual = isManual
-        self.isFixedFee = isFixedFee
+
+        // Enforce the XOR invariant between `isFixedFee` and
+        // `fixedFeeMinor`. The sibling model `TodoBillingOverride`
+        // normalises at init; the same discipline applies here so a
+        // mis-built line cannot render "Fixed Amount: 0,00 ₺" downstream.
+        //   - isFixedFee = true but fixedFeeMinor = nil → drop the
+        //     flag (best-effort recovery; line falls back to the
+        //     normal amountMinor path).
+        //   - isFixedFee = false but fixedFeeMinor != nil → drop the
+        //     fee (caller forgot the flag; the unit-priced amount is
+        //     the authoritative source).
+        var normalizedIsFixedFee = isFixedFee
+        var normalizedFixedFee = fixedFeeMinor
+        if isFixedFee && fixedFeeMinor == nil {
+            ProWorkLog.billing.error(
+                "BillingReportLine init: isFixedFee=true but fixedFeeMinor=nil for line id=\(id, privacy: .public); dropping flag."
+            )
+            normalizedIsFixedFee = false
+        } else if !isFixedFee && fixedFeeMinor != nil {
+            ProWorkLog.billing.error(
+                "BillingReportLine init: fixedFeeMinor=\(fixedFeeMinor ?? 0, privacy: .public) but isFixedFee=false for line id=\(id, privacy: .public); dropping fixedFeeMinor."
+            )
+            normalizedFixedFee = nil
+        }
+        self.fixedFeeMinor = normalizedFixedFee
+        self.isFixedFee = normalizedIsFixedFee
         self.startedAt = startedAt
         self.endedAt = endedAt
         self.note = note

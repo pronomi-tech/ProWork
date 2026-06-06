@@ -1,17 +1,12 @@
-//
 //  BillingPdfFormatters.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
-//  BillingPdfDocument'in tarih / para / başlık / özet metin yardımcıları.
-//  Saf veri dönüşümleri; CGContext / NSColor / NSFont kullanılmıyor.
-//
+//  Date / money / title / summary text helpers for BillingPdfDocument.
+//  Pure data conversions; no CGContext / NSColor / NSFont used.
 
 import AppKit
 import Foundation
 
-@MainActor
 extension BillingPdfDocument {
     // MARK: - Tarih
 
@@ -42,8 +37,15 @@ extension BillingPdfDocument {
 
     // MARK: - Para
 
+    /// Single-line amounts were being written with `ProWorkFormatters.money`
+    /// (with a minus sign) and grouped amounts with
+    /// `ProWorkFormatters.moneyAccounting` (parentheses).
+    /// The different rendering of negatives was inconsistent for the
+    /// reader — inside the PDF, both now route through the same
+    /// `moneyAccounting` style (formal accounting). The single-line
+    /// CSV/Excel flow uses its own formatter and is unaffected.
     func displayMoney(_ money: Money) -> String {
-        ProWorkFormatters.money(money)
+        ProWorkFormatters.moneyAccounting(money)
     }
 
     func groupedMoneyText(from monies: [Money]) -> String {
@@ -64,7 +66,7 @@ extension BillingPdfDocument {
         }
     }
 
-    // MARK: - Satır metni
+    // MARK: - Line text
 
     func lineMetaText(for line: BillingReportLine) -> String {
         if line.isFixedFee {
@@ -89,25 +91,49 @@ extension BillingPdfDocument {
         return value
     }
 
-    // MARK: - Belge başlığı
+    // MARK: - Document title
 
+    /// Fallback used to be hardcoded "ProWork" so whitelabel
+    /// builds shipped the upstream brand name on every PDF whenever
+    /// the company profile was unset. Pull the fallback through the
+    /// localiser; default stays "ProWork" so existing TR installations
+    /// see no change. Custom deployments override
+    /// `export.companyDisplayName.fallback` once and every renderer
+    /// follows.
     var companyDisplayName: String {
         clean(bundle.companyProfile?.tradeName) ??
         clean(bundle.companyProfile?.legalName) ??
-        "ProWork"
+        ProWorkLocalizer.shared.string(
+            "export.companyDisplayName.fallback",
+            defaultValue: "ProWork"
+        )
     }
 
     var documentNumber: String {
-        // Finalize edilmiş çalışmalar için kalıcı, yıl bazlı sayaçtan tüketilmiş
-        // belge numarasını gösteriyoruz (örn. "HD-2026-000123").
-        // Draft önizlemelerinde henüz numara atanmadığı için id'nin 12 hex
-        // prefix'inden çakışmaya dayanıklı bir geçici numara üretiyoruz; bu
-        // sadece PDF üstünde görüntülenir, DB'ye yazılmaz.
+        // For finalized runs we show the durable, year-based counter-consumed
+        // document number (e.g. "HD-2026-000123").
         if let number = bundle.run.documentNumber, !number.isEmpty {
             return number
         }
+        // Draft prefix used to be a hardcoded "HD-" string at
+        // this site (and again in BillingRunLifecycleService.consume…).
+        // Pull it through the localiser so multi-tenant / i18n
+        // installations can override the visible identifier without
+        // touching the formatter; default "HD-" preserves the existing
+        // appearance on every TR installation. Both the formatter draft
+        // path and finalize numbering MUST stay in sync — if one site
+        // changes the prefix, the other has to follow (see
+        // BillingRunLifecycleService.consumeNextBillingDocumentNumber).
         let year = bundle.run.periodStart.prefix(4)
-        return "HD-\(year)-\(bundle.run.id.replacingOccurrences(of: "-", with: "").prefix(12).uppercased())"
+        let prefix = ProWorkLocalizer.shared.string(
+            "export.documentNumber.prefix",
+            defaultValue: "HD"
+        )
+        let draftLabel = ProWorkLocalizer.shared.string(
+            "export.documentNumber.draft",
+            defaultValue: "TASLAK"
+        )
+        return "\(prefix)-\(year)-\(draftLabel)"
     }
 
     var periodLabel: String {
@@ -133,20 +159,31 @@ extension BillingPdfDocument {
         return codes.joined(separator: "\n")
     }
 
-    // MARK: - KDV / Özet
+    // MARK: - VAT / Summary
 
-    /// Tüm satırlar muafsa muafiyet etiketi gösterilir.
+    /// If every line is exempt, the exemption label is shown.
     var allLinesExempt: Bool {
         !bundle.lines.isEmpty && bundle.lines.allSatisfy { $0.isVatExempt }
     }
 
+    /// Percentage formatting goes through `NumberFormatter.percent`
+    /// in the active locale instead of hand-rolling "%20". Some locales
+    /// (fr_FR, sv_SE, …) expect a space before the percent sign, others
+    /// place the sign on the left ("20%" vs "%20"); the formatter
+    /// reproduces the conventional shape automatically. The fallback
+    /// localised template still ships with the TR "KDV (%%%@)" shape
+    /// so existing strings catalogs need no change.
     var vatLabel: String {
         if allLinesExempt {
             return localized("pdf.summary.vatExempt", defaultValue: "KDV (Muaf)")
         }
         if let firstRate = bundle.lines.first?.vatRate, firstRate > 0 {
-            let percentage = NSDecimalNumber(decimal: firstRate * 100).stringValue
-            return String(format: localized("pdf.summary.vatRate", defaultValue: "KDV (%%%@)"), percentage)
+            let formatter = NumberFormatter()
+            formatter.numberStyle = .percent
+            formatter.maximumFractionDigits = 2
+            let percentage = formatter.string(from: NSDecimalNumber(decimal: firstRate))
+                ?? "\(NSDecimalNumber(decimal: firstRate * 100).stringValue)%"
+            return String(format: localized("pdf.summary.vatRate", defaultValue: "KDV (%@)"), percentage)
         }
         return localized("reports.summary.vat", defaultValue: "KDV")
     }
@@ -193,36 +230,16 @@ extension BillingPdfDocument {
     }
 
     var hasOutstandingBalance: Bool {
-        var balances: [String: Int] = [:]
-
-        for line in bundle.lines {
-            balances[line.currency, default: 0] += line.totalMinor
-        }
-
-        for payment in bundle.payments {
-            balances[payment.currency, default: 0] -= payment.amountMinor
-        }
-
-        return balances.values.contains { $0 > 0 }
+        balancesByCurrency().values.contains { $0 > 0 }
     }
 
     var currentBalanceMonies: [Money] {
-        var balances: [String: Int] = [:]
-
-        for line in bundle.lines {
-            balances[line.currency, default: 0] += line.totalMinor
-        }
-
-        for payment in bundle.payments {
-            balances[payment.currency, default: 0] -= payment.amountMinor
-        }
-
-        return balances
+        balancesByCurrency()
             .filter { $0.value != 0 }
             .map { Money(minorUnits: $0.value, currency: $0.key) }
     }
 
-    // MARK: - Para birimi grupları
+    // MARK: - Currency groups
 
     var groupedLineSections: [CurrencyIndexedSection] {
         makeCurrencySections(from: bundle.lines.map(\.currency))

@@ -109,6 +109,14 @@ open ProWork.xcodeproj
 
 Open the `ProWork` scheme in Xcode and run it on macOS. Billing-related XCTest files are included under [`ProWorkTests`](ProWorkTests).
 
+#### Deployment target
+
+`MACOSX_DEPLOYMENT_TARGET` is set to **26.4** in `ProWork.xcodeproj`. macOS 26 (Tahoe) is currently the highest published target Apple ships; the project intentionally tracks the latest SDK so we can adopt new SwiftUI APIs without a coordinated bump. Older macOS releases are not supported. If your local Xcode is too old to compile against this target, install the matching Xcode from Apple Developer rather than lowering the target — the higher value is a code-review-tracked invariant (L8).
+
+#### Localization
+
+Strings live in `ProWork/{en,tr}.lproj/Localizable.strings` and are validated at build time by `Scripts/validate-localizations.swift` (key parity + printf-style format-specifier alignment). The build setting `LOCALIZATION_PREFERS_STRING_CATALOGS = YES` is on, which means new strings added through Xcode's GUI will land in `.xcstrings` catalogs rather than the legacy `.strings` files. A wholesale `.strings` → `.xcstrings` migration is intentionally deferred (L9) — converting 1 100+ keys carries non-trivial diff risk and the validator already covers the parity case the catalog format would automate. Add new keys in either format as long as the validator continues to pass.
+
 ### Project Status
 
 ProWork is under active development. The current codebase already includes the core workflow for **task management, time tracking, reporting, billing preparation, pricing, exchange rates, PDF exports, and operational settings**.

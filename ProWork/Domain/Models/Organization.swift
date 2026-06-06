@@ -1,14 +1,11 @@
-//
 //  Organization.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Foundation
 
-/// Multi-tenant organization. Tüm müşteri/proje/fiyat listesi/şirket profili
-/// bir organization'a bağlıdır. Bir kullanıcı birden fazla organization üyesi olabilir.
+/// Multi-tenant organization. Every customer/project/price list/company profile
+/// belongs to an organization. A user can be a member of multiple organizations.
 struct Organization: Identifiable, Hashable {
     let id: String
     var name: String
@@ -42,7 +39,7 @@ struct Organization: Identifiable, Hashable {
         rowVersion: Int = 0,
         syncStatus: SyncStatus = .local,
         lastSyncedAt: Date? = nil,
-        originDeviceId: String? = nil
+        originDeviceId: String? = DeviceIdentity.current
     ) {
         self.id = id
         self.name = name

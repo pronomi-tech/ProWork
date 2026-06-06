@@ -1,32 +1,32 @@
-
-//
 //  TaskCategoryFormMode.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
+//  Type-alias over the generic `FormMode<Entity>`. Existing call sites can
+//  keep using `TaskCategoryFormMode` while new code can reach for the
+//  generic directly.
 
 import Foundation
 
-enum TaskCategoryFormMode {
-    case create
-    case edit(TaskCategory)
+typealias TaskCategoryFormMode = FormMode<TaskCategory>
 
+extension FormMode where Entity == TaskCategory {
     func title(using settingsStore: AppSettingsStore) -> String {
-        switch self {
-        case .create:
-            return settingsStore.localized("taskCategories.form.mode.createTitle", defaultValue: "Yeni Görev Kategorisi")
-        case .edit:
-            return settingsStore.localized("taskCategories.form.mode.editTitle", defaultValue: "Görev Kategorisi Düzenle")
-        }
+        title(
+            using: settingsStore,
+            createKey: "taskCategories.form.mode.createTitle",
+            createDefault: "Yeni Görev Kategorisi",
+            editKey: "taskCategories.form.mode.editTitle",
+            editDefault: "Görev Kategorisi Düzenle"
+        )
     }
 
     func saveButtonTitle(using settingsStore: AppSettingsStore) -> String {
-        switch self {
-        case .create:
-            return settingsStore.localized("taskCategories.form.action.save", defaultValue: "Kaydet")
-        case .edit:
-            return settingsStore.localized("taskCategories.form.action.update", defaultValue: "Güncelle")
-        }
+        saveButtonTitle(
+            using: settingsStore,
+            createKey: "taskCategories.form.action.save",
+            createDefault: "Kaydet",
+            editKey: "taskCategories.form.action.update",
+            editDefault: "Güncelle"
+        )
     }
 }

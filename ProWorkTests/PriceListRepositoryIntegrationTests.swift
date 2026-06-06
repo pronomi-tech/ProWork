@@ -1,9 +1,6 @@
-//
 //  PriceListRepositoryIntegrationTests.swift
 //  ProWorkTests
-//
 //  Created by Pronomi.
-//
 
 import XCTest
 @testable import ProWork
@@ -134,7 +131,7 @@ final class PriceListRepositoryIntegrationTests: XCTestCase {
         try repository.insert(keep)
         try repository.insert(drop)
 
-        try repository.softDelete(id: drop.id)
+        try repository.softDelete(id: drop.id, by: BuiltInUserId.defaultOwner)
 
         let owned = try repository.fetchOwned(
             organizationId: BuiltInOrganizationId.default,

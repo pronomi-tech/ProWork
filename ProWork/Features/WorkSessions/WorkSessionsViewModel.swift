@@ -1,9 +1,6 @@
-//
 //  WorkSessionsViewModel.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
 
 import Combine
 import Foundation
@@ -104,7 +101,7 @@ final class WorkSessionsViewModel: ObservableObject {
 
     func deleteSession(id: String) {
         do {
-            try sessionRepository.delete(id: id)
+            try sessionRepository.softDelete(id: id, by: AppServices.currentUserId)
             loadData()
             errorMessage = nil
         } catch {
@@ -114,8 +111,8 @@ final class WorkSessionsViewModel: ObservableObject {
 
     // MARK: - Start/stop work
 
-    /// Aktif (paused olmayan) ve farklı bir todo üzerinde çalışan session varsa döner.
-    /// View bunu confirmation dialog tetiklemek için kullanır.
+    /// Returns the session if one is active (not paused) and is running on a different todo.
+    /// The view uses this to trigger a confirmation dialog.
     func activeSessionConflicting(with todoId: String) -> ActiveTodoTimeSession? {
         do {
             if let active = try sessionRepository.fetchActiveSession(),
@@ -128,22 +125,27 @@ final class WorkSessionsViewModel: ObservableObject {
         return nil
     }
 
+    /// Wrap stop + start in a single write transaction (mirrors
+    /// `TodosViewModel.startWork`). Partial-fail otherwise loses the
+    /// transition: prior session closed, new session never opened.
     func startWork(
         todoId: String,
         targetStatusId: String,
         stoppingActiveSessionId: String?
     ) {
         do {
-            if let stoppingActiveSessionId {
-                try sessionRepository.stopSession(
-                    sessionId: stoppingActiveSessionId,
-                    endStatusId: targetStatusId
+            try sessionRepository.transactionally {
+                if let stoppingActiveSessionId {
+                    try sessionRepository.stopSession(
+                        sessionId: stoppingActiveSessionId,
+                        endStatusId: targetStatusId
+                    )
+                }
+                try sessionRepository.startSession(
+                    todoId: todoId,
+                    startStatusId: targetStatusId
                 )
             }
-            try sessionRepository.startSession(
-                todoId: todoId,
-                startStatusId: targetStatusId
-            )
             loadData()
             errorMessage = nil
         } catch {

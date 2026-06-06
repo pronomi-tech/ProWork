@@ -1,12 +1,8 @@
-//
 //  ProjectReportView.swift
 //  ProWork
-//
 //  Created by Pronomi.
-//
-//  Spec §12 — Tüm projelerin dönem bazlı kırılımı.
-//  Opsiyonel müşteri filtresi ile sınırlandırılabilir.
-//
+//  Spec §12 — Period-based breakdown of every project.
+//  Can be narrowed with an optional customer filter.
 
 import SwiftUI
 
@@ -16,7 +12,7 @@ struct ProjectReportView: View {
 
     @State private var customerFilter: String = ""
     @State private var period: DateRangeFilter = .thisMonth
-    @State private var customStart: Date = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: Date())) ?? Date()
+    @State private var customStart: Date = AppCalendar.istanbul.date(from: AppCalendar.istanbul.dateComponents([.year, .month], from: Date())) ?? Date()
     @State private var customEnd: Date = Date()
 
     var body: some View {
