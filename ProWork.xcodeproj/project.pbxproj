@@ -397,7 +397,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.10516;
+				MARKETING_VERSION = 0.3.260913;
 				PRODUCT_BUNDLE_IDENTIFIER = com.pronomi.ProWork;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -432,7 +432,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.10516;
+				MARKETING_VERSION = 0.3.260913;
 				PRODUCT_BUNDLE_IDENTIFIER = com.pronomi.ProWork;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
