@@ -69,6 +69,8 @@ final class TodoTimeSessionRepository {
             s.durationSeconds,
             s.isManual,
             s.note,
+            s.billingTimeTypeOverride,
+            s.billingTimeTypeOverrideReason,
 
             s.createdAt,
             s.updatedAt
@@ -103,9 +105,11 @@ final class TodoTimeSessionRepository {
                 durationSeconds: statement.optionalInt(at: 14),
                 isManual: statement.int(at: 15) == 1,
                 note: statement.text(at: 16),
+                billingTimeTypeOverride: statement.text(at: 17).flatMap(TimeType.init(rawValue:)),
+                billingTimeTypeOverrideReason: statement.text(at: 18),
 
-                createdAt: Self.parseDate(statement.text(at: 17)) ?? Date(),
-                updatedAt: Self.parseDate(statement.text(at: 18)) ?? Date()
+                createdAt: Self.parseDate(statement.text(at: 19)) ?? Date(),
+                updatedAt: Self.parseDate(statement.text(at: 20)) ?? Date()
             )
         }
     }
@@ -138,6 +142,8 @@ final class TodoTimeSessionRepository {
             s.durationSeconds,
             s.isManual,
             s.note,
+            s.billingTimeTypeOverride,
+            s.billingTimeTypeOverrideReason,
 
             s.createdAt,
             s.updatedAt
@@ -169,8 +175,10 @@ final class TodoTimeSessionRepository {
                 durationSeconds: statement.optionalInt(at: 14),
                 isManual: statement.int(at: 15) == 1,
                 note: statement.text(at: 16),
-                createdAt: Self.parseDate(statement.text(at: 17)) ?? Date(),
-                updatedAt: Self.parseDate(statement.text(at: 18)) ?? Date()
+                billingTimeTypeOverride: statement.text(at: 17).flatMap(TimeType.init(rawValue:)),
+                billingTimeTypeOverrideReason: statement.text(at: 18),
+                createdAt: Self.parseDate(statement.text(at: 19)) ?? Date(),
+                updatedAt: Self.parseDate(statement.text(at: 20)) ?? Date()
             )
         }, bind: { stmt in
             stmt.bindText(customerId, at: 1)
@@ -252,6 +260,7 @@ final class TodoTimeSessionRepository {
         SELECT
             s.id, s.todoId, s.startedAt, s.runningSinceAt, s.pausedAt, s.endedAt, s.durationSeconds,
             s.startStatusId, s.endStatusId, s.note, s.isManual,
+            s.billingTimeTypeOverride, s.billingTimeTypeOverrideReason,
             s.organizationId, s.createdByUserId, s.updatedByUserId,
             s.createdAt, s.updatedAt, s.deletedAt, s.rowVersion,
             s.syncStatus, s.lastSyncedAt, s.originDeviceId,
@@ -267,7 +276,7 @@ final class TodoTimeSessionRepository {
         let rows = try database.query(sql) { statement in
             ActiveTodoTimeSession(
                 session: try Self.mapSession(statement),
-                todoTitle: statement.text(at: 21) ?? localized("workSessions.fallback.unknownSession", defaultValue: "Bilinmeyen çalışma")
+                todoTitle: statement.text(at: 23) ?? localized("workSessions.fallback.unknownSession", defaultValue: "Bilinmeyen çalışma")
             )
         }
 
@@ -279,6 +288,7 @@ final class TodoTimeSessionRepository {
         SELECT
             s.id, s.todoId, s.startedAt, s.runningSinceAt, s.pausedAt, s.endedAt, s.durationSeconds,
             s.startStatusId, s.endStatusId, s.note, s.isManual,
+            s.billingTimeTypeOverride, s.billingTimeTypeOverrideReason,
             s.organizationId, s.createdByUserId, s.updatedByUserId,
             s.createdAt, s.updatedAt, s.deletedAt, s.rowVersion,
             s.syncStatus, s.lastSyncedAt, s.originDeviceId,
@@ -293,7 +303,7 @@ final class TodoTimeSessionRepository {
         let rows = try database.query(sql) { statement in
             PausedTodoTimeSession(
                 session: try Self.mapSession(statement),
-                todoTitle: statement.text(at: 21) ?? localized("workSessions.fallback.pausedSession", defaultValue: "Duraklatılmış çalışma")
+                todoTitle: statement.text(at: 23) ?? localized("workSessions.fallback.pausedSession", defaultValue: "Duraklatılmış çalışma")
             )
         }
 
@@ -342,7 +352,9 @@ final class TodoTimeSessionRepository {
         todoId: String,
         startedAt: Date,
         endedAt: Date,
-        note: String?
+        note: String?,
+        billingTimeTypeOverride: TimeType? = nil,
+        billingTimeTypeOverrideReason: String? = nil
     ) throws {
         guard endedAt > startedAt else {
             throw TodoTimeSessionRepositoryError.invalidDateRange
@@ -351,6 +363,10 @@ final class TodoTimeSessionRepository {
         let now = Date()
         let durationSeconds = max(0, Int(endedAt.timeIntervalSince(startedAt)))
         let cleanNote = note?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanOverrideReason = Self.cleanOverrideReason(
+            billingTimeTypeOverrideReason,
+            for: billingTimeTypeOverride
+        )
 
         let session = TodoTimeSession(
             todoId: todoId,
@@ -361,6 +377,8 @@ final class TodoTimeSessionRepository {
             endStatusId: nil,
             note: cleanNote?.isEmpty == true ? nil : cleanNote,
             isManual: true,
+            billingTimeTypeOverride: billingTimeTypeOverride,
+            billingTimeTypeOverrideReason: cleanOverrideReason,
             createdAt: now,
             updatedAt: now
         )
@@ -375,6 +393,8 @@ final class TodoTimeSessionRepository {
         endedAt: Date,
         note: String?,
         isManual: Bool,
+        billingTimeTypeOverride: TimeType? = nil,
+        billingTimeTypeOverrideReason: String? = nil,
         by userId: String = BuiltInUserId.defaultOwner
     ) throws {
         guard endedAt > startedAt else {
@@ -383,13 +403,17 @@ final class TodoTimeSessionRepository {
 
         let durationSeconds = max(0, Int(endedAt.timeIntervalSince(startedAt)))
         let cleanNote = note?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanOverrideReason = Self.cleanOverrideReason(
+            billingTimeTypeOverrideReason,
+            for: billingTimeTypeOverride
+        )
 
         let sql = """
         UPDATE todo_time_sessions
         SET
             todoId = ?, startedAt = ?, runningSinceAt = NULL, pausedAt = NULL, endedAt = ?,
-            durationSeconds = ?, note = ?, isManual = ?,
-            updatedByUserId = ?, updatedAt = ?,
+            durationSeconds = ?, note = ?, isManual = ?, billingTimeTypeOverride = ?,
+            billingTimeTypeOverrideReason = ?, updatedByUserId = ?, updatedAt = ?,
             rowVersion = rowVersion + 1, syncStatus = 'local'
         WHERE id = ? AND endedAt IS NOT NULL AND deletedAt IS NULL;
         """
@@ -401,9 +425,11 @@ final class TodoTimeSessionRepository {
             statement.bindInt(durationSeconds, at: 4)
             statement.bindText(cleanNote?.isEmpty == true ? nil : cleanNote, at: 5)
             statement.bindInt(isManual ? 1 : 0, at: 6)
-            statement.bindText(userId, at: 7)
-            statement.bindText(Self.formatDate(Date()), at: 8)
-            statement.bindText(id, at: 9)
+            statement.bindText(billingTimeTypeOverride?.rawValue, at: 7)
+            statement.bindText(cleanOverrideReason, at: 8)
+            statement.bindText(userId, at: 9)
+            statement.bindText(Self.formatDate(Date()), at: 10)
+            statement.bindText(id, at: 11)
         }
 
         // The WHERE clause requires `endedAt IS NOT NULL` (only closed
@@ -536,10 +562,11 @@ final class TodoTimeSessionRepository {
         let sql = """
         INSERT INTO todo_time_sessions (
             id, todoId, startedAt, runningSinceAt, pausedAt, endedAt, durationSeconds,
-            startStatusId, endStatusId, note, isManual,
+            startStatusId, endStatusId, note, isManual, billingTimeTypeOverride,
+            billingTimeTypeOverrideReason,
             \(RecordMetadataSQL.columns)
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \(RecordMetadataSQL.placeholders));
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \(RecordMetadataSQL.placeholders));
         """
 
         try database.execute(sql) { statement in
@@ -554,7 +581,12 @@ final class TodoTimeSessionRepository {
             statement.bindText(session.endStatusId, at: 9)
             statement.bindText(session.note, at: 10)
             statement.bindInt(session.isManual ? 1 : 0, at: 11)
-            statement.bindMetadata(session.meta, startingAt: 12)
+            statement.bindText(session.billingTimeTypeOverride?.rawValue, at: 12)
+            statement.bindText(
+                Self.cleanOverrideReason(session.billingTimeTypeOverrideReason, for: session.billingTimeTypeOverride),
+                at: 13
+            )
+            statement.bindMetadata(session.meta, startingAt: 14)
         }
     }
 
@@ -625,7 +657,8 @@ private extension TodoTimeSessionRepository {
     static let selectAllColumnsSQL = """
     SELECT
         id, todoId, startedAt, runningSinceAt, pausedAt, endedAt, durationSeconds,
-        startStatusId, endStatusId, note, isManual,
+        startStatusId, endStatusId, note, isManual, billingTimeTypeOverride,
+        billingTimeTypeOverrideReason,
         \(RecordMetadataSQL.columns)
     FROM todo_time_sessions
     """
@@ -643,8 +676,16 @@ private extension TodoTimeSessionRepository {
             endStatusId: statement.text(at: 8),
             note: statement.text(at: 9),
             isManual: statement.int(at: 10) == 1,
-            meta: try statement.readMetadata(startingAt: 11)
+            billingTimeTypeOverride: statement.text(at: 11).flatMap(TimeType.init(rawValue:)),
+            billingTimeTypeOverrideReason: statement.text(at: 12),
+            meta: try statement.readMetadata(startingAt: 13)
         )
+    }
+
+    static func cleanOverrideReason(_ reason: String?, for timeType: TimeType?) -> String? {
+        guard timeType != nil else { return nil }
+        let cleanReason = reason?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleanReason?.isEmpty == true ? nil : cleanReason
     }
 
     static func parseDate(_ value: String?) -> Date? {

@@ -64,3 +64,17 @@ enum BillableMinuteAllocator {
         return allocations
     }
 }
+
+enum BillableSecondAllocator {
+    /// Distributes an exact billable-second total by segment duration while
+    /// preserving both the total and stable segment order.
+    static func allocate(
+        durationSeconds: [Int],
+        totalBillableSeconds: Int
+    ) -> [Int] {
+        LargestRemainderAllocator.allocate(
+            total: totalBillableSeconds,
+            weights: durationSeconds.map { max(0, $0) }
+        )
+    }
+}

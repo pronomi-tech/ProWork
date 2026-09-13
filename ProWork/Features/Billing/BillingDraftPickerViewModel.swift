@@ -12,6 +12,8 @@ import Foundation
 final class BillingDraftPickerViewModel: ObservableObject {
     @Published private(set) var availableCustomers: [Customer] = []
     @Published private(set) var availableCustomerCurrencies: [String: String] = [:]
+    @Published private(set) var availableFolders: [WorkFolder] = []
+    @Published private(set) var availableProjects: [ProjectListItem] = []
     @Published private(set) var preview: BillingDraftPreview?
     @Published var previewErrorMessage: String?
     @Published var previewNoticeMessage: String?
@@ -23,6 +25,8 @@ final class BillingDraftPickerViewModel: ObservableObject {
     private let customerRepository: CustomerRepository
     private let priceListRepository: PriceListRepository
     private let organizationRepository: OrganizationRepository
+    private let workFolderRepository: WorkFolderRepository
+    private let projectRepository: ProjectRepository
     private let tcmbSyncService: TCMBExchangeRateSyncService
     private let globalSyncService: GlobalExchangeRateSyncService
 
@@ -49,6 +53,8 @@ final class BillingDraftPickerViewModel: ObservableObject {
         self.customerRepository = services.customerRepository
         self.priceListRepository = services.priceListRepository
         self.organizationRepository = services.organizationRepository
+        self.workFolderRepository = services.workFolderRepository
+        self.projectRepository = services.projectRepository
         self.tcmbSyncService = tcmbSyncService ?? TCMBExchangeRateSyncService()
         self.globalSyncService = globalSyncService ?? GlobalExchangeRateSyncService()
     }
@@ -68,6 +74,8 @@ final class BillingDraftPickerViewModel: ObservableObject {
             // Master currency cached in AppServices.
             let organizationCurrency = services.cachedMasterCurrency()
             let priceLists = try priceListRepository.fetchAll(organizationId: BuiltInOrganizationId.default)
+            availableFolders = try workFolderRepository.fetchAll(organizationId: BuiltInOrganizationId.default)
+            availableProjects = try projectRepository.fetchAll()
 
             availableCustomers = loadedCustomers
             availableCustomerCurrencies = Dictionary(
@@ -92,11 +100,11 @@ final class BillingDraftPickerViewModel: ObservableObject {
     /// Fetches preview lines for the given customer / period.
     /// If an empty customerId is passed, the current preview is cleared.
     func loadPreview(
-        customerId: String,
+        scope: BillingDraftSourceScope?,
         periodStart: Date,
         periodEnd: Date
     ) {
-        guard !customerId.isEmpty else {
+        guard let scope else {
             pendingPreviewTask?.cancel()
             pendingPreviewTask = nil
             preview = nil
@@ -109,7 +117,7 @@ final class BillingDraftPickerViewModel: ObservableObject {
             try? await Task.sleep(nanoseconds: self?.previewDebounceInterval ?? 300_000_000)
             guard !Task.isCancelled, let self else { return }
             self.performLoadPreview(
-                customerId: customerId,
+                scope: scope,
                 periodStart: periodStart,
                 periodEnd: periodEnd
             )
@@ -117,7 +125,7 @@ final class BillingDraftPickerViewModel: ObservableObject {
     }
 
     private func performLoadPreview(
-        customerId: String,
+        scope: BillingDraftSourceScope,
         periodStart: Date,
         periodEnd: Date
     ) {
@@ -126,7 +134,7 @@ final class BillingDraftPickerViewModel: ObservableObject {
 
         do {
             let loaded = try lifecycleService.previewDraft(
-                customerId: customerId,
+                scope: scope,
                 periodStart: periodStart,
                 periodEnd: periodEnd
             )

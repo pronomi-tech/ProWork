@@ -1,9 +1,7 @@
 //  DefinitionsView.swift
 //  ProWork
 //  Created by Pronomi.
-//  Full-screen "Definitions" page. Same pattern as SettingsView:
-//  a top bar with a back button, a sidebar on the left, the selected
-//  definition's screen on the right.
+//  Full-screen home for master data and application configuration.
 
 import SwiftUI
 
@@ -132,28 +130,25 @@ struct DefinitionsView: View {
 
     // MARK: - Detail
 
-    /// Switching the visible child via `switch` would tear
-    /// down and rebuild each child view (and its `@StateObject`-owned
-    /// ViewModel) on every tab change, dropping in-flight loads and
-    /// the user's scroll state. Keep all four children alive in a
-    /// ZStack and toggle visibility via opacity + allowsHitTesting;
-    /// SwiftUI keeps the @StateObject identity stable so each VM only
-    /// loads once per DefinitionsView lifetime.
     @ViewBuilder
     private var selectedContent: some View {
-        ZStack {
+        switch selectedTab {
+        case .customers:
             CustomersView()
-                .opacity(selectedTab == .customers ? 1 : 0)
-                .allowsHitTesting(selectedTab == .customers)
+        case .projects:
             ProjectsView()
-                .opacity(selectedTab == .projects ? 1 : 0)
-                .allowsHitTesting(selectedTab == .projects)
+        case .taskCategories:
             TaskCategoriesView()
-                .opacity(selectedTab == .taskCategories ? 1 : 0)
-                .allowsHitTesting(selectedTab == .taskCategories)
+        case .todoStatuses:
             TodoStatusesView()
-                .opacity(selectedTab == .todoStatuses ? 1 : 0)
-                .allowsHitTesting(selectedTab == .todoStatuses)
+        case .exchangeRates:
+            ExchangeRatesView()
+        case .generalSettings:
+            GeneralSettingsView()
+        case .dataBackup:
+            DataBackupSettingsView()
+        case .corporateSettings:
+            CorporateSettingsView()
         }
     }
 }
@@ -161,6 +156,7 @@ struct DefinitionsView: View {
 private enum DefinitionsTabGroup: String, CaseIterable, Identifiable {
     case masterData
     case workflow
+    case settings
 
     var id: String { rawValue }
 
@@ -170,6 +166,8 @@ private enum DefinitionsTabGroup: String, CaseIterable, Identifiable {
             return [.customers, .projects]
         case .workflow:
             return [.taskCategories, .todoStatuses]
+        case .settings:
+            return [.generalSettings, .exchangeRates, .dataBackup, .corporateSettings]
         }
     }
 
@@ -179,6 +177,8 @@ private enum DefinitionsTabGroup: String, CaseIterable, Identifiable {
             return settingsStore.localized("definitions.section.master", defaultValue: "Tanımlamalar")
         case .workflow:
             return settingsStore.localized("definitions.section.workflow", defaultValue: "Görev Akışı")
+        case .settings:
+            return settingsStore.localized("settings.title", defaultValue: "Ayarlar")
         }
     }
 }
@@ -190,6 +190,10 @@ enum DefinitionsTab: String, CaseIterable, Identifiable, Hashable {
     case projects
     case taskCategories
     case todoStatuses
+    case exchangeRates
+    case generalSettings
+    case dataBackup
+    case corporateSettings
 
     var id: String { rawValue }
 
@@ -203,6 +207,14 @@ enum DefinitionsTab: String, CaseIterable, Identifiable, Hashable {
             return settingsStore.localized("taskCategories.title", defaultValue: "Görev Kategorileri")
         case .todoStatuses:
             return settingsStore.localized("todoStatuses.title", defaultValue: "İş Akışı Statüleri")
+        case .exchangeRates:
+            return settingsStore.localized("settings.tab.exchangeRates", defaultValue: "Döviz Kurları")
+        case .generalSettings:
+            return settingsStore.localized("settings.tab.general", defaultValue: "Genel")
+        case .dataBackup:
+            return settingsStore.localized("settings.tab.dataBackup", defaultValue: "Veri ve Yedekleme")
+        case .corporateSettings:
+            return settingsStore.localized("settings.corporate.title", defaultValue: "Kurumsal Ayarlar")
         }
     }
 
@@ -212,6 +224,10 @@ enum DefinitionsTab: String, CaseIterable, Identifiable, Hashable {
         case .projects: return "folder"
         case .taskCategories: return "tag"
         case .todoStatuses: return "rectangle.3.group"
+        case .exchangeRates: return "arrow.left.arrow.right.circle"
+        case .generalSettings: return "gearshape"
+        case .dataBackup: return "externaldrive"
+        case .corporateSettings: return "building.2.crop.circle"
         }
     }
 }

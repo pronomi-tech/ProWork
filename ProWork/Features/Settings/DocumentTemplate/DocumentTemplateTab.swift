@@ -4,8 +4,8 @@
 //  Shared tab enum and picker view for switching between the Service
 //  Document and Quote templates. Previously the picker was rendered as
 //  the top-level Picker inside DocumentTemplatesView; for UX consistency
-//  it is now shown in each template view's own SettingsScreenScaffold
-//  header center slot (between the title and the right-side actions).
+//  it is now shown in the parent SettingsScreenScaffold's header accessory
+//  slot between the title and the right-side actions.
 
 import SwiftUI
 
@@ -32,7 +32,7 @@ enum DocumentTemplateTab: String, CaseIterable, Identifiable {
     }
 }
 
-/// Modern pill-style picker shown in the scaffold header's center
+/// Modern pill-style picker shown in the scaffold header accessory
 /// region — same geometry and style as the TodosView Board/List
 /// pattern. The selected pill uses accent fill; inactive ones are clear.
 struct DocumentTemplateTabPicker: View {
@@ -64,8 +64,8 @@ struct DocumentTemplateTabPicker: View {
                 // We keep `.medium` weight in both states; a bold ↔
                 // regular transition changes text width, shifting the
                 // picker 2-4 px during tab switches and breaking the
-                // center alignment of centerContent in the parent
-                // scaffold header. Emphasis is already conveyed by the
+                // alignment of the accessory in the parent scaffold
+                // header. Emphasis is already conveyed by the
                 // accent fill + white foreground.
                 Text(tab.title(using: settingsStore))
                     .proWorkTextStyle(.callout, weight: .medium)

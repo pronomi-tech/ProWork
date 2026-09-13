@@ -142,7 +142,7 @@ final class BillingRunsViewModel: ObservableObject {
     /// bundle becomes the active selection.
     @discardableResult
     func createDraft(
-        customerId: String,
+        scope: BillingDraftSourceScope,
         startDate: Date,
         endDate: Date,
         title: String?,
@@ -150,7 +150,7 @@ final class BillingRunsViewModel: ObservableObject {
         savedNoticeFor: @escaping ([BillingRunBundle]) -> String
     ) throws -> [BillingRunBundle] {
         let bundles = try lifecycleService.createDrafts(
-            customerId: customerId,
+            scope: scope,
             periodStart: startDate,
             periodEnd: endDate,
             title: title,

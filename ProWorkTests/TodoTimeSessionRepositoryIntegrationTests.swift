@@ -153,6 +153,59 @@ final class TodoTimeSessionRepositoryIntegrationTests: XCTestCase {
         XCTAssertEqual(session.note, "Tamamlandı")
     }
 
+    func test_timeTypeOverride_roundTripsAndAutomaticClearsReason() throws {
+        let started = Date(timeIntervalSince1970: 1_700_000_000)
+        let ended = started.addingTimeInterval(3600)
+        try sessionRepository.insertManualSession(
+            todoId: todo.id,
+            startedAt: started,
+            endedAt: ended,
+            note: nil,
+            billingTimeTypeOverride: .holiday,
+            billingTimeTypeOverrideReason: "  Müşteri mutabakatı  "
+        )
+
+        var session = try XCTUnwrap(try sessionRepository.fetchSessions(todoId: todo.id).first)
+        XCTAssertEqual(session.billingTimeTypeOverride, .holiday)
+        XCTAssertEqual(session.billingTimeTypeOverrideReason, "Müşteri mutabakatı")
+
+        try sessionRepository.updateSession(
+            id: session.id,
+            todoId: todo.id,
+            startedAt: started,
+            endedAt: ended,
+            note: nil,
+            isManual: true,
+            billingTimeTypeOverride: nil,
+            billingTimeTypeOverrideReason: "Saklanmamalı"
+        )
+
+        session = try XCTUnwrap(try sessionRepository.fetchSessions(todoId: todo.id).first)
+        XCTAssertNil(session.billingTimeTypeOverride)
+        XCTAssertNil(session.billingTimeTypeOverrideReason)
+    }
+
+    func test_timeTypeOverride_rejectsUnknownPersistedValue() throws {
+        let started = Date(timeIntervalSince1970: 1_700_000_000)
+        try sessionRepository.insertManualSession(
+            todoId: todo.id,
+            startedAt: started,
+            endedAt: started.addingTimeInterval(60),
+            note: nil
+        )
+        let sessionId = try XCTUnwrap(try sessionRepository.fetchSessions(todoId: todo.id).first?.id)
+
+        XCTAssertThrowsError(
+            try AppDatabase.shared.execute("""
+            UPDATE todo_time_sessions
+            SET billingTimeTypeOverride = 'unknown'
+            WHERE id = ?;
+            """) { statement in
+                statement.bindText(sessionId, at: 1)
+            }
+        )
+    }
+
     func test_insertManualSession_rejectsInvalidRange() throws {
         let started = Date(timeIntervalSince1970: 1_700_000_000)
         let ended = started.addingTimeInterval(-1)

@@ -83,13 +83,31 @@ final class BillingComputationService {
         customerId: String,
         from startDate: Date,
         to endDate: Date,
-        kind: BillingRunKind = .livePreview
+        kind: BillingRunKind = .livePreview,
+        reportSessionIds: Set<String>? = nil
     ) throws -> [BillingReportLine] {
         try computePeriodInternal(
             from: startDate,
             to: endDate,
             kind: kind,
-            customerIdFilter: customerId
+            customerIdFilter: customerId,
+            reportSessionIds: reportSessionIds
+        )
+    }
+
+    func computePeriod(
+        folderIds: Set<String>,
+        from startDate: Date,
+        to endDate: Date,
+        kind: BillingRunKind = .livePreview
+    ) throws -> [BillingReportLine] {
+        guard !folderIds.isEmpty else { return [] }
+        return try computePeriodInternal(
+            from: startDate,
+            to: endDate,
+            kind: kind,
+            customerIdFilter: nil,
+            folderIdsFilter: folderIds
         )
     }
 
@@ -97,7 +115,9 @@ final class BillingComputationService {
         from startDate: Date,
         to endDate: Date,
         kind: BillingRunKind,
-        customerIdFilter: String?
+        customerIdFilter: String?,
+        reportSessionIds: Set<String>? = nil,
+        folderIdsFilter: Set<String>? = nil
     ) throws -> [BillingReportLine] {
         let organization = try organizationRepository.fetch(id: organizationId)
         let organizationBillingWindowMode = organization?.billingWindowMode ?? .timeline
@@ -211,11 +231,14 @@ final class BillingComputationService {
         }
 
         var lines: [BillingReportLine] = []
-        var orderIndex = 0
         var calculationItems: [CalculationItem] = []
 
         for item in periodItems {
             guard let todo = todosById[item.todoId] else { continue }
+            if let folderIdsFilter,
+               !(todo.folderId.map { folderIdsFilter.contains($0) } ?? false) {
+                continue
+            }
 
             // Resolve customer/project — id lookup is O(1) via customersById; name
             // fallback covers legacy items that pre-date the FK.
@@ -288,9 +311,10 @@ final class BillingComputationService {
             )
         }
 
-        let timelineOverrides = makeTimelineOverrides(
+        let windowOverrides = makeBillingWindowOverrides(
             from: calculationItems,
-            organizationMode: organizationBillingWindowMode
+            organizationMode: organizationBillingWindowMode,
+            reportSessionIds: reportSessionIds
         )
 
         for item in calculationItems {
@@ -300,7 +324,7 @@ final class BillingComputationService {
             // actually stop work.
             try Task.checkCancellation()
             let output = BillingCalculator.calculate(
-                input: item.input.withBillingWindowOverride(timelineOverrides[item.input.session.id]),
+                input: item.input.withBillingWindowOverride(windowOverrides[item.input.session.id]),
                 runId: runId
             )
             for var line in output.lines {
@@ -308,10 +332,38 @@ final class BillingComputationService {
                    item.isOpenSession {
                     line.endedAt = nil
                 }
-                line.sortOrder = orderIndex
-                orderIndex += 1
                 lines.append(line)
             }
+        }
+
+        let reportSessionIdsForPricing = Set(
+            calculationItems.compactMap { item -> String? in
+                guard item.effectiveBillingWindowMode(organizationMode: organizationBillingWindowMode) == .report,
+                      reportSessionIds?.contains(item.input.session.id) ?? true else {
+                    return nil
+                }
+                return item.input.session.id
+            }
+        )
+        normalizeReportModeAmounts(
+            in: &lines,
+            reportSessionIds: reportSessionIdsForPricing
+        )
+
+        // A session may produce multiple time-type segments in chronological
+        // order while source sessions arrive newest-first. Normalize the final
+        // collection before assigning its persisted presentation order so every
+        // preview, saved statement, and export follows the same newest-first rule.
+        lines.sort { lhs, rhs in
+            let lhsStart = lhs.startedAt ?? .distantPast
+            let rhsStart = rhs.startedAt ?? .distantPast
+            if lhsStart != rhsStart {
+                return lhsStart > rhsStart
+            }
+            return lhs.selectionKey < rhs.selectionKey
+        }
+        for index in lines.indices {
+            lines[index].sortOrder = index
         }
 
         return lines
@@ -378,36 +430,125 @@ final class BillingComputationService {
         }
     }
 
-    private func makeTimelineOverrides(
-        from items: [CalculationItem],
-        organizationMode: BillingWindowMode
-    ) -> [String: BillingWindowOverride] {
-        let requests = items.compactMap { item -> BillingTimelineWindowRequest? in
-            guard item.isBillable,
-                  !item.isOpenSession,
-                  !item.hasFixedFeeOverride,
-                  item.effectiveBillingWindowMode(organizationMode: organizationMode) == .timeline,
-                  item.effectiveWindowMinutes > 0,
-                  let endedAt = item.input.session.endedAt,
-                  endedAt > item.input.session.startedAt else {
-                return nil
-            }
+    private struct ReportPriceGroup: Hashable {
+        let customerId: String
+        let currency: String
+        let unitPriceMinor: Int
+        let vatRate: Decimal
+        let isVatExempt: Bool
+    }
 
-            return BillingTimelineWindowRequest(
-                sessionId: item.input.session.id,
-                groupKey: .init(
-                    customerId: item.input.customer.id,
-                    windowMinutes: item.effectiveWindowMinutes
-                ),
-                startedAt: item.input.session.startedAt,
-                endedAt: endedAt,
-                actualSeconds: item.actualSeconds
+    /// Report mode rounds time across the statement, so equal-priced lines must
+    /// also be priced as one duration total. Rounding each line independently
+    /// can otherwise add or lose a minor unit even when the grouped duration
+    /// and hourly price produce an exact amount.
+    private func normalizeReportModeAmounts(
+        in lines: inout [BillingReportLine],
+        reportSessionIds: Set<String>
+    ) {
+        let eligibleIndices = lines.indices.filter { index in
+            let line = lines[index]
+            return line.isBillable
+                && !line.isFixedFee
+                && line.billableSeconds > 0
+                && line.sessionId.map(reportSessionIds.contains) == true
+        }
+        let groupedIndices = Dictionary(grouping: eligibleIndices) { index in
+            let line = lines[index]
+            return ReportPriceGroup(
+                customerId: line.customerId,
+                currency: line.currency,
+                unitPriceMinor: line.unitPriceMinor,
+                vatRate: line.vatRate,
+                isVatExempt: line.isVatExempt
             )
         }
 
-        let planned = BillingTimelineWindowPlanner.plan(requests: requests)
-        return planned.mapValues { minutes in
-            BillingWindowOverride(billableMinutes: minutes, splitTo: nil)
+        for (group, indices) in groupedIndices {
+            let secondWeights = indices.map { lines[$0].billableSeconds }
+            let totalSeconds = secondWeights.reduce(0, +)
+            let unitPrice = Money(minorUnits: group.unitPriceMinor, currency: group.currency)
+            let amountTotal = Money.fromHourlyRate(
+                unitPrice,
+                billableSeconds: totalSeconds
+            ).minorUnits
+            let amounts = LargestRemainderAllocator.allocate(
+                total: amountTotal,
+                weights: secondWeights
+            )
+            let vatTotal = reportVATMinor(
+                subtotalMinor: amountTotal,
+                rate: group.vatRate,
+                isExempt: group.isVatExempt
+            )
+            let vatAmounts = LargestRemainderAllocator.allocate(
+                total: vatTotal,
+                weights: amounts
+            )
+
+            for (offset, lineIndex) in indices.enumerated() {
+                lines[lineIndex].amountMinor = amounts[offset]
+                lines[lineIndex].vatMinor = vatAmounts[offset]
+                lines[lineIndex].totalMinor = amounts[offset] + vatAmounts[offset]
+            }
+        }
+    }
+
+    private func reportVATMinor(
+        subtotalMinor: Int,
+        rate: Decimal,
+        isExempt: Bool
+    ) -> Int {
+        guard !isExempt, rate > 0, subtotalMinor != 0 else { return 0 }
+        var product = Decimal(subtotalMinor) * rate
+        var rounded = Decimal()
+        NSDecimalRound(&rounded, &product, 0, .bankers)
+        return NSDecimalNumber(decimal: rounded).intValue
+    }
+
+    private func makeBillingWindowOverrides(
+        from items: [CalculationItem],
+        organizationMode: BillingWindowMode,
+        reportSessionIds: Set<String>?
+    ) -> [String: BillingWindowOverride] {
+        func requests(for mode: BillingWindowMode) -> [BillingTimelineWindowRequest] {
+            items.compactMap { item -> BillingTimelineWindowRequest? in
+                guard item.isBillable,
+                      !item.isOpenSession,
+                      !item.hasFixedFeeOverride,
+                      item.effectiveBillingWindowMode(organizationMode: organizationMode) == mode,
+                      item.effectiveWindowMinutes > 0,
+                      let endedAt = item.input.session.endedAt,
+                      endedAt > item.input.session.startedAt else {
+                    return nil
+                }
+                if mode == .report,
+                   let reportSessionIds,
+                   !reportSessionIds.contains(item.input.session.id) {
+                    return nil
+                }
+
+                return BillingTimelineWindowRequest(
+                    sessionId: item.input.session.id,
+                    groupKey: .init(
+                        customerId: item.input.customer.id,
+                        windowMinutes: item.effectiveWindowMinutes,
+                        currency: item.input.priceContext.effectiveCurrency()
+                    ),
+                    startedAt: item.input.session.startedAt,
+                    endedAt: endedAt,
+                    actualSeconds: item.actualSeconds
+                )
+            }
+        }
+
+        let planned = BillingTimelineWindowPlanner.plan(requests: requests(for: .timeline))
+            .merging(
+                BillingTimelineWindowPlanner.planReport(requests: requests(for: .report)),
+                uniquingKeysWith: { _, reportValue in reportValue }
+            )
+        return planned.mapValues { seconds in
+            BillingWindowOverride(billableSeconds: seconds, splitTo: nil)
         }
     }
 }

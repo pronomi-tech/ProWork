@@ -12,6 +12,9 @@ struct TodosView: View {
     @State private var isShowingCreateForm = false
     @State private var editingTodo: TodoListItem?
     @State private var showingSessionsForTodo: TodoListItem?
+    @State private var locationSelection: WorkLocationSelection = .all
+    @State private var includeDescendantFolders = false
+    @State private var folderFormRequest: WorkFolderFormRequest?
 
     @State private var pendingWorkStart: PendingWorkStart?
     @State private var confirmation: ProWorkConfirmation?
@@ -27,15 +30,62 @@ struct TodosView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: ProWorkLayout.scaled(12, using: settingsStore)) {
-            header
+        HStack(spacing: 0) {
+            WorkFolderSidebar(
+                projects: viewModel.projects,
+                folders: viewModel.folders,
+                itemCount: { selection, includesDescendants in
+                    viewModel.visibleTodos(
+                        for: selection,
+                        includeDescendantFolders: includesDescendants
+                    ).count
+                },
+                selection: $locationSelection,
+                includeDescendantFolders: $includeDescendantFolders,
+                onCreateIndependentFolder: {
+                    folderFormRequest = WorkFolderFormRequest(
+                        existingFolder: nil,
+                        projectId: nil,
+                        parentFolderId: nil
+                    )
+                },
+                onCreateProjectFolder: { project in
+                    folderFormRequest = WorkFolderFormRequest(
+                        existingFolder: nil,
+                        projectId: project.id,
+                        parentFolderId: nil
+                    )
+                },
+                onCreateChildFolder: { folder in
+                    folderFormRequest = WorkFolderFormRequest(
+                        existingFolder: nil,
+                        projectId: folder.projectId,
+                        parentFolderId: folder.id
+                    )
+                },
+                onEditFolder: { folder in
+                    folderFormRequest = WorkFolderFormRequest(
+                        existingFolder: folder,
+                        projectId: folder.projectId,
+                        parentFolderId: folder.parentFolderId
+                    )
+                },
+                onDeleteFolder: { folder in
+                    askDeleteFolder(folder)
+                }
+            )
+            .frame(width: 270)
 
-            quickAddBar
+            Divider()
 
-            todoList
+            VStack(alignment: .leading, spacing: ProWorkLayout.scaled(12, using: settingsStore)) {
+                header
+                quickAddBar
+                todoList
+            }
+            .padding(ProWorkLayout.scaled(24, using: settingsStore))
         }
-        .padding(ProWorkLayout.scaled(24, using: settingsStore))
-        .proWorkFrame(minWidth: 760, minHeight: 600)
+        .proWorkFrame(minWidth: 1_030, minHeight: 600)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .proWorkToastNotifications(errorMessage: viewModel.errorMessage)
         .onAppear {
@@ -46,6 +96,7 @@ struct TodosView: View {
                 mode: .create,
                 customers: viewModel.customers,
                 projects: viewModel.projects,
+                folders: viewModel.folders,
                 categories: viewModel.categories,
                 statuses: viewModel.statuses
             ) { todo in
@@ -59,6 +110,7 @@ struct TodosView: View {
                 mode: .edit(todo),
                 customers: viewModel.customers,
                 projects: viewModel.projects,
+                folders: viewModel.folders,
                 categories: viewModel.categories,
                 statuses: viewModel.statuses
             ) { updatedTodo in
@@ -69,6 +121,19 @@ struct TodosView: View {
         }
         .sheet(item: $showingSessionsForTodo) { todo in
             TodoTimeSessionsView(todo: todo)
+        }
+        .sheet(item: $folderFormRequest) { request in
+            WorkFolderFormView(
+                existingFolder: request.existingFolder,
+                projectId: request.projectId,
+                parentFolderId: request.parentFolderId,
+                folders: viewModel.folders
+            ) { folder in
+                if viewModel.saveFolder(folder, isNew: request.existingFolder == nil) {
+                    locationSelection = .folder(folder.id)
+                    folderFormRequest = nil
+                }
+            }
         }
         .proWorkConfirmationDialog($confirmation)
     }
@@ -144,7 +209,7 @@ struct TodosView: View {
             .proWorkFrame(width: 240)
 
             Button {
-                viewModel.quickAdd(title: quickTitle)
+                viewModel.quickAdd(title: quickTitle, location: locationSelection)
                 quickTitle = ""
             } label: {
                 ProWorkButtonLabel(
@@ -250,7 +315,10 @@ struct TodosView: View {
 
     private var todoGrid: some View {
         ProWorkGrid(
-            items: viewModel.todos,
+            items: viewModel.visibleTodos(
+                for: locationSelection,
+                includeDescendantFolders: includeDescendantFolders
+            ),
             header: { todoTableHeader },
             emptyContent: {
                 ProWorkGridEmptyState(
@@ -265,6 +333,7 @@ struct TodosView: View {
 
     private var todoTableHeader: some View {
         HStack(spacing: 12) {
+            Color.gridHeaderSpacer(width: 130)
             Text(settingsStore.localized("todos.column.title", defaultValue: "Başlık"))
                 .frame(maxWidth: .infinity, alignment: .leading)
             Text(settingsStore.localized("todos.column.customerProject", defaultValue: "Müşteri / Proje"))
@@ -277,7 +346,6 @@ struct TodosView: View {
                 .frame(width: 110, alignment: .leading)
             Text(settingsStore.localized("todos.column.tracked", defaultValue: "Süre"))
                 .frame(width: 80, alignment: .trailing)
-            Color.gridHeaderSpacer(width: 130)
         }
         .proWorkTextStyle(.caption)
         .foregroundStyle(.secondary)
@@ -303,6 +371,45 @@ struct TodosView: View {
         let isRunning = todo.activeSessionStartedAt != nil
 
         return HStack(spacing: 12) {
+            HStack(spacing: 6) {
+                Button {
+                    if isRunning {
+                        viewModel.stopWork(for: todo)
+                    } else {
+                        requestStartWork(for: todo)
+                    }
+                } label: {
+                    Image(systemName: isRunning ? "stop.fill" : "play.fill").proWorkFont(size: 12)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(isRunning ? .red : .accentColor)
+                .help(isRunning ? settingsStore.localized("todos.action.stop", defaultValue: "Durdur") : settingsStore.localized("todos.action.start", defaultValue: "Başlat"))
+
+                Button {
+                    showingSessionsForTodo = todo
+                } label: {
+                    Image(systemName: "clock.arrow.circlepath").proWorkFont(size: 12)
+                }
+                .buttonStyle(.bordered).controlSize(.small)
+                .help(settingsStore.localized("todos.action.sessions", defaultValue: "Çalışma kayıtları"))
+
+                Button {
+                    editingTodo = todo
+                } label: {
+                    Image(systemName: "pencil").proWorkFont(size: 12)
+                }
+                .buttonStyle(.bordered).controlSize(.small)
+
+                Button {
+                    askDeleteTodo(todo)
+                } label: {
+                    Image(systemName: "trash").proWorkFont(size: 12)
+                }
+                .buttonStyle(.bordered).controlSize(.small)
+            }
+            .frame(width: 130, alignment: .leading)
+
             VStack(alignment: .leading, spacing: 2) {
                 Text(todo.title)
                     .proWorkTextStyle(.callout, weight: .medium)
@@ -352,45 +459,6 @@ struct TodosView: View {
                 .monospacedDigit()
                 .foregroundStyle(isRunning ? ProWorkColors.activeHighlight : .primary)
                 .frame(width: 80, alignment: .trailing)
-
-            HStack(spacing: 6) {
-                Button {
-                    if isRunning {
-                        viewModel.stopWork(for: todo)
-                    } else {
-                        requestStartWork(for: todo)
-                    }
-                } label: {
-                    Image(systemName: isRunning ? "stop.fill" : "play.fill").proWorkFont(size: 12)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .tint(isRunning ? .red : .accentColor)
-                .help(isRunning ? settingsStore.localized("todos.action.stop", defaultValue: "Durdur") : settingsStore.localized("todos.action.start", defaultValue: "Başlat"))
-
-                Button {
-                    showingSessionsForTodo = todo
-                } label: {
-                    Image(systemName: "clock.arrow.circlepath").proWorkFont(size: 12)
-                }
-                .buttonStyle(.bordered).controlSize(.small)
-                .help(settingsStore.localized("todos.action.sessions", defaultValue: "Çalışma kayıtları"))
-
-                Button {
-                    editingTodo = todo
-                } label: {
-                    Image(systemName: "pencil").proWorkFont(size: 12)
-                }
-                .buttonStyle(.bordered).controlSize(.small)
-
-                Button {
-                    askDeleteTodo(todo)
-                } label: {
-                    Image(systemName: "trash").proWorkFont(size: 12)
-                }
-                .buttonStyle(.bordered).controlSize(.small)
-            }
-            .frame(width: 130, alignment: .trailing)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -402,7 +470,11 @@ struct TodosView: View {
                 ForEach(viewModel.boardStatuses) { status in
                     TodoBoardColumnView(
                         status: status,
-                        todos: viewModel.todosForStatus(status),
+                        todos: viewModel.todosForStatus(
+                            status,
+                            selection: locationSelection,
+                            includeDescendantFolders: includeDescendantFolders
+                        ),
                         onEdit: { todo in
                             editingTodo = todo
                         },
@@ -519,6 +591,26 @@ struct TodosView: View {
             viewModel.delete(id: todo.id)
         }
     }
+
+    private func askDeleteFolder(_ folder: WorkFolder) {
+        confirmation = ProWorkConfirmation(
+            title: settingsStore.localized("workFolders.delete.title", defaultValue: "Klasör silinsin mi?"),
+            message: String(
+                format: settingsStore.localized(
+                    "workFolders.delete.message",
+                    defaultValue: "“%@” klasörü yalnızca boşsa silinecek."
+                ),
+                folder.name
+            ),
+            confirmTitle: settingsStore.localized("common.delete", defaultValue: "Sil"),
+            cancelTitle: settingsStore.localized("common.cancel", defaultValue: "Vazgeç"),
+            role: .destructive
+        ) {
+            if viewModel.deleteFolder(id: folder.id), locationSelection == .folder(folder.id) {
+                locationSelection = .all
+            }
+        }
+    }
 }
 
 private struct PendingWorkStart {
@@ -526,4 +618,11 @@ private struct PendingWorkStart {
     let targetStatus: TodoStatus
     let activeSessionId: String
     let activeTodoTitle: String
+}
+
+private struct WorkFolderFormRequest: Identifiable {
+    let id = UUID()
+    let existingFolder: WorkFolder?
+    let projectId: String?
+    let parentFolderId: String?
 }

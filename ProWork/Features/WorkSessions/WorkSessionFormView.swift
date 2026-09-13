@@ -35,6 +35,7 @@ struct WorkSessionFormView: View {
     let todos: [TodoListItem]
     let customers: [Customer]
     let projects: [ProjectListItem]
+    let folders: [WorkFolder]
     let categories: [TaskCategory]
     let statuses: [TodoStatus]
     let fixedTodo: TodoListItem?
@@ -47,7 +48,9 @@ struct WorkSessionFormView: View {
         _ startedAt: Date,
         _ endedAt: Date,
         _ note: String?,
-        _ isManual: Bool
+        _ isManual: Bool,
+        _ billingTimeTypeOverride: TimeType?,
+        _ billingTimeTypeOverrideReason: String?
     ) -> Void
 
     @State private var localTodos: [TodoListItem]
@@ -58,6 +61,8 @@ struct WorkSessionFormView: View {
     @State private var endDayOffset: Int = 0
     @State private var note: String = ""
     @State private var isManual: Bool = true
+    @State private var billingTimeTypeOverrideRawValue: String = ""
+    @State private var billingTimeTypeOverrideReason: String = ""
     @State private var isShowingCreateTodoForm = false
     @StateObject private var viewModel = WorkSessionFormViewModel()
 
@@ -66,6 +71,7 @@ struct WorkSessionFormView: View {
         todos: [TodoListItem],
         customers: [Customer],
         projects: [ProjectListItem],
+        folders: [WorkFolder],
         categories: [TaskCategory],
         statuses: [TodoStatus],
         fixedTodo: TodoListItem? = nil,
@@ -76,13 +82,16 @@ struct WorkSessionFormView: View {
             _ startedAt: Date,
             _ endedAt: Date,
             _ note: String?,
-            _ isManual: Bool
+            _ isManual: Bool,
+            _ billingTimeTypeOverride: TimeType?,
+            _ billingTimeTypeOverrideReason: String?
         ) -> Void
     ) {
         self.mode = mode
         self.todos = todos
         self.customers = customers
         self.projects = projects
+        self.folders = folders
         self.categories = categories
         self.statuses = statuses
         self.fixedTodo = fixedTodo
@@ -108,6 +117,8 @@ struct WorkSessionFormView: View {
             timeCards
 
             quickDurationsCompact
+
+            billingTimeTypeSection
 
             noteSection
         } footer: {
@@ -135,6 +146,7 @@ struct WorkSessionFormView: View {
                 mode: .create,
                 customers: customers,
                 projects: projects,
+                folders: folders,
                 categories: categories,
                 statuses: statuses
             ) { todo in
@@ -500,6 +512,51 @@ struct WorkSessionFormView: View {
         )
     }
 
+    private var billingTimeTypeSection: some View {
+        VStack(alignment: .leading, spacing: ProWorkLayout.scaled(12, using: settingsStore)) {
+            VStack(alignment: .leading, spacing: ProWorkLayout.scaled(6, using: settingsStore)) {
+                Text(settingsStore.localized("workSessions.form.billingTimeType", defaultValue: "Mesai Değerlendirmesi"))
+                    .proWorkTextStyle(.caption)
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: ProWorkLayout.scaled(8, using: settingsStore)) {
+                    billingTimeTypeButton(
+                        title: settingsStore.localized("workSessions.form.billingTimeType.automatic", defaultValue: "Otomatik"),
+                        rawValue: ""
+                    )
+
+                    ForEach(TimeType.allCases) { timeType in
+                        billingTimeTypeButton(title: timeType.title, rawValue: timeType.rawValue)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
+
+            ProWorkTextEditor(
+                title: settingsStore.localized("workSessions.form.billingTimeType.reason", defaultValue: "Düzeltme Nedeni"),
+                placeholder: settingsStore.localized("workSessions.form.billingTimeType.reason.placeholder", defaultValue: "Opsiyonel açıklama"),
+                text: $billingTimeTypeOverrideReason,
+                minHeight: 64
+            )
+            .disabled(isActiveEditMode || selectedBillingTimeTypeOverride == nil)
+
+            Text(settingsStore.localized(
+                "workSessions.form.billingTimeType.help",
+                defaultValue: "Otomatik seçim çalışma aralığını mesai kurallarına göre böler. Manuel seçim kaydın faturalandırılabilir süresinin tamamına uygulanır."
+            ))
+            .proWorkTextStyle(.caption2)
+            .foregroundStyle(.secondary)
+        }
+        .padding(ProWorkLayout.scaled(14, using: settingsStore))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: ProWorkLayout.scaled(14, using: settingsStore)))
+        .overlay(
+            RoundedRectangle(cornerRadius: ProWorkLayout.scaled(14, using: settingsStore))
+                .stroke(.quaternary, lineWidth: 1)
+        )
+    }
+
     private var footer: some View {
         ProWorkFormFooter(
             onCancel: { dismiss() },
@@ -541,6 +598,28 @@ struct WorkSessionFormView: View {
         max(0, Int(endedAt.timeIntervalSince(startedAt)))
     }
 
+    private var selectedBillingTimeTypeOverride: TimeType? {
+        TimeType(rawValue: billingTimeTypeOverrideRawValue)
+    }
+
+    @ViewBuilder
+    private func billingTimeTypeButton(title: String, rawValue: String) -> some View {
+        let button = Button {
+            billingTimeTypeOverrideRawValue = rawValue
+        } label: {
+            Text(title)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, minHeight: ProWorkLayout.scaled(30, using: settingsStore))
+        }
+        .disabled(isActiveEditMode)
+
+        if billingTimeTypeOverrideRawValue == rawValue {
+            button.buttonStyle(.borderedProminent)
+        } else {
+            button.buttonStyle(.bordered)
+        }
+    }
+
     private func loadInitialValues() {
         switch mode {
         case .create:
@@ -549,6 +628,8 @@ struct WorkSessionFormView: View {
             endedAt = roundedToFiveMinutes(Date())
             workDate = startedAt
             isManual = true
+            billingTimeTypeOverrideRawValue = ""
+            billingTimeTypeOverrideReason = ""
 
             if endedAt <= startedAt {
                 applyDuration(minutes: 60)
@@ -561,6 +642,8 @@ struct WorkSessionFormView: View {
             workDate = startedAt
             note = session.note ?? ""
             isManual = session.isManual
+            billingTimeTypeOverrideRawValue = session.billingTimeTypeOverride?.rawValue ?? ""
+            billingTimeTypeOverrideReason = session.billingTimeTypeOverrideReason ?? ""
 
             if !AppCalendar.istanbul.isDate(endedAt, inSameDayAs: startedAt) {
                 endDayOffset = 1
@@ -686,6 +769,8 @@ struct WorkSessionFormView: View {
         }
 
         let cleanNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanOverrideReason = billingTimeTypeOverrideReason.trimmingCharacters(in: .whitespacesAndNewlines)
+        let timeTypeOverride = selectedBillingTimeTypeOverride
 
         let sessionId: String?
         switch mode {
@@ -701,7 +786,9 @@ struct WorkSessionFormView: View {
             startedAt,
             endedAt,
             cleanNote.isEmpty ? nil : cleanNote,
-            isManual
+            isManual,
+            timeTypeOverride,
+            timeTypeOverride == nil || cleanOverrideReason.isEmpty ? nil : cleanOverrideReason
         )
 
         dismiss()

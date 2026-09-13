@@ -27,6 +27,54 @@
 
 import SwiftUI
 
+struct ProWorkResizableGridHeaderCell<Content: View>: View {
+    private static var resizeHandleWidth: CGFloat { 10 }
+    private static var separatorWidth: CGFloat { 1 }
+
+    let width: CGFloat
+    let minWidth: CGFloat
+    let maxWidth: CGFloat
+    let alignment: Alignment
+    let onResize: (CGFloat) -> Void
+    @ViewBuilder let content: () -> Content
+
+    @State private var dragStartWidth: CGFloat?
+    @State private var isHoveringHandle = false
+
+    var body: some View {
+        content()
+            .frame(width: width, alignment: alignment)
+            .padding(.vertical, 10)
+            .overlay(alignment: .trailing) {
+                ZStack {
+                    Rectangle()
+                        .fill(isHoveringHandle ? Color.accentColor : Color.secondary.opacity(0.35))
+                        .frame(width: Self.separatorWidth)
+
+                    Color.clear
+                        .frame(width: Self.resizeHandleWidth)
+                        .contentShape(Rectangle())
+                }
+                    .frame(maxHeight: .infinity)
+                    .offset(x: 6)
+                    .onHover { isHoveringHandle = $0 }
+                    .gesture(
+                        // The handle moves as its column width changes. Measuring in its
+                        // local space feeds that movement back into the next drag value.
+                        DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                            .onChanged { value in
+                                let startWidth = dragStartWidth ?? width
+                                dragStartWidth = startWidth
+                                onResize(min(max(startWidth + value.translation.width, minWidth), maxWidth))
+                            }
+                            .onEnded { _ in
+                                dragStartWidth = nil
+                            }
+                    )
+            }
+    }
+}
+
 struct ProWorkGrid<Item: Identifiable, Header: View, EmptyContent: View, Row: View>: View {
 
     let items: [Item]
@@ -124,7 +172,7 @@ struct ProWorkGrid<Item: Identifiable, Header: View, EmptyContent: View, Row: Vi
                     }
                 }
                 .frame(
-                    width: max(geometry.size.width, minTableWidth),
+                    minWidth: max(geometry.size.width, minTableWidth),
                     alignment: .leading
                 )
                 .frame(maxHeight: .infinity, alignment: .top)

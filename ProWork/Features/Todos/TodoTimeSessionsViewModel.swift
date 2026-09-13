@@ -11,6 +11,7 @@ final class TodoTimeSessionsViewModel: ObservableObject {
     @Published private(set) var sessions: [TodoTimeSession] = []
     @Published private(set) var customers: [Customer] = []
     @Published private(set) var projects: [ProjectListItem] = []
+    @Published private(set) var folders: [WorkFolder] = []
     @Published private(set) var categories: [TaskCategory] = []
     @Published private(set) var statuses: [TodoStatus] = []
     @Published var errorMessage: String?
@@ -18,6 +19,7 @@ final class TodoTimeSessionsViewModel: ObservableObject {
     private let sessionRepository: TodoTimeSessionRepository
     private let customerRepository: CustomerRepository
     private let projectRepository: ProjectRepository
+    private let workFolderRepository: WorkFolderRepository
     private let categoryRepository: TaskCategoryRepository
     private let statusRepository: TodoStatusRepository
 
@@ -25,6 +27,7 @@ final class TodoTimeSessionsViewModel: ObservableObject {
         self.sessionRepository = services.todoTimeSessionRepository
         self.customerRepository = services.customerRepository
         self.projectRepository = services.projectRepository
+        self.workFolderRepository = services.workFolderRepository
         self.categoryRepository = services.categoryRepository
         self.statusRepository = services.statusRepository
     }
@@ -34,6 +37,7 @@ final class TodoTimeSessionsViewModel: ObservableObject {
             sessions = try sessionRepository.fetchSessions(todoId: todoId)
             customers = try customerRepository.fetchAll()
             projects = try projectRepository.fetchAll()
+            folders = try workFolderRepository.fetchAll()
             categories = try categoryRepository.fetchAll()
             statuses = try statusRepository.fetchAll()
             errorMessage = nil
@@ -47,14 +51,18 @@ final class TodoTimeSessionsViewModel: ObservableObject {
         todoId: String,
         startedAt: Date,
         endedAt: Date,
-        note: String?
+        note: String?,
+        billingTimeTypeOverride: TimeType?,
+        billingTimeTypeOverrideReason: String?
     ) -> Bool {
         do {
             try sessionRepository.insertManualSession(
                 todoId: todoId,
                 startedAt: startedAt,
                 endedAt: endedAt,
-                note: note
+                note: note,
+                billingTimeTypeOverride: billingTimeTypeOverride,
+                billingTimeTypeOverrideReason: billingTimeTypeOverrideReason
             )
             load(todoId: todoId)
             errorMessage = nil
@@ -72,7 +80,9 @@ final class TodoTimeSessionsViewModel: ObservableObject {
         startedAt: Date,
         endedAt: Date,
         note: String?,
-        isManual: Bool
+        isManual: Bool,
+        billingTimeTypeOverride: TimeType?,
+        billingTimeTypeOverrideReason: String?
     ) -> Bool {
         do {
             try sessionRepository.updateSession(
@@ -81,7 +91,9 @@ final class TodoTimeSessionsViewModel: ObservableObject {
                 startedAt: startedAt,
                 endedAt: endedAt,
                 note: note,
-                isManual: isManual
+                isManual: isManual,
+                billingTimeTypeOverride: billingTimeTypeOverride,
+                billingTimeTypeOverrideReason: billingTimeTypeOverrideReason
             )
             load(todoId: todoId)
             errorMessage = nil

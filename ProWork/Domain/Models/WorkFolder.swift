@@ -1,26 +1,16 @@
-//  Todo.swift
+//  WorkFolder.swift
 //  ProWork
 //  Created by Pronomi.
 
 import Foundation
 
-struct Todo: Identifiable, Hashable {
+struct WorkFolder: Identifiable, Hashable {
     let id: String
-    var customerId: String?
     var projectId: String?
-    var folderId: String?
-    var categoryId: String
-    var title: String
-    var description: String?
-    var statusId: String
-    var priority: String
-    var plannedDate: Date?
-    var dueDate: Date?
-    var estimatedMinutes: Int?
-    var isBillable: Bool
-    var completedAt: Date?
+    var parentFolderId: String?
+    var name: String
+    var sortOrder: Int
 
-    // Tenant + audit + sync
     var organizationId: String
     var createdByUserId: String?
     var updatedByUserId: String?
@@ -34,19 +24,10 @@ struct Todo: Identifiable, Hashable {
 
     init(
         id: String = UUID().uuidString,
-        customerId: String? = nil,
         projectId: String? = nil,
-        folderId: String? = nil,
-        categoryId: String,
-        title: String,
-        description: String? = nil,
-        statusId: String = BuiltInTodoStatusId.waiting,
-        priority: String = "normal",
-        plannedDate: Date? = nil,
-        dueDate: Date? = nil,
-        estimatedMinutes: Int? = nil,
-        isBillable: Bool = true,
-        completedAt: Date? = nil,
+        parentFolderId: String? = nil,
+        name: String,
+        sortOrder: Int = 0,
         organizationId: String = BuiltInOrganizationId.default,
         createdByUserId: String? = BuiltInUserId.defaultOwner,
         updatedByUserId: String? = BuiltInUserId.defaultOwner,
@@ -59,19 +40,10 @@ struct Todo: Identifiable, Hashable {
         originDeviceId: String? = DeviceIdentity.current
     ) {
         self.id = id
-        self.customerId = customerId
         self.projectId = projectId
-        self.folderId = folderId
-        self.categoryId = categoryId
-        self.title = title
-        self.description = description
-        self.statusId = statusId
-        self.priority = priority
-        self.plannedDate = plannedDate
-        self.dueDate = dueDate
-        self.estimatedMinutes = estimatedMinutes
-        self.isBillable = isBillable
-        self.completedAt = completedAt
+        self.parentFolderId = parentFolderId
+        self.name = name
+        self.sortOrder = sortOrder
         self.organizationId = organizationId
         self.createdByUserId = createdByUserId
         self.updatedByUserId = updatedByUserId
@@ -85,7 +57,7 @@ struct Todo: Identifiable, Hashable {
     }
 }
 
-extension Todo {
+extension WorkFolder {
     var meta: RecordMetadata {
         RecordMetadata(
             organizationId: organizationId,
@@ -102,37 +74,19 @@ extension Todo {
     }
 
     init(
-        id: String = UUID().uuidString,
-        customerId: String? = nil,
-        projectId: String? = nil,
-        folderId: String? = nil,
-        categoryId: String,
-        title: String,
-        description: String? = nil,
-        statusId: String = BuiltInTodoStatusId.waiting,
-        priority: String = "normal",
-        plannedDate: Date? = nil,
-        dueDate: Date? = nil,
-        estimatedMinutes: Int? = nil,
-        isBillable: Bool = true,
-        completedAt: Date? = nil,
+        id: String,
+        projectId: String?,
+        parentFolderId: String?,
+        name: String,
+        sortOrder: Int,
         meta: RecordMetadata
     ) {
         self.init(
             id: id,
-            customerId: customerId,
             projectId: projectId,
-            folderId: folderId,
-            categoryId: categoryId,
-            title: title,
-            description: description,
-            statusId: statusId,
-            priority: priority,
-            plannedDate: plannedDate,
-            dueDate: dueDate,
-            estimatedMinutes: estimatedMinutes,
-            isBillable: isBillable,
-            completedAt: completedAt,
+            parentFolderId: parentFolderId,
+            name: name,
+            sortOrder: sortOrder,
             organizationId: meta.organizationId,
             createdByUserId: meta.createdByUserId,
             updatedByUserId: meta.updatedByUserId,

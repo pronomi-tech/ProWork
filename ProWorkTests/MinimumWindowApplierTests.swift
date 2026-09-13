@@ -49,13 +49,11 @@ final class MinimumWindowApplierTests: XCTestCase {
 
     // MARK: - Saniye girişi
 
-    func test_secondsInput_partialSecondsRoundUpToMinute() {
-        // 1 saniye bile 1 dakika ⇒ 60 dk pencerede 60 dakika
-        XCTAssertEqual(MinimumWindowApplier.applySeconds(actualSeconds: 1, windowMinutes: 60), 60)
+    func test_secondsInput_preservesSecondsAndRoundsOnlyAtWindowBoundary() {
+        XCTAssertEqual(MinimumWindowApplier.applySeconds(actualSeconds: 1, windowMinutes: nil), 1)
+        XCTAssertEqual(MinimumWindowApplier.applySeconds(actualSeconds: 1, windowMinutes: 60), 3_600)
         XCTAssertEqual(MinimumWindowApplier.applySeconds(actualSeconds: 0, windowMinutes: 60), 0)
-        // 600 sn = 10 dk → 60 dk pencere
-        XCTAssertEqual(MinimumWindowApplier.applySeconds(actualSeconds: 600, windowMinutes: 60), 60)
-        // 3660 sn = 61 dk → 120 dk
-        XCTAssertEqual(MinimumWindowApplier.applySeconds(actualSeconds: 3660, windowMinutes: 60), 120)
+        XCTAssertEqual(MinimumWindowApplier.applySeconds(actualSeconds: 600, windowMinutes: 60), 3_600)
+        XCTAssertEqual(MinimumWindowApplier.applySeconds(actualSeconds: 3_660, windowMinutes: 60), 7_200)
     }
 }

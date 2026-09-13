@@ -23,8 +23,6 @@ final class ReportsDashboardViewModel: ObservableObject {
         var noCustomerTitle: String
         var noProjectFormat: String  // %@ (No project)
         var administrativeTitle: String
-        var unknownCategoryTitle: String
-        var otherTitle: String
         var billableTitle: String
     }
 
@@ -44,8 +42,6 @@ final class ReportsDashboardViewModel: ObservableObject {
     @Published private(set) var automaticSeconds: Int = 0
     @Published private(set) var uniqueCustomerCount: Int = 0
     @Published private(set) var uniqueProjectCount: Int = 0
-    @Published private(set) var categoryBreakdownRows: [DonutBreakdownRow] = []
-    @Published private(set) var customerBreakdownRows: [DonutBreakdownRow] = []
     @Published private(set) var customerBreakdownData: [(name: String, seconds: Int)] = []
     @Published private(set) var billableBreakdownData: [(name: String, seconds: Int)] = []
     @Published private(set) var projectBreakdownData: [(name: String, seconds: Int)] = []
@@ -133,32 +129,15 @@ final class ReportsDashboardViewModel: ObservableObject {
         uniqueCustomerCount = Set(filtered.compactMap { $0.customerName }).count
         uniqueProjectCount = Set(filtered.compactMap { $0.projectName }).count
 
-        categoryBreakdownRows = SessionBreakdownBuilder.categoryRows(
-            sessions: filtered,
-            todoLookup: todoLookup,
-            unknownTitle: labels.unknownCategoryTitle,
-            otherTitle: labels.otherTitle
-        )
-
-        customerBreakdownRows = SessionBreakdownBuilder.customerRows(
-            sessions: filtered,
-            noCustomerTitle: labels.noCustomerTitle,
-            otherTitle: labels.otherTitle
-        )
-
-        // Aggregate once and reuse for `customerBreakdownData`.
-        // Previously `customerBreakdownRows` (already computed above
-        // via SessionBreakdownBuilder) and `customerBreakdownData`
-        // walked the same session list twice with different key paths;
-        // the donut row builder owns its own pass, but the
-        // `(name, seconds)` projection used here can share one aggregate
-        // result with downstream consumers.
         customerBreakdownData = aggregate(filtered, key: {
-            $0.customerName ?? labels.administrativeTitle
+            $0.customerName ?? labels.noCustomerTitle
         })
 
         let billable = filtered
-            .filter(\.statusStartsTimer)
+            .filter { session in
+                guard let todo = todoLookup[session.todoId] else { return false }
+                return todo.isBillable && todo.categoryIsBillable
+            }
             .reduce(0) { $0 + ($1.durationSeconds ?? 0) }
         let administrative = total - billable
         billableBreakdownData = [

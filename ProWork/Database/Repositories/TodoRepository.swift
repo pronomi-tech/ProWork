@@ -25,9 +25,13 @@ final class TodoRepository {
             t.projectId,
             p.name AS projectName,
 
+            t.folderId,
+            wf.name AS folderName,
+
             t.categoryId,
             tc.name AS categoryName,
             tc.color AS categoryColor,
+            tc.isBillableDefault AS categoryIsBillable,
 
             t.statusId,
             ts.name AS statusName,
@@ -74,6 +78,7 @@ final class TodoRepository {
         FROM todos t
         LEFT JOIN customers c ON c.id = t.customerId AND c.deletedAt IS NULL
         LEFT JOIN projects p ON p.id = t.projectId AND p.deletedAt IS NULL
+        LEFT JOIN work_folders wf ON wf.id = t.folderId AND wf.deletedAt IS NULL
         INNER JOIN task_categories tc ON tc.id = t.categoryId
         INNER JOIN todo_statuses ts ON ts.id = t.statusId
         WHERE t.deletedAt IS NULL
@@ -97,39 +102,43 @@ final class TodoRepository {
             projectId: statement.text(at: 3),
             projectName: statement.text(at: 4),
 
-            categoryId: statement.text(at: 5) ?? "",
-            categoryName: statement.text(at: 6) ?? "",
-            categoryColor: statement.text(at: 7),
+            folderId: statement.text(at: 5),
+            folderName: statement.text(at: 6),
 
-            statusId: statement.text(at: 8) ?? BuiltInTodoStatusId.waiting,
-            statusName: statement.text(at: 9) ?? ProWorkLocalizer.shared.string(
+            categoryId: statement.text(at: 7) ?? "",
+            categoryName: statement.text(at: 8) ?? "",
+            categoryColor: statement.text(at: 9),
+            categoryIsBillable: statement.int(at: 10) == 1,
+
+            statusId: statement.text(at: 11) ?? BuiltInTodoStatusId.waiting,
+            statusName: statement.text(at: 12) ?? ProWorkLocalizer.shared.string(
                 "todoStatus.waiting",
                 defaultValue: "Beklemede"
             ),
-            statusColor: statement.text(at: 10),
-            statusStartsTimer: statement.int(at: 11) == 1,
-            statusStopsTimer: statement.int(at: 12) == 1,
-            statusMarksOpen: statement.int(at: 13) == 1,
-            statusMarksCompleted: statement.int(at: 14) == 1,
-            statusMarksCancelled: statement.int(at: 15) == 1,
+            statusColor: statement.text(at: 13),
+            statusStartsTimer: statement.int(at: 14) == 1,
+            statusStopsTimer: statement.int(at: 15) == 1,
+            statusMarksOpen: statement.int(at: 16) == 1,
+            statusMarksCompleted: statement.int(at: 17) == 1,
+            statusMarksCancelled: statement.int(at: 18) == 1,
 
-            title: statement.text(at: 16) ?? "",
-            description: statement.text(at: 17),
+            title: statement.text(at: 19) ?? "",
+            description: statement.text(at: 20),
 
-            priority: statement.text(at: 18) ?? "normal",
+            priority: statement.text(at: 21) ?? "normal",
 
-            plannedDate: parseDate(statement.text(at: 19)),
-            dueDate: parseDate(statement.text(at: 20)),
-            estimatedMinutes: statement.optionalInt(at: 21),
+            plannedDate: parseDate(statement.text(at: 22)),
+            dueDate: parseDate(statement.text(at: 23)),
+            estimatedMinutes: statement.optionalInt(at: 24),
 
-            totalTrackedSeconds: statement.int(at: 22),
-            activeSessionStartedAt: parseDate(statement.text(at: 23)),
+            totalTrackedSeconds: statement.int(at: 25),
+            activeSessionStartedAt: parseDate(statement.text(at: 26)),
 
-            isBillable: statement.int(at: 24) == 1,
+            isBillable: statement.int(at: 27) == 1,
 
-            createdAt: parseDate(statement.text(at: 25)) ?? Date(),
-            updatedAt: parseDate(statement.text(at: 26)) ?? Date(),
-            completedAt: parseDate(statement.text(at: 27))
+            createdAt: parseDate(statement.text(at: 28)) ?? Date(),
+            updatedAt: parseDate(statement.text(at: 29)) ?? Date(),
+            completedAt: parseDate(statement.text(at: 30))
         )
     }
 
@@ -144,9 +153,12 @@ final class TodoRepository {
             c.name AS customerName,
             t.projectId,
             p.name AS projectName,
+            t.folderId,
+            wf.name AS folderName,
             t.categoryId,
             tc.name AS categoryName,
             tc.color AS categoryColor,
+            tc.isBillableDefault AS categoryIsBillable,
             t.statusId,
             ts.name AS statusName,
             ts.color AS statusColor,
@@ -185,6 +197,7 @@ final class TodoRepository {
         FROM todos t
         LEFT JOIN customers c ON c.id = t.customerId AND c.deletedAt IS NULL
         LEFT JOIN projects p ON p.id = t.projectId AND p.deletedAt IS NULL
+        LEFT JOIN work_folders wf ON wf.id = t.folderId AND wf.deletedAt IS NULL
         INNER JOIN task_categories tc ON tc.id = t.categoryId
         INNER JOIN todo_statuses ts ON ts.id = t.statusId
         WHERE t.id = ? AND t.deletedAt IS NULL
@@ -214,7 +227,7 @@ final class TodoRepository {
             let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
             let sql = """
             SELECT
-                id, customerId, projectId, categoryId,
+                id, customerId, projectId, folderId, categoryId,
                 title, description, statusId, priority,
                 plannedDate, dueDate, estimatedMinutes, isBillable, completedAt,
                 \(RecordMetadataSQL.columns)
@@ -241,7 +254,7 @@ final class TodoRepository {
     func fetch(id: String) throws -> Todo? {
         let sql = """
         SELECT
-            id, customerId, projectId, categoryId,
+            id, customerId, projectId, folderId, categoryId,
             title, description, statusId, priority,
             plannedDate, dueDate, estimatedMinutes, isBillable, completedAt,
             \(RecordMetadataSQL.columns)
@@ -262,29 +275,30 @@ final class TodoRepository {
     func insert(_ todo: Todo) throws {
         let sql = """
         INSERT INTO todos (
-            id, customerId, projectId, categoryId,
+            id, customerId, projectId, folderId, categoryId,
             title, description, statusId, priority,
             plannedDate, dueDate, estimatedMinutes, isBillable, completedAt,
             \(RecordMetadataSQL.columns)
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \(RecordMetadataSQL.placeholders));
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \(RecordMetadataSQL.placeholders));
         """
 
         try database.execute(sql) { statement in
             statement.bindText(todo.id, at: 1)
             statement.bindText(todo.customerId, at: 2)
             statement.bindText(todo.projectId, at: 3)
-            statement.bindText(todo.categoryId, at: 4)
-            statement.bindText(todo.title, at: 5)
-            statement.bindText(todo.description, at: 6)
-            statement.bindText(todo.statusId, at: 7)
-            statement.bindText(todo.priority, at: 8)
-            statement.bindText(Self.formatDate(todo.plannedDate), at: 9)
-            statement.bindText(Self.formatDate(todo.dueDate), at: 10)
-            statement.bindOptionalInt(todo.estimatedMinutes, at: 11)
-            statement.bindInt(todo.isBillable ? 1 : 0, at: 12)
-            statement.bindText(Self.formatDate(todo.completedAt), at: 13)
-            statement.bindMetadata(todo.meta, startingAt: 14)
+            statement.bindText(todo.folderId, at: 4)
+            statement.bindText(todo.categoryId, at: 5)
+            statement.bindText(todo.title, at: 6)
+            statement.bindText(todo.description, at: 7)
+            statement.bindText(todo.statusId, at: 8)
+            statement.bindText(todo.priority, at: 9)
+            statement.bindText(Self.formatDate(todo.plannedDate), at: 10)
+            statement.bindText(Self.formatDate(todo.dueDate), at: 11)
+            statement.bindOptionalInt(todo.estimatedMinutes, at: 12)
+            statement.bindInt(todo.isBillable ? 1 : 0, at: 13)
+            statement.bindText(Self.formatDate(todo.completedAt), at: 14)
+            statement.bindMetadata(todo.meta, startingAt: 15)
         }
     }
 
@@ -292,7 +306,7 @@ final class TodoRepository {
         let sql = """
         UPDATE todos
         SET
-            customerId = ?, projectId = ?, categoryId = ?, statusId = ?,
+            customerId = ?, projectId = ?, folderId = ?, categoryId = ?, statusId = ?,
             title = ?, description = ?, priority = ?,
             plannedDate = ?, dueDate = ?, estimatedMinutes = ?, isBillable = ?,
             completedAt = ?,
@@ -306,19 +320,20 @@ final class TodoRepository {
         try database.execute(sql) { statement in
             statement.bindText(todo.customerId, at: 1)
             statement.bindText(todo.projectId, at: 2)
-            statement.bindText(todo.categoryId, at: 3)
-            statement.bindText(todo.statusId, at: 4)
-            statement.bindText(todo.title, at: 5)
-            statement.bindText(todo.description, at: 6)
-            statement.bindText(todo.priority, at: 7)
-            statement.bindText(Self.formatDate(todo.plannedDate), at: 8)
-            statement.bindText(Self.formatDate(todo.dueDate), at: 9)
-            statement.bindOptionalInt(todo.estimatedMinutes, at: 10)
-            statement.bindInt(todo.isBillable ? 1 : 0, at: 11)
-            statement.bindText(Self.formatDate(todo.completedAt), at: 12)
-            statement.bindText(todo.updatedByUserId ?? BuiltInUserId.defaultOwner, at: 13)
-            statement.bindText(Self.formatDate(Date()), at: 14)
-            statement.bindText(todo.id, at: 15)
+            statement.bindText(todo.folderId, at: 3)
+            statement.bindText(todo.categoryId, at: 4)
+            statement.bindText(todo.statusId, at: 5)
+            statement.bindText(todo.title, at: 6)
+            statement.bindText(todo.description, at: 7)
+            statement.bindText(todo.priority, at: 8)
+            statement.bindText(Self.formatDate(todo.plannedDate), at: 9)
+            statement.bindText(Self.formatDate(todo.dueDate), at: 10)
+            statement.bindOptionalInt(todo.estimatedMinutes, at: 11)
+            statement.bindInt(todo.isBillable ? 1 : 0, at: 12)
+            statement.bindText(Self.formatDate(todo.completedAt), at: 13)
+            statement.bindText(todo.updatedByUserId ?? BuiltInUserId.defaultOwner, at: 14)
+            statement.bindText(Self.formatDate(Date()), at: 15)
+            statement.bindText(todo.id, at: 16)
         }
     }
 
@@ -361,17 +376,18 @@ final class TodoRepository {
             id: statement.text(at: 0) ?? UUID().uuidString,
             customerId: statement.text(at: 1),
             projectId: statement.text(at: 2),
-            categoryId: statement.text(at: 3) ?? "",
-            title: statement.text(at: 4) ?? "",
-            description: statement.text(at: 5),
-            statusId: statement.text(at: 6) ?? BuiltInTodoStatusId.waiting,
-            priority: statement.text(at: 7) ?? "normal",
-            plannedDate: parseDate(statement.text(at: 8)),
-            dueDate: parseDate(statement.text(at: 9)),
-            estimatedMinutes: statement.optionalInt(at: 10),
-            isBillable: statement.int(at: 11) == 1,
-            completedAt: parseDate(statement.text(at: 12)),
-            meta: try statement.readMetadata(startingAt: 13)
+            folderId: statement.text(at: 3),
+            categoryId: statement.text(at: 4) ?? "",
+            title: statement.text(at: 5) ?? "",
+            description: statement.text(at: 6),
+            statusId: statement.text(at: 7) ?? BuiltInTodoStatusId.waiting,
+            priority: statement.text(at: 8) ?? "normal",
+            plannedDate: parseDate(statement.text(at: 9)),
+            dueDate: parseDate(statement.text(at: 10)),
+            estimatedMinutes: statement.optionalInt(at: 11),
+            isBillable: statement.int(at: 12) == 1,
+            completedAt: parseDate(statement.text(at: 13)),
+            meta: try statement.readMetadata(startingAt: 14)
         )
     }
 }

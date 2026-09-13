@@ -53,6 +53,15 @@ final class OrganizationRepositoryIntegrationTests: XCTestCase {
         XCTAssertEqual(fetched?.billingWindowMode, .session)
     }
 
+    func test_organizationReportBillingWindowMode_roundTrips() throws {
+        var organization = try XCTUnwrap(try repository.fetchDefault())
+        organization.billingWindowMode = .report
+
+        try repository.update(organization)
+
+        XCTAssertEqual(try repository.fetchDefault()?.billingWindowMode, .report)
+    }
+
     func test_softDelete_hidesFromFetchAll() throws {
         let org = Organization(name: "qa-Silinen", masterCurrency: "TRY")
         try repository.insert(org)

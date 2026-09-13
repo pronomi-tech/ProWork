@@ -8,6 +8,13 @@ struct BillingTimelineWindowRequest: Hashable {
     struct GroupKey: Hashable {
         let customerId: String
         let windowMinutes: Int
+        let currency: String
+
+        init(customerId: String, windowMinutes: Int, currency: String = "") {
+            self.customerId = customerId
+            self.windowMinutes = windowMinutes
+            self.currency = currency
+        }
     }
 
     let sessionId: String
@@ -18,6 +25,11 @@ struct BillingTimelineWindowRequest: Hashable {
 }
 
 enum BillingTimelineWindowPlanner {
+    /// Groups records while their starts remain inside the billing windows
+    /// already occupied by the chain. A record longer than one window extends
+    /// that coverage to the end of its last full minimum window.
+    /// Actual seconds stay on every record; only the chain's final record
+    /// receives the seconds needed to round the chain total up to a full window.
     static func plan(
         requests: [BillingTimelineWindowRequest]
     ) -> [String: Int] {
@@ -35,58 +47,100 @@ enum BillingTimelineWindowPlanner {
                 return $0.sessionId < $1.sessionId
             }
 
-            var cluster: [BillingTimelineWindowRequest] = []
-            var clusterEnd: Date?
+            var chain: [BillingTimelineWindowRequest] = []
+            var chainWindowEnd: Date?
 
-            func flushCluster() {
-                guard !cluster.isEmpty, let activeEnd = clusterEnd else { return }
-                let clusterStart = cluster[0].startedAt
-                // Int(timeInterval / 60) double-converts via
-                // floating point and truncates seconds, losing up to 59s per
-                // cluster. Do the arithmetic in integer seconds and ceil-divide
-                // so a 59-second tail still counts as a billable minute.
-                let totalSeconds = max(0, Int(activeEnd.timeIntervalSince(clusterStart).rounded()))
-                let totalBillableMinutes = (totalSeconds + 59) / 60
-                let allocations = BillableMinuteAllocator.allocate(
-                    durationSeconds: cluster.map(\.actualSeconds),
-                    totalBillableMinutes: totalBillableMinutes
+            func flushChain() {
+                applyMinimumWindow(to: chain, windowMinutes: groupKey.windowMinutes, result: &result)
+                chain.removeAll(keepingCapacity: true)
+                chainWindowEnd = nil
+            }
+
+            for request in sorted {
+                let requestWindowEnd = standaloneWindowEnd(
+                    for: request,
+                    windowMinutes: groupKey.windowMinutes
                 )
 
-                for (request, allocatedMinutes) in zip(cluster, allocations) {
-                    result[request.sessionId] = allocatedMinutes
-                }
-
-                cluster.removeAll(keepingCapacity: true)
-                clusterEnd = nil
-            }
-
-            // window planlama clock-time (wall) yerine
-            // advances in absolute duration (`TimeInterval` = seconds) —
-            // intentional behaviour (the billing minimum is "1 hour of
-            // work" = 3600 s, not calendar hours). Working duration
-            // stays constant even across DST transitions. Türkiye
-            // removed DST in 2016; this comment signals the intent in
-            // case a future contributor wants calendar-based semantics.
-            for request in sorted {
-                if cluster.isEmpty {
-                    cluster = [request]
-                    clusterEnd = request.startedAt.addingTimeInterval(TimeInterval(groupKey.windowMinutes * 60))
-                } else if let activeEnd = clusterEnd, request.startedAt < activeEnd {
-                    cluster.append(request)
+                if let activeWindowEnd = chainWindowEnd,
+                   request.startedAt < activeWindowEnd {
+                    chain.append(request)
+                    if requestWindowEnd > activeWindowEnd {
+                        chainWindowEnd = requestWindowEnd
+                    }
                 } else {
-                    flushCluster()
-                    cluster = [request]
-                    clusterEnd = request.startedAt.addingTimeInterval(TimeInterval(groupKey.windowMinutes * 60))
-                }
-
-                while let activeEnd = clusterEnd, request.endedAt > activeEnd {
-                    clusterEnd = activeEnd.addingTimeInterval(TimeInterval(groupKey.windowMinutes * 60))
+                    flushChain()
+                    chain = [request]
+                    chainWindowEnd = requestWindowEnd
                 }
             }
 
-            flushCluster()
+            flushChain()
         }
 
         return result
+    }
+
+    private static func standaloneWindowEnd(
+        for request: BillingTimelineWindowRequest,
+        windowMinutes: Int
+    ) -> Date {
+        let occupiedSeconds = MinimumWindowApplier.applySeconds(
+            actualSeconds: request.actualSeconds,
+            windowMinutes: windowMinutes
+        )
+        return request.startedAt.addingTimeInterval(TimeInterval(occupiedSeconds))
+    }
+
+    /// Treats every record in a statement/currency group as a single duration
+    /// total and puts the complete rounding difference on its final record.
+    static func planReport(
+        requests: [BillingTimelineWindowRequest]
+    ) -> [String: Int] {
+        let grouped = Dictionary(grouping: requests) { $0.groupKey }
+        var result: [String: Int] = [:]
+
+        for (groupKey, groupRequests) in grouped {
+            let sorted = sortedRequests(groupRequests)
+            applyMinimumWindow(to: sorted, windowMinutes: groupKey.windowMinutes, result: &result)
+        }
+
+        return result
+    }
+
+    private static func applyMinimumWindow(
+        to requests: [BillingTimelineWindowRequest],
+        windowMinutes: Int,
+        result: inout [String: Int]
+    ) {
+        guard !requests.isEmpty else { return }
+
+        let actualSeconds = requests.map { max(0, $0.actualSeconds) }
+        let actualTotal = actualSeconds.reduce(0, +)
+        let roundedTotal = MinimumWindowApplier.applySeconds(
+            actualSeconds: actualTotal,
+            windowMinutes: windowMinutes
+        )
+
+        for (request, seconds) in zip(requests, actualSeconds) {
+            result[request.sessionId] = seconds
+        }
+        if let last = requests.last {
+            result[last.sessionId, default: 0] += roundedTotal - actualTotal
+        }
+    }
+
+    private static func sortedRequests(
+        _ requests: [BillingTimelineWindowRequest]
+    ) -> [BillingTimelineWindowRequest] {
+        requests.sorted {
+            if $0.startedAt != $1.startedAt {
+                return $0.startedAt < $1.startedAt
+            }
+            if $0.endedAt != $1.endedAt {
+                return $0.endedAt < $1.endedAt
+            }
+            return $0.sessionId < $1.sessionId
+        }
     }
 }

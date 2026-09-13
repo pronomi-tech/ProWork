@@ -94,7 +94,7 @@ final class ProjectReportViewModel: ObservableObject {
                     projectId: first.projectId,
                     projectName: first.projectName ?? noProjectLabel,
                     actualSeconds: lines.reduce(0) { $0 + $1.actualSeconds },
-                    billableMinutes: lines.reduce(0) { $0 + $1.billableMinutes },
+                    billableSeconds: lines.reduce(0) { $0 + $1.billableSeconds },
                     subtotalMinor: lines.reduce(0) { $0 + $1.amountMinor },
                     vatMinor: lines.reduce(0) { $0 + $1.vatMinor },
                     totalMinor: lines.reduce(0) { $0 + $1.totalMinor },

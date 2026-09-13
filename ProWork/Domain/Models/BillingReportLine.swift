@@ -29,7 +29,11 @@ struct BillingReportLine: Identifiable, Hashable {
     var timeType: TimeType
     var segmentIndex: Int
     var actualSeconds: Int
-    var billableMinutes: Int
+    /// Authoritative priced duration. Minute precision is retained only as a
+    /// compatibility projection for databases and integrations created before
+    /// second-precision billing.
+    var billableSeconds: Int
+    var billableMinutes: Int { (max(0, billableSeconds) + 59) / 60 }
     var unitPriceMinor: Int
     var fixedFeeMinor: Int?
     var amountMinor: Int
@@ -79,6 +83,7 @@ struct BillingReportLine: Identifiable, Hashable {
         segmentIndex: Int = 0,
         actualSeconds: Int = 0,
         billableMinutes: Int = 0,
+        billableSeconds: Int? = nil,
         unitPriceMinor: Int = 0,
         fixedFeeMinor: Int? = nil,
         amountMinor: Int = 0,
@@ -120,7 +125,7 @@ struct BillingReportLine: Identifiable, Hashable {
         self.timeType = timeType
         self.segmentIndex = segmentIndex
         self.actualSeconds = actualSeconds
-        self.billableMinutes = billableMinutes
+        self.billableSeconds = max(0, billableSeconds ?? (billableMinutes * 60))
         self.unitPriceMinor = unitPriceMinor
         // self.fixedFeeMinor / self.isFixedFee assigned below after
         // XOR normalisation.

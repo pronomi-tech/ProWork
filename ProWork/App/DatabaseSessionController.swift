@@ -354,30 +354,6 @@ final class DatabaseSessionController: ObservableObject {
             containerDirectoryURL: location.containerDirectoryURL
         )
 
-        // Migration001 hardcoded religious holidays for 2024-2030.
-        // Run the generator to fill in 2031+ so there's no gap. It
-        // doesn't touch existing rows, so it's safe to call on every launch.
-        // a silent failure here meant Islamic holiday
-        // calendar data could be missing while billing assumed the full
-        // range was populated (overtime/holiday line rates would then be
-        // computed against a non-holiday classification). Still don't
-        // abort session bootstrap on this — but surface as a toast so the
-        // user notices and an admin can investigate.
-        do {
-            try IslamicHolidayBootstrap().ensurePopulated(
-                currentYear: AppCalendar.istanbul.component(.year, from: Date())
-            )
-        } catch {
-            ProWorkLog.app.error("Islamic holiday bootstrap failed: \(error.localizedDescription, privacy: .public)")
-            let message = ProWorkLocalizer.shared.string(
-                "app.error.holidayBootstrap",
-                defaultValue: "Dini bayram takvimi yüklenemedi; tatil hesapları eksik olabilir."
-            )
-            Task { @MainActor in
-                ProWorkToastStore.shared.show(message, style: .warning)
-            }
-        }
-
         let resolvedLocation: ResolvedDatabaseLocation
         if persistSelection {
             resolvedLocation = try locationStore.saveActiveDatabase(url: location.databaseURL)

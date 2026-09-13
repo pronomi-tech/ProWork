@@ -55,6 +55,13 @@ enum DatabaseMigrator {
 
             ProWorkLog.database.info("Running migration \(migration.id, privacy: .public): \(migration.name, privacy: .public)")
 
+            // SQLite cannot change `foreign_keys` while a transaction is open.
+            // Table-rebuild migrations must opt in explicitly so parent tables
+            // can be replaced without firing their ON DELETE actions.
+            if migration.requiresForeignKeysDisabled {
+                try database.execute("PRAGMA foreign_keys = OFF;")
+            }
+
             // Each migration runs in its own atomic transaction; if any
             // step fails the schema is not left half-built. Migrations
             // do not need to manage BEGIN/COMMIT themselves (nested
@@ -71,11 +78,21 @@ enum DatabaseMigrator {
             do {
                 try database.execute("PRAGMA defer_foreign_keys = ON;")
                 try migration.up(database)
+                if migration.requiresForeignKeysDisabled {
+                    try assertForeignKeyIntegrity(database)
+                }
                 try insertAppliedMigration(database, migration: migration)
                 try database.execute("COMMIT;")
             } catch {
                 try? database.execute("ROLLBACK;")
+                if migration.requiresForeignKeysDisabled {
+                    try? database.execute("PRAGMA foreign_keys = ON;")
+                }
                 throw error
+            }
+
+            if migration.requiresForeignKeysDisabled {
+                try database.execute("PRAGMA foreign_keys = ON;")
             }
 
             ProWorkLog.database.info("Migration \(migration.id, privacy: .public) completed")
@@ -85,7 +102,8 @@ enum DatabaseMigrator {
     private static var allMigrations: [Migration] {
         [
             Migration001InitialSchema(),
-            Migration002Consolidated()
+            Migration002(),
+            Migration003()
         ]
     }
 
@@ -125,6 +143,17 @@ enum DatabaseMigrator {
             statement.bindInt(migration.id, at: 1)
             statement.bindText(migration.name, at: 2)
             statement.bindText(DateFormatter.proWorkSQLite.string(from: Date()), at: 3)
+        }
+    }
+
+    private static func assertForeignKeyIntegrity(_ database: AppDatabase) throws {
+        let violations = try database.query("PRAGMA foreign_key_check;") { statement in
+            statement.text(at: 0) ?? "unknown"
+        }
+        guard violations.isEmpty else {
+            throw DatabaseError.executionFailed(
+                message: "Foreign-key violations after migration: \(violations.joined(separator: ", "))"
+            )
         }
     }
 }

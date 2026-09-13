@@ -34,9 +34,15 @@ struct BillingDraftPreview: Hashable {
     }
 }
 
+enum BillingDraftSourceScope: Hashable {
+    case customer(String)
+    case folder(folderId: String, includesDescendants: Bool)
+}
+
 enum BillingRunLifecycleError: LocalizedError {
     case runNotFound
     case customerNotFound
+    case folderNotFound
     case noBillableLinesForPeriod
     case conflictingRunExists(String)
     case draftCannotBeFinalizedWithoutLines
@@ -55,6 +61,8 @@ enum BillingRunLifecycleError: LocalizedError {
             return localized("billingRuns.error.runNotFound", defaultValue: "Hizmet dökümü kaydı bulunamadı.")
         case .customerNotFound:
             return localized("billingRuns.error.customerNotFound", defaultValue: "Müşteri kaydı bulunamadı.")
+        case .folderNotFound:
+            return localized("billingRuns.error.folderNotFound", defaultValue: "Çalışma klasörü bulunamadı.")
         case .noBillableLinesForPeriod:
             return localized("billingRuns.error.noBillableLines", defaultValue: "Seçilen dönem için hesap satırı bulunamadı. Boş kayıt oluşturulmadı.")
         case .conflictingRunExists(let title):
@@ -81,6 +89,7 @@ final class BillingRunLifecycleService {
     private let lineRepository: BillingReportLineRepository
     private let paymentRepository: PaymentRepository
     private let customerRepository: CustomerRepository
+    private let workFolderRepository: WorkFolderRepository
     private let companyProfileRepository: CompanyProfileRepository
     private let computationService: BillingComputationService
     private let exportService: BillingRunExportService
@@ -101,6 +110,7 @@ final class BillingRunLifecycleService {
         lineRepository: BillingReportLineRepository? = nil,
         paymentRepository: PaymentRepository? = nil,
         customerRepository: CustomerRepository? = nil,
+        workFolderRepository: WorkFolderRepository? = nil,
         companyProfileRepository: CompanyProfileRepository? = nil,
         computationService: BillingComputationService? = nil,
         exportService: BillingRunExportService? = nil,
@@ -116,6 +126,7 @@ final class BillingRunLifecycleService {
         self.lineRepository = lineRepository ?? BillingReportLineRepository()
         self.paymentRepository = paymentRepository ?? PaymentRepository()
         self.customerRepository = customerRepository ?? CustomerRepository()
+        self.workFolderRepository = workFolderRepository ?? WorkFolderRepository()
         self.companyProfileRepository = companyProfileRepository ?? CompanyProfileRepository()
         self.computationService = computationService ?? BillingComputationService()
         self.exportService = exportService ?? BillingRunExportService()
@@ -137,11 +148,28 @@ final class BillingRunLifecycleService {
             lineRepository: services.billingReportLineRepository,
             paymentRepository: services.paymentRepository,
             customerRepository: services.customerRepository,
+            workFolderRepository: services.workFolderRepository,
             companyProfileRepository: services.companyProfileRepository,
+            computationService: BillingComputationService(
+                organizationRepository: services.organizationRepository,
+                customerRepository: services.customerRepository,
+                projectRepository: services.projectRepository,
+                categoryRepository: services.categoryRepository,
+                todoRepository: services.todoRepository,
+                sessionRepository: services.todoTimeSessionRepository,
+                priceListRepository: services.priceListRepository,
+                priceListRowRepository: services.priceListRowRepository,
+                billingRuleRepository: services.billingRuleRepository,
+                holidayRepository: services.holidayRepository,
+                vatRateRepository: services.vatRateRepository,
+                overrideRepository: services.todoBillingOverrideRepository,
+                clock: services.clock
+            ),
             currencyResolver: services.pricingCurrencyResolver,
             documentSequenceRepository: services.billingDocumentSequenceRepository,
             vatRateRepository: services.vatRateRepository,
-            snapshotRepository: services.billingReportRunSnapshotRepository
+            snapshotRepository: services.billingReportRunSnapshotRepository,
+            clock: services.clock
         )
     }
 
@@ -189,13 +217,27 @@ final class BillingRunLifecycleService {
             periodEnd: periodEnd
         )
 
-        let computedLines = try computeDraftLines(
+        var computedLines = try computeDraftLines(
             customerId: customerId,
             periodStart: normalizedStart,
             periodEnd: normalizedEnd,
             kind: .draftPreview
         )
         let selectionKeys = Set(selectedLineKeys ?? computedLines.map(\.selectionKey))
+        if selectedLineKeys != nil {
+            let selectedSessionIds = Set(
+                computedLines
+                    .filter { selectionKeys.contains($0.selectionKey) }
+                    .compactMap(\.sessionId)
+            )
+            computedLines = try computeDraftLines(
+                customerId: customerId,
+                periodStart: normalizedStart,
+                periodEnd: normalizedEnd,
+                kind: .draftPreview,
+                reportSessionIds: selectedSessionIds
+            )
+        }
         let assignments = try lineRepository.fetchSelectionAssignments(
             organizationId: organizationId,
             customerId: customerId
@@ -272,6 +314,55 @@ final class BillingRunLifecycleService {
         }
     }
 
+    func createDrafts(
+        scope: BillingDraftSourceScope,
+        periodStart: Date,
+        periodEnd: Date,
+        title: String? = nil,
+        selectedLineKeys: [String]
+    ) throws -> [BillingRunBundle] {
+        switch scope {
+        case .customer(let customerId):
+            return try createDrafts(
+                customerId: customerId,
+                periodStart: periodStart,
+                periodEnd: periodEnd,
+                title: title,
+                selectedLineKeys: selectedLineKeys
+            )
+        case .folder(let folderId, let includesDescendants):
+            let folderIds = try resolvedFolderIds(
+                folderId: folderId,
+                includesDescendants: includesDescendants
+            )
+            let lines = try computationService.computePeriod(
+                folderIds: folderIds,
+                from: AppCalendar.istanbul.startOfDay(for: periodStart),
+                to: Self.endOfDay(for: periodEnd),
+                kind: .draftPreview
+            )
+            let selectedKeys = Set(selectedLineKeys)
+            let selectedLines = lines.filter { selectedKeys.contains($0.selectionKey) }
+            let keysByCustomer = Dictionary(grouping: selectedLines, by: \BillingReportLine.customerId)
+
+            guard !keysByCustomer.isEmpty else {
+                throw BillingRunLifecycleError.noBillableLinesForPeriod
+            }
+
+            return try runRepository.inWriteTransaction {
+                try keysByCustomer.keys.sorted().flatMap { customerId in
+                    try createDrafts(
+                        customerId: customerId,
+                        periodStart: periodStart,
+                        periodEnd: periodEnd,
+                        title: title,
+                        selectedLineKeys: keysByCustomer[customerId, default: []].map(\.selectionKey)
+                    )
+                }
+            }
+        }
+    }
+
     /// Important: — this "load" method also writes when a
     ///   finalized run is missing its `dueDate`. The write back-fills a
     ///   legacy invariant (every finalized run has a due date) that pre-
@@ -338,13 +429,27 @@ final class BillingRunLifecycleService {
               let endDate = Self.dayFormatter.date(from: run.periodEnd) else {
             throw BillingRunLifecycleError.runNotFound
         }
-        let computedLines = try computeDraftLines(
+        var computedLines = try computeDraftLines(
             customerId: run.customerId,
             periodStart: startDate,
             periodEnd: endDate,
             kind: run.status == .final ? .final(id: run.id) : .draft(id: run.id)
         )
         let selectionKeys = draftSelectionKeys ?? Set(computedLines.map(\.selectionKey))
+        if draftSelectionKeys != nil {
+            let selectedSessionIds = Set(
+                computedLines
+                    .filter { selectionKeys.contains($0.selectionKey) }
+                    .compactMap(\.sessionId)
+            )
+            computedLines = try computeDraftLines(
+                customerId: run.customerId,
+                periodStart: startDate,
+                periodEnd: endDate,
+                kind: run.status == .final ? .final(id: run.id) : .draft(id: run.id),
+                reportSessionIds: selectedSessionIds
+            )
+        }
 
         if draftSelectionKeys != nil {
             let assignments = try lineRepository.fetchSelectionAssignments(
@@ -551,6 +656,64 @@ final class BillingRunLifecycleService {
         return BillingDraftPreview(
             lines: previewLines
         )
+    }
+
+    func previewDraft(
+        scope: BillingDraftSourceScope,
+        periodStart: Date,
+        periodEnd: Date
+    ) throws -> BillingDraftPreview {
+        switch scope {
+        case .customer(let customerId):
+            return try previewDraft(
+                customerId: customerId,
+                periodStart: periodStart,
+                periodEnd: periodEnd
+            )
+        case .folder(let folderId, let includesDescendants):
+            let folderIds = try resolvedFolderIds(
+                folderId: folderId,
+                includesDescendants: includesDescendants
+            )
+            let lines = try computationService.computePeriod(
+                folderIds: folderIds,
+                from: AppCalendar.istanbul.startOfDay(for: periodStart),
+                to: Self.endOfDay(for: periodEnd),
+                kind: .livePreview
+            )
+            let customerIds = Set(lines.map(\.customerId))
+            var assignmentByKey: [String: String] = [:]
+            for customerId in customerIds {
+                let assignments = try lineRepository.fetchSelectionAssignments(
+                    organizationId: organizationId,
+                    customerId: customerId
+                )
+                for assignment in assignments where assignmentByKey[assignment.selectionKey] == nil {
+                    assignmentByKey[assignment.selectionKey] = assignment.runLabel
+                }
+            }
+            return BillingDraftPreview(
+                lines: lines.map { line in
+                    BillingDraftPreviewLine(
+                        line: line,
+                        blockingRunLabel: assignmentByKey[line.selectionKey]
+                            ?? (line.endedAt == nil ? ProWorkLocalizer.shared.string("billingRuns.blocking.openSession", defaultValue: "Açık oturum") : nil)
+                    )
+                }
+            )
+        }
+    }
+
+    private func resolvedFolderIds(
+        folderId: String,
+        includesDescendants: Bool
+    ) throws -> Set<String> {
+        guard try workFolderRepository.fetch(id: folderId) != nil else {
+            throw BillingRunLifecycleError.folderNotFound
+        }
+        guard includesDescendants else { return [folderId] }
+        let folders = try workFolderRepository.fetchAll(organizationId: organizationId)
+        return WorkFolderHierarchy.descendantIds(of: folderId, in: folders)
     }
 
     /// Payment write + recalculatePayments must be atomic. Without the
@@ -861,13 +1024,15 @@ final class BillingRunLifecycleService {
         customerId: String,
         periodStart: Date,
         periodEnd: Date,
-        kind: BillingRunKind
+        kind: BillingRunKind,
+        reportSessionIds: Set<String>? = nil
     ) throws -> [BillingReportLine] {
         try computationService.computePeriod(
             customerId: customerId,
             from: periodStart,
             to: Self.endOfDay(for: periodEnd),
-            kind: kind
+            kind: kind,
+            reportSessionIds: reportSessionIds
         )
     }
 

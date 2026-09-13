@@ -16,6 +16,8 @@ struct TodoTimeSession: Identifiable, Hashable {
     var endStatusId: String?
     var note: String?
     var isManual: Bool
+    var billingTimeTypeOverride: TimeType?
+    var billingTimeTypeOverrideReason: String?
 
     // Tenant + audit + sync
     var organizationId: String
@@ -41,6 +43,8 @@ struct TodoTimeSession: Identifiable, Hashable {
         endStatusId: String? = nil,
         note: String? = nil,
         isManual: Bool = false,
+        billingTimeTypeOverride: TimeType? = nil,
+        billingTimeTypeOverrideReason: String? = nil,
         organizationId: String = BuiltInOrganizationId.default,
         createdByUserId: String? = BuiltInUserId.defaultOwner,
         updatedByUserId: String? = BuiltInUserId.defaultOwner,
@@ -63,6 +67,8 @@ struct TodoTimeSession: Identifiable, Hashable {
         self.endStatusId = endStatusId
         self.note = note
         self.isManual = isManual
+        self.billingTimeTypeOverride = billingTimeTypeOverride
+        self.billingTimeTypeOverrideReason = billingTimeTypeOverrideReason
         self.organizationId = organizationId
         self.createdByUserId = createdByUserId
         self.updatedByUserId = updatedByUserId
@@ -104,6 +110,8 @@ extension TodoTimeSession {
         endStatusId: String? = nil,
         note: String? = nil,
         isManual: Bool = false,
+        billingTimeTypeOverride: TimeType? = nil,
+        billingTimeTypeOverrideReason: String? = nil,
         meta: RecordMetadata
     ) {
         self.init(
@@ -118,6 +126,8 @@ extension TodoTimeSession {
             endStatusId: endStatusId,
             note: note,
             isManual: isManual,
+            billingTimeTypeOverride: billingTimeTypeOverride,
+            billingTimeTypeOverrideReason: billingTimeTypeOverrideReason,
             organizationId: meta.organizationId,
             createdByUserId: meta.createdByUserId,
             updatedByUserId: meta.updatedByUserId,

@@ -20,6 +20,7 @@ struct TodoFormView: View {
     @State private var id: String = UUID().uuidString
     @State private var customerId: String = ""
     @State private var projectId: String = ""
+    @State private var folderId: String = ""
     @State private var categoryId: String = ""
     @State private var statusId: String = BuiltInTodoStatusId.waiting
 
@@ -58,6 +59,7 @@ struct TodoFormView: View {
     let mode: TodoFormMode
     let customers: [Customer]
     let projects: [ProjectListItem]
+    let folders: [WorkFolder]
     let categories: [TaskCategory]
     let statuses: [TodoStatus]
     let onSave: (Todo) -> Void
@@ -118,6 +120,26 @@ struct TodoFormView: View {
                 id: project.id,
                 title: project.name,
                 subtitle: project.customerName,
+                systemColorName: nil
+            )
+        }
+    }
+
+    private var folderOptions: [TodoFormSelectOption] {
+        let scopeProjectId = projectId.isEmpty ? nil : projectId
+        let flattened = WorkFolderHierarchy.flattened(folders, projectId: scopeProjectId)
+        return [
+            TodoFormSelectOption(
+                id: "",
+                title: settingsStore.localized("todoForm.folder.none", defaultValue: "Klasör yok"),
+                subtitle: nil,
+                systemColorName: nil
+            )
+        ] + flattened.map { item in
+            TodoFormSelectOption(
+                id: item.id,
+                title: item.path,
+                subtitle: nil,
                 systemColorName: nil
             )
         }
@@ -222,9 +244,11 @@ struct TodoFormView: View {
             if !filteredProjects.contains(where: { $0.id == projectId }) {
                 projectId = ""
             }
+            ensureValidFolderSelection()
             refreshSuggestedBillingOverrideCurrency()
         }
         .onChange(of: projectId) { _, _ in
+            ensureValidFolderSelection()
             refreshSuggestedBillingOverrideCurrency()
         }
         .onChange(of: hasBillingOverride) { _, enabled in
@@ -302,6 +326,23 @@ struct TodoFormView: View {
                     matchesSearch: { item, searchText in
                         item.title.localizedCaseInsensitiveContains(searchText) ||
                         (item.subtitle?.localizedCaseInsensitiveContains(searchText) ?? false)
+                    }
+                )
+                .frame(width: formW(360))
+            }
+
+            formRow(label: settingsStore.localized("todoForm.folder", defaultValue: "Klasör"), alignment: .center) {
+                ProWorkSearchPickerField(
+                    placeholder: settingsStore.localized("todoForm.folder.placeholder", defaultValue: "Klasör seçin"),
+                    items: folderOptions,
+                    selectedId: $folderId,
+                    showsSearch: folderOptions.count > 8,
+                    systemImage: "folder",
+                    itemTitle: { $0.title },
+                    itemSubtitle: { $0.subtitle },
+                    itemColor: { _ in nil },
+                    matchesSearch: { item, searchText in
+                        item.title.localizedCaseInsensitiveContains(searchText)
                     }
                 )
                 .frame(width: formW(360))
@@ -641,6 +682,7 @@ struct TodoFormView: View {
         id = todo.id
         customerId = todo.customerId ?? ""
         projectId = todo.projectId ?? ""
+        folderId = todo.folderId ?? ""
         categoryId = todo.categoryId
         statusId = todo.statusId
 
@@ -732,6 +774,7 @@ struct TodoFormView: View {
             id: id,
             customerId: customerId.isEmpty ? nil : customerId,
             projectId: projectId.isEmpty ? nil : projectId,
+            folderId: folderId.isEmpty ? nil : folderId,
             categoryId: categoryId,
             title: cleanTitle,
             description: cleanDescription.isEmpty ? nil : cleanDescription,
@@ -760,6 +803,14 @@ struct TodoFormView: View {
                 persistBillingOverride(for: todo.id)
                 onSave(todo)
             }
+        }
+    }
+
+    private func ensureValidFolderSelection() {
+        guard !folderId.isEmpty else { return }
+        let scopeProjectId = projectId.isEmpty ? nil : projectId
+        if !folders.contains(where: { $0.id == folderId && $0.projectId == scopeProjectId }) {
+            folderId = ""
         }
     }
 

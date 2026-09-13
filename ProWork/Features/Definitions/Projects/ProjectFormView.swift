@@ -52,11 +52,10 @@ struct ProjectFormView: View {
     }
 
     private var billingWindowModeOptions: [SearchPickerOption] {
-        [
-            SearchPickerOption(id: "", title: settingsStore.localized("projects.form.billingWindow.inheritOrganization", defaultValue: "Organizasyon Ayarı Geçerli")),
-            SearchPickerOption(id: BillingWindowMode.timeline.rawValue, title: BillingWindowMode.timeline.title),
-            SearchPickerOption(id: BillingWindowMode.session.rawValue, title: BillingWindowMode.session.title)
-        ]
+        [SearchPickerOption(id: "", title: settingsStore.localized("projects.form.billingWindow.inheritOrganization", defaultValue: "Organizasyon Ayarı Geçerli"))] +
+        BillingWindowMode.allCases.map { mode in
+            SearchPickerOption(id: mode.rawValue, title: mode.title)
+        }
     }
 
     private var customerOptions: [SearchPickerOption] {

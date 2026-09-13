@@ -63,6 +63,35 @@ final class Migration001SeedTests: XCTestCase {
         XCTAssertFalse(columns.contains("defaultMemberAccess"), "defaultMemberAccess kolonu artık şemada olmamalı")
     }
 
+    func test_billingWindowChecks_acceptReportMode_andKeepForeignKeysEnabled() throws {
+        let schemas = try AppDatabase.shared.query("""
+        SELECT name, sql
+        FROM sqlite_master
+        WHERE type = 'table' AND name IN ('organizations', 'projects')
+        ORDER BY name;
+        """) { statement in
+            (statement.text(at: 0) ?? "", statement.text(at: 1) ?? "")
+        }
+
+        XCTAssertEqual(schemas.map(\.0), ["organizations", "projects"])
+        XCTAssertTrue(schemas.allSatisfy { $0.1.contains("'report'") })
+
+        let foreignKeysEnabled = try AppDatabase.shared.query("PRAGMA foreign_keys;") { statement in
+            statement.int(at: 0)
+        }
+        XCTAssertEqual(foreignKeysEnabled, [1])
+    }
+
+    func test_billingReportLines_hasSecondPrecisionColumn() throws {
+        let columns = try AppDatabase.shared.query(
+            "PRAGMA table_info(billing_report_lines);"
+        ) { statement in
+            statement.text(at: 1) ?? ""
+        }
+
+        XCTAssertTrue(columns.contains("billableSeconds"))
+    }
+
     // MARK: - KDV oranları
 
     func test_seed_createsTurkishVatRates() throws {
@@ -79,6 +108,9 @@ final class Migration001SeedTests: XCTestCase {
     func test_seed_createsTurkishHolidays() throws {
         let holidays = try HolidayRepository().fetchAll(organizationId: BuiltInOrganizationId.default)
         XCTAssertGreaterThan(holidays.count, 0, "Türkiye resmi tatilleri seed edilmeli")
+        XCTAssertEqual(holidays.count, 119)
+        XCTAssertTrue(holidays.contains { $0.dateString == "2024-01-01" && $0.name == "Yılbaşı" })
+        XCTAssertTrue(holidays.contains { $0.dateString == "2030-10-29" && $0.name == "Cumhuriyet Bayramı" })
     }
 
     // MARK: - Şirket profili / mesai kuralı

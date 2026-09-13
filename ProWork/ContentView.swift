@@ -9,21 +9,18 @@ struct ContentView: View {
     @EnvironmentObject private var settingsStore: AppSettingsStore
 
     @State private var selectedSection: AppSection? = .home
-    /// Section to return to after leaving Settings/Definitions full-screen mode.
+    /// Section to return to after leaving Definitions full-screen mode.
     /// optional so the "no previous section yet" state
-    /// (cold launch, or the user opening Settings before navigating
+    /// (cold launch, or the user opening Definitions before navigating
     /// anywhere) is distinguishable from "the user was on Home".
-    /// `closeSettings()/closeDefinitions()` fall back to `.home` only
+    /// `closeDefinitions()` falls back to `.home` only
     /// when `previousSection == nil`.
     @State private var previousSection: AppSection? = nil
-    @State private var isSettingsOpen: Bool = false
     @State private var isDefinitionsOpen: Bool = false
 
     var body: some View {
         Group {
-            if isSettingsOpen {
-                SettingsView(onClose: closeSettings)
-            } else if isDefinitionsOpen {
+            if isDefinitionsOpen {
                 DefinitionsView(onClose: closeDefinitions)
             } else {
                 NavigationSplitView {
@@ -44,19 +41,12 @@ struct ContentView: View {
             minHeight: appMinHeight
         )
         .onChange(of: selectedSection) { _, newValue in
-            if newValue == .settings {
-                isSettingsOpen = true
-            } else if newValue == .definitions {
+            if newValue == .definitions {
                 isDefinitionsOpen = true
             } else if let newValue {
                 previousSection = newValue
             }
         }
-    }
-
-    private func closeSettings() {
-        isSettingsOpen = false
-        selectedSection = previousSection ?? .home
     }
 
     private func closeDefinitions() {
@@ -149,9 +139,6 @@ struct ContentView: View {
             // version; this branch is only visible during the transition.
             Color.clear
 
-        case .settings:
-            SettingsView()
-
         case nil:
             ContentUnavailableView(
                 settingsStore.localized("app.nav.placeholder.title", defaultValue: "Bölüm seçin"),
@@ -210,7 +197,7 @@ struct ContentView: View {
     }
 
     private var bottomListHeight: CGFloat {
-        ProWorkLayout.scaled(124, using: settingsStore)
+        ProWorkLayout.scaled(88, using: settingsStore)
     }
 }
 
@@ -221,7 +208,6 @@ private enum AppSection: String, CaseIterable, Identifiable {
     case billing
     case reports
     case definitions
-    case settings
 
     var id: String {
         rawValue
@@ -238,10 +224,7 @@ private enum AppSection: String, CaseIterable, Identifiable {
     }
 
     static var bottomSections: [AppSection] {
-        [
-            .definitions,
-            .settings
-        ]
+        [.definitions]
     }
 
     func title(using settingsStore: AppSettingsStore) -> String {
@@ -258,8 +241,6 @@ private enum AppSection: String, CaseIterable, Identifiable {
             return settingsStore.localized("app.section.reports", defaultValue: "Raporlar")
         case .definitions:
             return settingsStore.localized("app.section.definitions", defaultValue: "Tanımlar")
-        case .settings:
-            return settingsStore.localized("app.section.settings", defaultValue: "Ayarlar")
         }
     }
 
@@ -277,8 +258,6 @@ private enum AppSection: String, CaseIterable, Identifiable {
             return "chart.bar"
         case .definitions:
             return "tray.full"
-        case .settings:
-            return "gearshape"
         }
     }
 }

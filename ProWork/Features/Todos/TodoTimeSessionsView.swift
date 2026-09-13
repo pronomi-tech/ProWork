@@ -48,15 +48,18 @@ struct TodoTimeSessionsView: View {
                 todos: [todo],
                 customers: viewModel.customers,
                 projects: viewModel.projects,
+                folders: viewModel.folders,
                 categories: viewModel.categories,
                 statuses: viewModel.statuses,
                 fixedTodo: todo
-            ) { _, todoId, startedAt, endedAt, note, _ in
+            ) { _, todoId, startedAt, endedAt, note, _, timeTypeOverride, overrideReason in
                 if viewModel.createManualSession(
                     todoId: todoId,
                     startedAt: startedAt,
                     endedAt: endedAt,
-                    note: note
+                    note: note,
+                    billingTimeTypeOverride: timeTypeOverride,
+                    billingTimeTypeOverrideReason: overrideReason
                 ) {
                     isShowingCreateForm = false
                 }
@@ -68,10 +71,11 @@ struct TodoTimeSessionsView: View {
                 todos: [todo],
                 customers: viewModel.customers,
                 projects: viewModel.projects,
+                folders: viewModel.folders,
                 categories: viewModel.categories,
                 statuses: viewModel.statuses,
                 fixedTodo: todo
-            ) { sessionId, todoId, startedAt, endedAt, note, isManual in
+            ) { sessionId, todoId, startedAt, endedAt, note, isManual, timeTypeOverride, overrideReason in
                 guard let sessionId else {
                     return
                 }
@@ -82,7 +86,9 @@ struct TodoTimeSessionsView: View {
                     startedAt: startedAt,
                     endedAt: endedAt,
                     note: note,
-                    isManual: isManual
+                    isManual: isManual,
+                    billingTimeTypeOverride: timeTypeOverride,
+                    billingTimeTypeOverrideReason: overrideReason
                 ) {
                     editingSession = nil
                 }
@@ -96,7 +102,7 @@ struct TodoTimeSessionsView: View {
             HStack(spacing: ProWorkLayout.scaled(12, using: settingsStore)) {
                 summaryCard(
                     title: settingsStore.localized("workSessions.summary.totalTime", defaultValue: "Toplam Süre"),
-                    value: ProWorkFormatters.durationHHmm(totalSessionSeconds),
+                    value: ProWorkFormatters.durationHHmmss(totalSessionSeconds),
                     systemImage: "clock"
                 )
 
@@ -202,7 +208,7 @@ struct TodoTimeSessionsView: View {
                 .foregroundStyle(session.endedAt == nil ? ProWorkColors.activeHighlight : .secondary)
                 .frame(width: ProWorkLayout.scaled(150, using: settingsStore), alignment: .leading)
 
-            Text(ProWorkFormatters.durationHHmm(durationSeconds(session)))
+            Text(ProWorkFormatters.durationHHmmss(durationSeconds(session)))
                 .proWorkTextStyle(.caption)
                 .monospacedDigit()
                 .frame(width: ProWorkLayout.scaled(80, using: settingsStore), alignment: .trailing)
@@ -210,10 +216,20 @@ struct TodoTimeSessionsView: View {
             sourceBadge(session)
                 .frame(width: ProWorkLayout.scaled(80, using: settingsStore), alignment: .leading)
 
-            Text(session.note ?? "")
-                .proWorkTextStyle(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: ProWorkLayout.scaled(2, using: settingsStore)) {
+                if let timeType = session.billingTimeTypeOverride {
+                    Text(timeType.title)
+                        .proWorkTextStyle(.caption2, weight: .medium)
+                        .foregroundStyle(.blue)
+                        .lineLimit(1)
+                        .help(session.billingTimeTypeOverrideReason ?? settingsStore.localized("workSessions.form.billingTimeType", defaultValue: "Mesai Değerlendirmesi"))
+                }
+
+                Text(session.note ?? "")
+                    .proWorkTextStyle(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             rowActions(session)
@@ -375,6 +391,8 @@ struct TodoTimeSessionsView: View {
             durationSeconds: session.durationSeconds,
             isManual: session.isManual,
             note: session.note,
+            billingTimeTypeOverride: session.billingTimeTypeOverride,
+            billingTimeTypeOverrideReason: session.billingTimeTypeOverrideReason,
 
             createdAt: session.createdAt,
             updatedAt: session.updatedAt

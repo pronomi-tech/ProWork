@@ -82,6 +82,60 @@ final class BillingCalculatorTests: XCTestCase {
         XCTAssertEqual(line.totalMinor, 180_000)
     }
 
+    func test_withoutMinimumWindow_pricesExactSeconds_withoutMinuteRounding() {
+        let start = date(2026, 9, 11, 9, 2, 0)
+        let end = date(2026, 9, 11, 10, 48, 28)
+        let category = TaskCategory(id: "dev", name: "Geliştirme")
+        let customer = Customer(
+            id: "C1",
+            name: "ABC",
+            defaultServiceType: "remote",
+            defaultMinBillingMinutes: 0
+        )
+        let todo = Todo(customerId: customer.id, categoryId: category.id, title: "X", isBillable: true)
+        let session = TodoTimeSession(
+            todoId: todo.id,
+            startedAt: start,
+            endedAt: end,
+            durationSeconds: 6_388
+        )
+        let list = PriceList(id: "L", ownerType: .customer, ownerId: customer.id, name: "X", currency: "TRY")
+        let row = PriceListRow(
+            priceListId: list.id,
+            serviceType: .remote,
+            timeType: .regular,
+            unitPriceMinor: 220_000
+        )
+        let context = PriceResolutionContext(
+            todoOverride: nil,
+            projectPriceLists: [],
+            customerPriceLists: [list],
+            globalPriceLists: [],
+            organizationCurrency: "TRY",
+            rowsByListId: [list.id: [row]]
+        )
+
+        let output = BillingCalculator.calculate(
+            input: BillingCalculationInput(
+                session: session,
+                todo: todo,
+                customer: customer,
+                project: nil,
+                category: category,
+                rule: standardRule(),
+                holidays: [],
+                priceContext: context,
+                vatCalculator: VATCalculator(rates: [])
+            ),
+            runId: "run1"
+        )
+
+        let line = output.lines[0]
+        XCTAssertEqual(line.actualSeconds, 6_388)
+        XCTAssertEqual(line.billableSeconds, 6_388)
+        XCTAssertEqual(line.amountMinor, 390_378)
+    }
+
     // MARK: - Senaryo 2: Mesai içi → mesai dışı geçiş (yeni algoritma — pencere session seviyesinde)
 
     /// Spec §4 + §5: 17:30–19:15 (105 dk gerçek), pencere 60 dk
@@ -143,6 +197,64 @@ final class BillingCalculatorTests: XCTestCase {
         XCTAssertEqual(output.lines[1].amountMinor, 300_000)
 
         XCTAssertEqual(output.subtotalMinor, 350_000)
+    }
+
+    func test_timeTypeOverride_appliesSelectedTypeToEntireBillableRange() {
+        let start = date(2026, 5, 7, 17, 30)
+        let end = date(2026, 5, 7, 18, 30)
+        let category = TaskCategory(id: "dev", name: "Geliştirme")
+        let customer = Customer(id: "C1", name: "ABC", defaultMinBillingMinutes: 60)
+        let todo = Todo(customerId: customer.id, categoryId: category.id, title: "X", isBillable: true)
+        let list = PriceList(id: "L", ownerType: .customer, ownerId: customer.id, name: "X", currency: "TRY")
+        let rows = TimeType.allCases.enumerated().map { index, timeType in
+            PriceListRow(
+                priceListId: list.id,
+                serviceType: .remote,
+                timeType: timeType,
+                unitPriceMinor: (index + 1) * 100_000
+            )
+        }
+        let context = PriceResolutionContext(
+            todoOverride: nil,
+            projectPriceLists: [],
+            customerPriceLists: [list],
+            globalPriceLists: [],
+            organizationCurrency: "TRY",
+            rowsByListId: [list.id: rows]
+        )
+        let vat = VATCalculator(rates: [VatRate(id: "zero", name: "0", rate: 0, isDefault: true)])
+
+        for (index, timeType) in TimeType.allCases.enumerated() {
+            let session = TodoTimeSession(
+                todoId: todo.id,
+                startedAt: start,
+                endedAt: end,
+                durationSeconds: 3600,
+                isManual: true,
+                billingTimeTypeOverride: timeType,
+                billingTimeTypeOverrideReason: "Müşteri mutabakatı"
+            )
+
+            let output = BillingCalculator.calculate(
+                input: BillingCalculationInput(
+                    session: session,
+                    todo: todo,
+                    customer: customer,
+                    project: nil,
+                    category: category,
+                    rule: standardRule(),
+                    holidays: [],
+                    priceContext: context,
+                    vatCalculator: vat
+                ),
+                runId: "run-\(timeType.rawValue)"
+            )
+
+            XCTAssertEqual(output.lines.count, 1, "\(timeType.rawValue) must suppress automatic splitting")
+            XCTAssertEqual(output.lines.first?.timeType, timeType)
+            XCTAssertEqual(output.lines.first?.billableMinutes, 60)
+            XCTAssertEqual(output.lines.first?.amountMinor, (index + 1) * 100_000)
+        }
     }
 
     // MARK: - Senaryo 4: Kullanıcı raporlu bug — 1 saatlik kayıt mesai sınırını geçince
@@ -239,13 +351,13 @@ final class BillingCalculatorTests: XCTestCase {
 
         XCTAssertEqual(output.lines.count, 2)
         XCTAssertEqual(output.lines[0].timeType, .regular)
-        XCTAssertEqual(output.lines[0].billableMinutes, 12)
-        XCTAssertEqual(output.lines[0].amountMinor, 44_000)
+        XCTAssertEqual(output.lines[0].billableSeconds, 712)
+        XCTAssertEqual(output.lines[0].amountMinor, 43_511)
         XCTAssertEqual(output.lines[1].timeType, .afterHours)
-        XCTAssertEqual(output.lines[1].billableMinutes, 48)
-        XCTAssertEqual(output.lines[1].amountMinor, 224_000)
-        XCTAssertEqual(output.lines.reduce(0) { $0 + $1.billableMinutes }, 60)
-        XCTAssertEqual(output.subtotalMinor, 268_000)
+        XCTAssertEqual(output.lines[1].billableSeconds, 2_888)
+        XCTAssertEqual(output.lines[1].amountMinor, 224_622)
+        XCTAssertEqual(output.lines.reduce(0) { $0 + $1.billableSeconds }, 3_600)
+        XCTAssertEqual(output.subtotalMinor, 268_133)
     }
 
     // MARK: - K2 regression: KDV oturum bazında tek seferlik hesaplanmalı

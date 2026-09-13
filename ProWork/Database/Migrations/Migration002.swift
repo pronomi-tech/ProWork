@@ -1,11 +1,9 @@
-//  Migration002Consolidated.swift
+//  Migration002.swift
 //  ProWork
 //  Created by Pronomi.
-//  Consolidated post-initial-schema bundle. Treats every schema change
-//  introduced after Migration001 as if it had been authored in a single
-//  pass; previous incremental migrations (M002…M007) are folded into
-//  this one. Runs inside the orchestrator's atomic transaction, so the
-//  whole bundle either applies or does not apply.
+//  Post-initial-schema hardening and billing infrastructure. Runs inside
+//  the orchestrator's atomic transaction, so the whole bundle either
+//  applies or does not apply.
 //
 //  Sections:
 //   - `billing_report_runs.documentNumber` column + unique partial index
@@ -48,9 +46,9 @@
 
 import Foundation
 
-struct Migration002Consolidated: Migration {
+struct Migration002: Migration {
     let id = 2
-    let name = "consolidated post-initial schema"
+    let name = "post_initial_schema"
 
     func up(_ database: AppDatabase) throws {
         try addBillingRunsDocumentNumber(database)

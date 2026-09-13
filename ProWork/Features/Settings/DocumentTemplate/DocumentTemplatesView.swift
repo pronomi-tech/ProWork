@@ -6,10 +6,7 @@ import SwiftUI
 
 /// Container hosting the service-document and quote PDF templates inside a
 /// **single** SettingsScreenScaffold. The title and the Reset/Save toolbar
-/// render once; tab switches only swap the content ZStack. The tab picker
-/// is placed as a top overlay on the scaffold — it doesn't interfere with
-/// the scaffold header's layout pass, so the right-aligned toolbar matches
-/// the position used by the other Settings screens exactly.
+/// render once; tab switches only swap the content.
 struct DocumentTemplatesView: View {
     @EnvironmentObject private var settingsStore: AppSettingsStore
     @State private var selectedTab: DocumentTemplateTab = .service
@@ -22,6 +19,9 @@ struct DocumentTemplatesView: View {
             title: title,
             subtitle: subtitle,
             savedNotice: savedNotice,
+            headerAccessory: {
+                DocumentTemplateTabPicker(selection: $selectedTab)
+            },
             toolbar: {
                 HStack(spacing: 10) {
                     Button {
@@ -71,15 +71,6 @@ struct DocumentTemplatesView: View {
                     savedNotice: $savedNotice
                 )
             }
-        }
-        // The picker is drawn as an overlay on top of the scaffold.
-        // ZStack alignment is top → picker aligns vertically with the
-        // scaffold's header band; horizontal `.center` centres it in
-        // the viewport. Does not touch the scaffold's own layout;
-        // guarantees the same toolbar position as other Settings screens.
-        .overlay(alignment: .top) {
-            DocumentTemplateTabPicker(selection: $selectedTab)
-                .padding(.top, ProWorkLayout.scaled(24, using: settingsStore))
         }
     }
 

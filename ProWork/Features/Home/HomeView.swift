@@ -24,6 +24,7 @@ struct HomeView: View {
 
     @StateObject private var viewModel = HomeViewModel()
     @EnvironmentObject private var clockTicker: ProWorkClockTicker
+    @State private var analyticsColumnHeight: CGFloat = 0
 
     var body: some View {
         ScrollView {
@@ -42,14 +43,7 @@ struct HomeView: View {
 
                 kpiCards
 
-                weeklyChart
-
-                breakdownCharts
-
-                HStack(alignment: .top, spacing: ProWorkLayout.scaled(20, using: settingsStore)) {
-                    ongoingTodosCard
-                    recentSessionsCard
-                }
+                dashboardContent
             }
             .padding(ProWorkLayout.scaled(24, using: settingsStore))
             .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -436,22 +430,16 @@ struct HomeView: View {
 
     // MARK: - Ongoing todos
 
-    /// The ViewThatFits branches used to repeat each
-    /// `ProWorkDonutBreakdownCard` configuration verbatim. SwiftUI
-    /// would build both branches to pick the wider one, so the second
-    /// (vertical) copy paid the same construction cost as the first
-    /// (horizontal) copy — and every label/row change had to land in
-    /// two places. Extract the card builders into a private `@ViewBuilder`
-    /// helper so both layouts compose them once.
-    @ViewBuilder
-    private var breakdownCards: some View {
+    private var categoryBreakdownCard: some View {
         ProWorkDonutBreakdownCard(
             title: settingsStore.localized("home.pie.categoryTitle", defaultValue: "Bu Ay Kategori Dağılımı"),
             systemImage: "tag.fill",
             rows: categoryBreakdownRows,
             emptyMessage: settingsStore.localized("home.pie.empty.category", defaultValue: "Bu ay kategori bazlı süre verisi yok.")
         )
+    }
 
+    private var customerBreakdownCard: some View {
         ProWorkDonutBreakdownCard(
             title: settingsStore.localized("home.pie.customerTitle", defaultValue: "Bu Ay Müşteri Dağılımı"),
             systemImage: "person.2.fill",
@@ -460,14 +448,56 @@ struct HomeView: View {
         )
     }
 
-    private var breakdownCharts: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .top, spacing: ProWorkLayout.scaled(20, using: settingsStore)) {
-                breakdownCards
+    private var dashboardContent: some View {
+        let spacing = ProWorkLayout.scaled(20, using: settingsStore)
+        let columnMinimumWidth = ProWorkLayout.scaled(440, using: settingsStore)
+
+        return ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: spacing) {
+                VStack(alignment: .leading, spacing: spacing) {
+                    weeklyChart
+                    categoryBreakdownCard
+                    customerBreakdownCard
+                }
+                .frame(minWidth: columnMinimumWidth, maxWidth: .infinity, alignment: .topLeading)
+                .background {
+                    GeometryReader { geometry in
+                        Color.clear.preference(
+                            key: HomeAnalyticsColumnHeightKey.self,
+                            value: geometry.size.height
+                        )
+                    }
+                }
+
+                GeometryReader { geometry in
+                    let cardHeight = max(0, (geometry.size.height - spacing) / 2)
+
+                    VStack(alignment: .leading, spacing: spacing) {
+                        ongoingTodosCard
+                            .frame(height: cardHeight, alignment: .top)
+                        recentSessionsCard
+                            .frame(height: cardHeight, alignment: .top)
+                    }
+                }
+                .frame(
+                    minWidth: columnMinimumWidth,
+                    maxWidth: .infinity,
+                    alignment: .topLeading
+                )
+                .frame(height: analyticsColumnHeight)
+                .clipped()
+            }
+            .onPreferenceChange(HomeAnalyticsColumnHeightKey.self) { height in
+                guard height > 0, abs(analyticsColumnHeight - height) > 0.5 else { return }
+                analyticsColumnHeight = height
             }
 
-            VStack(alignment: .leading, spacing: ProWorkLayout.scaled(20, using: settingsStore)) {
-                breakdownCards
+            VStack(alignment: .leading, spacing: spacing) {
+                ongoingTodosCard
+                recentSessionsCard
+                weeklyChart
+                categoryBreakdownCard
+                customerBreakdownCard
             }
         }
     }
@@ -627,7 +657,7 @@ struct HomeView: View {
 
             content()
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(.background)
         .clipShape(RoundedRectangle(cornerRadius: ProWorkLayout.scaled(12, using: settingsStore)))
         .overlay(
@@ -788,4 +818,12 @@ struct HomeView: View {
             .string(from: date)
     }
 
+}
+
+private struct HomeAnalyticsColumnHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
 }

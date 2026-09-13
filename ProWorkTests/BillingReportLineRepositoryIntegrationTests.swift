@@ -154,6 +154,30 @@ final class BillingReportLineRepositoryIntegrationTests: XCTestCase {
         XCTAssertEqual(assignments.count, 0, "excludingRunId verilen run'ın satırlarını dışlamalı")
     }
 
+    func test_insertAndFetch_preservesExactBillableSeconds() throws {
+        let line = BillingReportLine(
+            runId: run.id,
+            todoId: todo.id,
+            todoTitle: todo.title,
+            customerId: customer.id,
+            customerName: customer.name,
+            serviceType: .remote,
+            timeType: .regular,
+            actualSeconds: 6_388,
+            billableSeconds: 6_388,
+            unitPriceMinor: 220_000,
+            amountMinor: 390_378,
+            currency: "TRY",
+            totalMinor: 390_378
+        )
+
+        try lineRepository.insert(line)
+
+        let fetched = try XCTUnwrap(lineRepository.fetchAll(runId: run.id).first)
+        XCTAssertEqual(fetched.billableSeconds, 6_388)
+        XCTAssertEqual(fetched.billableMinutes, 107)
+    }
+
     // MARK: - Helper
 
     private func makeLine(

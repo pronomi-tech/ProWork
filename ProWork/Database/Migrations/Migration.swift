@@ -18,6 +18,13 @@ import Foundation
 protocol Migration {
     var id: Int { get }
     var name: String { get }
+    /// Table-rebuild migrations may opt out while the migrator still owns
+    /// restoration and validates the complete schema before commit.
+    var requiresForeignKeysDisabled: Bool { get }
 
     func up(_ database: AppDatabase) throws
+}
+
+extension Migration {
+    var requiresForeignKeysDisabled: Bool { false }
 }

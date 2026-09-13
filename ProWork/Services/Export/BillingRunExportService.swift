@@ -178,7 +178,7 @@ final class BillingRunExportService {
             ProWorkLocalizer.shared.string("workSessions.column.end", defaultValue: "Bitiş"),
             ProWorkLocalizer.shared.string("priceLists.rows.form.serviceType", defaultValue: "Hizmet"),
             ProWorkLocalizer.shared.string("priceLists.rows.form.timeType", defaultValue: "Zaman Tipi"),
-            ProWorkLocalizer.shared.string("export.column.billableMinutes", defaultValue: "Ücretli Süre (dk)"),
+            ProWorkLocalizer.shared.string("export.column.billableMinutes", defaultValue: "Ücretli Süre (sa:dk:sn)"),
             ProWorkLocalizer.shared.string("export.column.unitPrice", defaultValue: "Birim Fiyat"),
             ProWorkLocalizer.shared.string("export.column.fixedFee", defaultValue: "Sabit Fiyat"),
             ProWorkLocalizer.shared.string("reports.summary.subtotal", defaultValue: "Ara Toplam"),
@@ -216,7 +216,7 @@ final class BillingRunExportService {
                 ProWorkLocalizer.shared.string("workSessions.column.end", defaultValue: "Bitiş"),
                 ProWorkLocalizer.shared.string("priceLists.rows.form.serviceType", defaultValue: "Hizmet"),
                 ProWorkLocalizer.shared.string("priceLists.rows.form.timeType", defaultValue: "Zaman Tipi"),
-                ProWorkLocalizer.shared.string("export.column.billableMinutes", defaultValue: "Ücretli Süre (dk)"),
+                ProWorkLocalizer.shared.string("export.column.billableMinutes", defaultValue: "Ücretli Süre (sa:dk:sn)"),
                 ProWorkLocalizer.shared.string("export.column.unitPrice", defaultValue: "Birim Fiyat"),
                 ProWorkLocalizer.shared.string("export.column.fixedFee", defaultValue: "Sabit Fiyat"),
                 ProWorkLocalizer.shared.string("reports.summary.subtotal", defaultValue: "Ara Toplam"),
@@ -246,7 +246,7 @@ final class BillingRunExportService {
                 line.isFixedFee ? "" : Self.displayDateTimeWithSeconds(line.endedAt),
                 line.isFixedFee ? ProWorkLocalizer.shared.string("export.fixedFee", defaultValue: "Sabit Ücret") : line.serviceType.title,
                 line.isFixedFee ? "" : line.timeType.title,
-                String(line.isFixedFee ? 0 : line.billableMinutes),
+                line.isFixedFee ? ProWorkFormatters.durationHHmmss(0) : ProWorkFormatters.durationHHmmss(line.billableSeconds),
                 ProWorkFormatters.moneyAmount(
                     line.isFixedFee
                         ? zeroMoney
@@ -432,6 +432,7 @@ private struct BillingRunExportPayload: Encodable {
         let serviceType: String
         let timeType: String
         let billableMinutes: Int
+        let billableSeconds: Int
         let unitPriceMinor: Int
         let fixedFeeMinor: Int
         let amountMinor: Int
@@ -450,7 +451,8 @@ private struct BillingRunExportPayload: Encodable {
             endedAt = line.endedAt.map(BillingRunExportPayload.iso8601String)
             serviceType = line.serviceType.rawValue
             timeType = line.timeType.rawValue
-            billableMinutes = line.billableMinutes
+            billableMinutes = (max(0, line.billableSeconds) + 59) / 60
+            billableSeconds = line.billableSeconds
             unitPriceMinor = line.unitPriceMinor
             fixedFeeMinor = line.fixedFeeMinor ?? 0
             amountMinor = line.amountMinor

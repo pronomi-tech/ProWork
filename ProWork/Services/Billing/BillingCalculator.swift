@@ -6,13 +6,13 @@
 //   2. Resolve the todo info (customer/project/category/service type)
 //   3. Check whether it's billable
 //   4. **First apply the minimum window** (sliding from session start):
-//        N = ceil(actualMinutes / windowMinutes)
-//        billableMinutes = N * windowMinutes
-//        billableEndAt = startedAt + billableMinutes
+//        N = ceil(actualSeconds / windowSeconds)
+//        billableSeconds = N * windowSeconds
+//        billableEndAt = startedAt + billableSeconds
 //   5. **Then** split the billable range (startedAt..billableEndAt) by time type
 //      → TimeWindowSplitter
 //   6. Resolve the price row for each time-type chunk (PriceListResolver)
-//   7. Amount is computed via `Money.fromHourlyRate(unitPrice, billableMinutes:)`
+//   7. Amount is computed via `Money.fromHourlyRate(unitPrice, billableSeconds:)`
 //      — Decimal arithmetic + banker's round. The old integer
 //      `(unitPriceMinor * minutes) / 60` formula could lose up to 1
 //      minor per row.
@@ -74,7 +74,7 @@ struct BillingCalculationInput {
 }
 
 struct BillingWindowOverride: Hashable {
-    let billableMinutes: Int
+    let billableSeconds: Int
     let splitTo: Date?
 }
 
@@ -128,10 +128,10 @@ enum BillingCalculator {
             )
         }
 
-        let billableMinutes: Int
+        let billableSeconds: Int
         let splitTo: Date
         if let override = input.billingWindowOverride {
-            billableMinutes = max(0, override.billableMinutes)
+            billableSeconds = max(0, override.billableSeconds)
             splitTo = override.splitTo ?? endedAt
         } else {
             // 4. Determine the window and billable duration (at session level)
@@ -139,28 +139,32 @@ enum BillingCalculator {
             let customerWindow = customer.defaultMinBillingMinutes
             let windowMinutes: Int? = projectWindow ?? customerWindow
 
-            let actualMinutes = (actualSeconds + 59) / 60  // round seconds up
-            billableMinutes = isBillable
-                ? MinimumWindowApplier.apply(actualMinutes: actualMinutes, windowMinutes: windowMinutes)
+            billableSeconds = isBillable
+                ? MinimumWindowApplier.applySeconds(actualSeconds: actualSeconds, windowMinutes: windowMinutes)
                 : 0
 
             // 5. Split the billable range by time type
-            let billableEndAt = session.startedAt.addingTimeInterval(TimeInterval(billableMinutes * 60))
+            let billableEndAt = session.startedAt.addingTimeInterval(TimeInterval(billableSeconds))
             splitTo = isBillable ? billableEndAt : endedAt
         }
 
         let splitFrom = session.startedAt
 
-        let segments = TimeWindowSplitter.split(
-            from: splitFrom,
-            to: splitTo,
-            rule: input.rule,
-            holidays: input.holidays,
-            calendar: calendar
-        )
-        let segmentBillableMinutes = allocateBillableMinutes(
+        let segments: [TimeSegment]
+        if let timeTypeOverride = session.billingTimeTypeOverride {
+            segments = [TimeSegment(start: splitFrom, end: splitTo, timeType: timeTypeOverride)]
+        } else {
+            segments = TimeWindowSplitter.split(
+                from: splitFrom,
+                to: splitTo,
+                rule: input.rule,
+                holidays: input.holidays,
+                calendar: calendar
+            )
+        }
+        let segmentBillableSeconds = allocateBillableSeconds(
             across: segments,
-            totalBillableMinutes: isBillable ? billableMinutes : 0
+            totalBillableSeconds: isBillable ? billableSeconds : 0
         )
 
         let serviceType = ServiceType(rawValue: customer.defaultServiceType) ?? .remote
@@ -192,7 +196,7 @@ enum BillingCalculator {
                 dateString: segmentDateString,
                 segmentIndex: idx,
                 segmentSeconds: segmentSeconds,
-                segmentBillableMinutes: segmentBillableMinutes[idx],
+                segmentBillableSeconds: segmentBillableSeconds[idx],
                 input: input,
                 runId: runId,
                 isBillable: isBillable,
@@ -270,16 +274,15 @@ enum BillingCalculator {
         return vatResult.vatMinor
     }
 
-    /// Distributes billable minutes across segments while preserving the
-    /// seconds ratio. Applying `ceil` per segment can inflate the total,
-    /// so a floor-minutes + largest-remainder method is used.
-    private static func allocateBillableMinutes(
+    /// Distributes exact billable seconds across time-type segments while
+    /// preserving the session-level total.
+    private static func allocateBillableSeconds(
         across segments: [TimeSegment],
-        totalBillableMinutes: Int
+        totalBillableSeconds: Int
     ) -> [Int] {
-        BillableMinuteAllocator.allocate(
+        BillableSecondAllocator.allocate(
             durationSeconds: segments.map(\.durationSeconds),
-            totalBillableMinutes: totalBillableMinutes
+            totalBillableSeconds: totalBillableSeconds
         )
     }
 
@@ -321,10 +324,10 @@ enum BillingCalculator {
             categoryId: input.category?.id,
             categoryName: input.category?.name,
             serviceType: ServiceType(rawValue: input.customer.defaultServiceType) ?? .remote,
-            timeType: .regular,
+            timeType: session.billingTimeTypeOverride ?? .regular,
             segmentIndex: 0,
             actualSeconds: actualSeconds,
-            billableMinutes: 0,
+            billableSeconds: 0,
             unitPriceMinor: 0,
             fixedFeeMinor: fee,
             amountMinor: billingFee,
@@ -355,7 +358,7 @@ enum BillingCalculator {
     // MARK: - Per-segment line
 
     /// Produces a line for the given time-type chunk.
-    /// `segmentBillableMinutes` = the share of the session-level billable
+    /// `segmentBillableSeconds` = the share of the session-level billable
     /// duration that falls into this segment.
     /// VAT fields (`vatRate`, `vatMinor`, `totalMinor`, `isVatExempt`)
     /// are left as 0/false here; after every segment of the session is
@@ -365,7 +368,7 @@ enum BillingCalculator {
         dateString: String,
         segmentIndex: Int,
         segmentSeconds: Int,
-        segmentBillableMinutes: Int,
+        segmentBillableSeconds: Int,
         input: BillingCalculationInput,
         runId: String,
         isBillable: Bool,
@@ -398,14 +401,14 @@ enum BillingCalculator {
             }
         }()
 
-        // Amount = hourly rate * minutes / 60.
+        // Amount = hourly rate * seconds / 3,600.
         // We compute with Decimal arithmetic and convert to the minor
         // unit via banker's rounding; integer division would accumulate
         // up to 1 minor of loss per line.
         let amountMinor: Int = {
             guard isBillable else { return 0 }
             let unitPrice = Money(minorUnits: unitPriceMinor, currency: currency)
-            return Money.fromHourlyRate(unitPrice, billableMinutes: segmentBillableMinutes).minorUnits
+            return Money.fromHourlyRate(unitPrice, billableSeconds: segmentBillableSeconds).minorUnits
         }()
 
         let line = BillingReportLine(
@@ -423,7 +426,7 @@ enum BillingCalculator {
             timeType: segment.timeType,
             segmentIndex: segmentIndex,
             actualSeconds: segmentSeconds,
-            billableMinutes: segmentBillableMinutes,
+            billableSeconds: segmentBillableSeconds,
             unitPriceMinor: unitPriceMinor,
             fixedFeeMinor: nil,
             amountMinor: amountMinor,

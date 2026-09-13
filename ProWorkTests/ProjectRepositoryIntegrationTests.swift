@@ -57,6 +57,14 @@ final class ProjectRepositoryIntegrationTests: XCTestCase {
         XCTAssertEqual(fetched?.defaultMinBillingMinutes, 15)
     }
 
+    func test_reportBillingWindowMode_roundTrips() throws {
+        var project = makeProject(name: "Döküm bazlı")
+        project.billingWindowMode = .report
+        try repository.insert(project)
+
+        XCTAssertEqual(try repository.fetch(id: project.id)?.billingWindowMode, .report)
+    }
+
     // MARK: - Bulk fetch
 
     func test_fetchByIds_returnsOnlyMatching_andSkipsMissing() throws {

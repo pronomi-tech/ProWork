@@ -427,7 +427,7 @@ extension BillingPdfDocument {
         }
 
         drawColumnText(
-            line.isFixedFee ? "-" : String(format: localized("workSessions.form.duration.minutes", defaultValue: "%d dk"), line.billableMinutes),
+            line.isFixedFee ? "-" : ProWorkFormatters.durationHHmmss(line.billableSeconds),
             id: "duration",
             frames: frames,
             rect: rect,

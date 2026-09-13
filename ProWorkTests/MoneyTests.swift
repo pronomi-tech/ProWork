@@ -45,6 +45,14 @@ final class MoneyTests: XCTestCase {
         XCTAssertEqual(result.minorUnits, 2)
     }
 
+    func test_fromHourlyRate_usesExactSecondsWithoutMinuteRounding() {
+        let unit = Money(minorUnits: 220_000, currency: "TRY")
+
+        let result = Money.fromHourlyRate(unit, billableSeconds: 6_388)
+
+        XCTAssertEqual(result.minorUnits, 390_378)
+    }
+
     // MARK:: 3-decimal currency round-trip
 
     /// 3-decimal currencies (KWD, BHD, OMR, JOD, TND, LYD, IQD) use 1000

@@ -80,3 +80,15 @@ final class BillableMinuteAllocatorTests: XCTestCase {
         XCTAssertEqual(result, [90])
     }
 }
+
+final class BillableSecondAllocatorTests: XCTestCase {
+    func test_allocate_preservesExactSecondTotalAcrossSegments() {
+        let result = BillableSecondAllocator.allocate(
+            durationSeconds: [1_808, 4_580],
+            totalBillableSeconds: 6_388
+        )
+
+        XCTAssertEqual(result, [1_808, 4_580])
+        XCTAssertEqual(result.reduce(0, +), 6_388)
+    }
+}

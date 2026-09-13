@@ -10,6 +10,59 @@
 import SwiftUI
 import AppKit
 
+private struct BalancedSettingsHeaderLayout: Layout {
+    let spacing: CGFloat
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        guard subviews.count == 3 else { return .zero }
+
+        let centerSize = subviews[1].sizeThatFits(.unspecified)
+        let proposedWidth = proposal.width ?? centerSize.width
+        let sideWidth = max(0, (proposedWidth - centerSize.width) / 2 - spacing)
+        let sideProposal = ProposedViewSize(width: sideWidth, height: proposal.height)
+        let leftSize = subviews[0].sizeThatFits(sideProposal)
+        let rightSize = subviews[2].sizeThatFits(sideProposal)
+
+        return CGSize(
+            width: proposedWidth,
+            height: max(centerSize.height, leftSize.height, rightSize.height)
+        )
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        guard subviews.count == 3 else { return }
+
+        let centerSize = subviews[1].sizeThatFits(.unspecified)
+        let sideWidth = max(0, (bounds.width - centerSize.width) / 2 - spacing)
+        let sideProposal = ProposedViewSize(width: sideWidth, height: bounds.height)
+
+        subviews[0].place(
+            at: CGPoint(x: bounds.minX, y: bounds.midY),
+            anchor: .leading,
+            proposal: sideProposal
+        )
+        subviews[1].place(
+            at: CGPoint(x: bounds.midX, y: bounds.midY),
+            anchor: .center,
+            proposal: ProposedViewSize(centerSize)
+        )
+        subviews[2].place(
+            at: CGPoint(x: bounds.maxX, y: bounds.midY),
+            anchor: .trailing,
+            proposal: sideProposal
+        )
+    }
+}
+
 /// Invisible helper that locates the `NSScrollView` underlying SwiftUI's
 /// `ScrollView` and completely removes the vertical scroller.
 ///
@@ -72,7 +125,7 @@ private struct OverlayScrollerEnforcer: NSViewRepresentable {
 /// resolved at the layer that all callers share. New views should
 /// route saves through the shared `NoticeScheduler`
 /// which writes into the @Published var the scaffold reads.
-struct SettingsScreenScaffold<Content: View, Toolbar: View>: View {
+struct SettingsScreenScaffold<Content: View, HeaderAccessory: View, Toolbar: View>: View {
     enum ContentScrollBehavior {
         case scrolls
         case fixed
@@ -83,6 +136,8 @@ struct SettingsScreenScaffold<Content: View, Toolbar: View>: View {
     let errorMessage: String?
     let savedNotice: String?
     let contentScrollBehavior: ContentScrollBehavior
+    let hasHeaderAccessory: Bool
+    @ViewBuilder var headerAccessory: () -> HeaderAccessory
     @ViewBuilder var toolbar: () -> Toolbar
     @ViewBuilder var content: () -> Content
     @EnvironmentObject private var settingsStore: AppSettingsStore
@@ -93,6 +148,7 @@ struct SettingsScreenScaffold<Content: View, Toolbar: View>: View {
         errorMessage: String? = nil,
         savedNotice: String? = nil,
         contentScrollBehavior: ContentScrollBehavior = .scrolls,
+        @ViewBuilder headerAccessory: @escaping () -> HeaderAccessory,
         @ViewBuilder toolbar: @escaping () -> Toolbar,
         @ViewBuilder content: @escaping () -> Content
     ) {
@@ -101,6 +157,8 @@ struct SettingsScreenScaffold<Content: View, Toolbar: View>: View {
         self.errorMessage = errorMessage
         self.savedNotice = savedNotice
         self.contentScrollBehavior = contentScrollBehavior
+        self.hasHeaderAccessory = true
+        self.headerAccessory = headerAccessory
         self.toolbar = toolbar
         self.content = content
     }
@@ -112,13 +170,35 @@ struct SettingsScreenScaffold<Content: View, Toolbar: View>: View {
         savedNotice: String? = nil,
         contentScrollBehavior: ContentScrollBehavior = .scrolls,
         @ViewBuilder content: @escaping () -> Content
-    ) where Toolbar == EmptyView {
+    ) where HeaderAccessory == EmptyView, Toolbar == EmptyView {
         self.title = title
         self.subtitle = subtitle
         self.errorMessage = errorMessage
         self.savedNotice = savedNotice
         self.contentScrollBehavior = contentScrollBehavior
+        self.hasHeaderAccessory = false
+        self.headerAccessory = { EmptyView() }
         self.toolbar = { EmptyView() }
+        self.content = content
+    }
+
+    init(
+        title: String,
+        subtitle: String? = nil,
+        errorMessage: String? = nil,
+        savedNotice: String? = nil,
+        contentScrollBehavior: ContentScrollBehavior = .scrolls,
+        @ViewBuilder toolbar: @escaping () -> Toolbar,
+        @ViewBuilder content: @escaping () -> Content
+    ) where HeaderAccessory == EmptyView {
+        self.title = title
+        self.subtitle = subtitle
+        self.errorMessage = errorMessage
+        self.savedNotice = savedNotice
+        self.contentScrollBehavior = contentScrollBehavior
+        self.hasHeaderAccessory = false
+        self.headerAccessory = { EmptyView() }
+        self.toolbar = toolbar
         self.content = content
     }
 
@@ -167,35 +247,54 @@ struct SettingsScreenScaffold<Content: View, Toolbar: View>: View {
         )
     }
 
-    private var header: some View {
-        // Subtitle is one line (`.lineLimit(1) + truncationMode(.tail)`)
-        // — multi-line wrapping used to shift the header height. On the
-        // width side the inner VStack fills the left area with
-        // `.frame(maxWidth: .infinity)`, the toolbar sticks to its
-        // right edge; since the header takes the full detail width (W),
-        // the button is always at W-28.
-        HStack(alignment: .top, spacing: ProWorkLayout.scaled(16, using: settingsStore)) {
-            VStack(alignment: .leading, spacing: ProWorkLayout.scaled(4, using: settingsStore)) {
-                Text(title)
-                    .proWorkTextStyle(.title2)
-                    .bold()
-                    .lineLimit(1)
+    @ViewBuilder
+    private var headerLayout: some View {
+        let spacing = ProWorkLayout.scaled(16, using: settingsStore)
 
-                if let subtitle {
-                    Text(subtitle)
-                        .proWorkTextStyle(.callout)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
+        if hasHeaderAccessory {
+            // Equal left/right regions keep the accessory at the viewport's
+            // geometric center even when the action toolbar is wider than
+            // the title. The custom layout also centers all three regions
+            // vertically without allowing them to overlap.
+            BalancedSettingsHeaderLayout(spacing: spacing) {
+                headerTitle
+                headerAccessory()
+                    .fixedSize(horizontal: true, vertical: false)
+                toolbar()
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            toolbar()
+        } else {
+            HStack(alignment: .top, spacing: spacing) {
+                headerTitle
+                toolbar()
+            }
         }
-        .padding(.horizontal, ProWorkLayout.scaled(28, using: settingsStore))
-        .padding(.top, ProWorkLayout.scaled(20, using: settingsStore))
-        .padding(.bottom, ProWorkLayout.scaled(16, using: settingsStore))
+    }
+
+    private var headerTitle: some View {
+        VStack(alignment: .leading, spacing: ProWorkLayout.scaled(4, using: settingsStore)) {
+            Text(title)
+                .proWorkTextStyle(.title2)
+                .bold()
+                .lineLimit(1)
+
+            if let subtitle {
+                Text(subtitle)
+                    .proWorkTextStyle(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var header: some View {
+        // Keep the subtitle on one line so every settings header retains
+        // the same height; constrained side regions truncate it at the tail.
+        headerLayout
+            .padding(.horizontal, ProWorkLayout.scaled(28, using: settingsStore))
+            .padding(.top, ProWorkLayout.scaled(20, using: settingsStore))
+            .padding(.bottom, ProWorkLayout.scaled(16, using: settingsStore))
     }
 
     private var scaffoldContent: some View {

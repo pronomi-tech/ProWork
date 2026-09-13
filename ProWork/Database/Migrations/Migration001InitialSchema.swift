@@ -95,7 +95,7 @@ struct Migration001InitialSchema: Migration {
             defaultServiceType TEXT,
             defaultMinBillingMinutes INTEGER,
             billingWindowMode TEXT
-                CHECK(billingWindowMode IN ('timeline','session')),
+                CHECK(billingWindowMode IN ('timeline','session','report')),
             vatRateId TEXT,
             notes TEXT,
             organizationId TEXT NOT NULL DEFAULT 'default_organization',
@@ -635,7 +635,7 @@ private extension Migration001InitialSchema {
             slug TEXT UNIQUE,
             masterCurrency TEXT NOT NULL DEFAULT 'TRY',
             billingWindowMode TEXT NOT NULL DEFAULT 'timeline'
-                CHECK(billingWindowMode IN ('timeline','session')),
+                CHECK(billingWindowMode IN ('timeline','session','report')),
             isActive INTEGER NOT NULL DEFAULT 1,
             createdByUserId TEXT,
             updatedByUserId TEXT,
@@ -1227,6 +1227,23 @@ private extension Migration001InitialSchema {
     }
 
     static let turkishHolidaySeed: [(String, String, Bool, String?)] = [
+        ("2024-01-01", "Yılbaşı", false, nil),
+        ("2024-04-09", "Ramazan Bayramı Arifesi", true, "13:00"),
+        ("2024-04-10", "Ramazan Bayramı 1. Günü", false, nil),
+        ("2024-04-11", "Ramazan Bayramı 2. Günü", false, nil),
+        ("2024-04-12", "Ramazan Bayramı 3. Günü", false, nil),
+        ("2024-04-23", "Ulusal Egemenlik ve Çocuk Bayramı", false, nil),
+        ("2024-05-01", "Emek ve Dayanışma Günü", false, nil),
+        ("2024-05-19", "Atatürk'ü Anma, Gençlik ve Spor Bayramı", false, nil),
+        ("2024-06-15", "Kurban Bayramı Arifesi", true, "13:00"),
+        ("2024-06-16", "Kurban Bayramı 1. Günü", false, nil),
+        ("2024-06-17", "Kurban Bayramı 2. Günü", false, nil),
+        ("2024-06-18", "Kurban Bayramı 3. Günü", false, nil),
+        ("2024-06-19", "Kurban Bayramı 4. Günü", false, nil),
+        ("2024-07-15", "Demokrasi ve Milli Birlik Günü", false, nil),
+        ("2024-08-30", "Zafer Bayramı", false, nil),
+        ("2024-10-28", "Cumhuriyet Bayramı Arifesi", true, "13:00"),
+        ("2024-10-29", "Cumhuriyet Bayramı", false, nil),
         ("2025-01-01", "Yılbaşı", false, nil),
         ("2025-03-29", "Ramazan Bayramı Arifesi", true, "13:00"),
         ("2025-03-30", "Ramazan Bayramı 1. Günü", false, nil),

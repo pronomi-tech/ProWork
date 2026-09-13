@@ -314,7 +314,7 @@
 "common.close" = "Close";
 
 "holidays.title" = "Public Holidays";
-"holidays.subtitle" = "Work performed on holidays is billed as the 'Holiday' time type. TR holidays for 2025-2030 come preloaded; you can edit, add, or delete them.";
+"holidays.subtitle" = "Work performed on holidays is billed as the 'Holiday' time type. TR holidays for 2024-2030 come preloaded; you can edit, add, or delete them.";
 "holidays.action.new" = "New Holiday";
 "holidays.empty.year" = "No holidays for %d";
 "holidays.empty.message" = "You can add a new holiday from the top right.";
@@ -446,9 +446,11 @@
 "weekday.short.sunday" = "Sun";
 
 "billingWindow.timeline.title" = "Timeline Based";
-"billingWindow.timeline.subtitle" = "Entries that fall into the same open window are billed together.";
+"billingWindow.timeline.subtitle" = "Entries are chained while they start inside billing windows occupied by existing work.";
 "billingWindow.session.title" = "Session Based";
 "billingWindow.session.subtitle" = "Each session opens its own minimum billing window.";
+"billingWindow.report.title" = "Statement Based";
+"billingWindow.report.subtitle" = "Statement durations are evaluated together, and the rounding difference is added to the final entry.";
 
 "billingRules.title" = "Working Hour Rules";
 "billingRules.subtitle" = "Define business hours and weekend days for each day to distinguish regular and after-hours work. This setting is the default for all customers and can be overridden per customer.";
@@ -761,6 +763,11 @@
 "workSessions.form.duration.minutes" = "%d min";
 "workSessions.form.duration.hours" = "%d hour";
 "workSessions.form.note.placeholder" = "Optional note";
+"workSessions.form.billingTimeType" = "Working-hours Assessment";
+"workSessions.form.billingTimeType.automatic" = "Automatic";
+"workSessions.form.billingTimeType.reason" = "Adjustment Reason";
+"workSessions.form.billingTimeType.reason.placeholder" = "Optional explanation";
+"workSessions.form.billingTimeType.help" = "Automatic splits the work range according to working-hours rules. A manual selection applies to the entire billable duration of the record.";
 "workSessions.form.error.invalidRange" = "A todo must be selected and the end time must be after the start time.";
 "workSessions.form.error.activeEdit" = "An active work session cannot be edited. Stop the session first.";
 
@@ -1046,12 +1053,12 @@
 "billing.confirm.deletePayment.message" = "This collection record will be deleted.";
 "billing.document.defaultTitle" = "Service Report";
 "billing.create.title" = "New Service Report Draft";
-"billing.create.subtitle" = "Select the customer and period, then choose which service lines will be included.";
+"billing.create.subtitle" = "Select a customer or folder and period, then choose which service lines will be included.";
 "billing.create.customerPlaceholder" = "Select customer";
 "billing.create.runTitle" = "Report Title";
 "billing.previewSelection.title" = "Line Selection";
 "billing.previewSelection.subtitle" = "The same billable line cannot be used in more than one service report. Locked lines are visible but cannot be selected.";
-"billing.previewSelection.multipleCurrencies" = "Selected lines are spread across %d different currencies. A separate service report draft will be created for each currency.";
+"billing.previewSelection.multipleCurrencies" = "Selected lines will create %d drafts. A separate service report draft will be created for each customer and currency.";
 "billing.previewSelection.empty.title" = "No lines found";
 "billing.previewSelection.empty.message" = "No calculable service lines were found for the selected period.";
 "billing.previewSelection.loading" = "Preparing service lines...";
@@ -1091,7 +1098,7 @@
 "export.error.pdfAsyncRequired" = "PDF output must be generated asynchronously with the new render engine.";
 "export.filename.default" = "billing_report";
 "export.column.todoTitle" = "Task Description";
-"export.column.billableMinutes" = "Billable Duration (min)";
+"export.column.billableMinutes" = "Billable Duration (hh:mm:ss)";
 "export.column.unitPrice" = "Unit Price";
 "export.column.fixedFee" = "Fixed Fee";
 "export.column.currency" = "Currency";
@@ -1230,3 +1237,28 @@
 "quote.recipientSheet.action.generate" = "Generate PDF";
 
 "common.remove" = "Remove";
+
+"workFolders.action.newChild" = "Add Subfolder";
+"workFolders.action.newIndependent" = "New independent folder";
+"workFolders.delete.message" = "“%@” will be deleted only if the folder is empty.";
+"workFolders.delete.title" = "Delete folder?";
+"workFolders.error.notEmpty" = "A folder containing subfolders or work cannot be deleted.";
+"workFolders.error.notFound" = "Folder not found.";
+"workFolders.form.create" = "New Folder";
+"workFolders.form.edit" = "Edit Folder";
+"workFolders.form.name" = "Folder Name";
+"workFolders.form.name.placeholder" = "For example, Quotes";
+"workFolders.form.parent" = "Parent Folder";
+"workFolders.form.parent.none" = "Top level";
+"workFolders.form.subtitle" = "Organize work with unlimited nested folders.";
+"workFolders.sidebar.all" = "All Work";
+"workFolders.sidebar.emptyProject" = "No folders";
+"workFolders.sidebar.independent" = "Independent Folders";
+"workFolders.sidebar.includeSubfolders" = "Include subfolders";
+"workFolders.sidebar.title" = "Folders and Projects";
+"todoForm.folder" = "Folder";
+"todoForm.folder.none" = "No folder";
+"todoForm.folder.placeholder" = "Choose a folder";
+"billing.create.scope" = "Scope";
+"billing.create.folderPlaceholder" = "Choose a folder";
+"billingRuns.error.folderNotFound" = "Work folder not found.";

@@ -129,11 +129,11 @@ struct TodoReportView: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(settingsStore.localized("workSessions.summary.totalTime", defaultValue: "Toplam Süre")).proWorkTextStyle(.caption).foregroundStyle(.secondary)
-                Text(ProWorkFormatters.durationHM(totalActual)).proWorkTextStyle(.title3, weight: .semibold)
+                Text(ProWorkFormatters.durationHHmmss(totalActual)).proWorkTextStyle(.title3, weight: .semibold)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(settingsStore.localized("reports.todo.summary.manualTime", defaultValue: "Manuel Süre")).proWorkTextStyle(.caption).foregroundStyle(.secondary)
-                Text(ProWorkFormatters.durationHM(totalManual))
+                Text(ProWorkFormatters.durationHHmmss(totalManual))
                     .proWorkTextStyle(.title3, weight: .semibold)
                     .foregroundStyle(totalManual > 0 ? .orange : .primary)
             }
@@ -204,11 +204,11 @@ struct TodoReportView: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 110, alignment: .leading).lineLimit(1)
 
-            Text(ProWorkFormatters.durationHM(row.actualSeconds))
+            Text(ProWorkFormatters.durationHHmmss(row.actualSeconds))
                 .proWorkTextStyle(.callout)
                 .frame(width: 80, alignment: .trailing)
 
-            Text(ProWorkFormatters.durationHM(row.billableMinutes * 60))
+            Text(ProWorkFormatters.durationHHmmss(row.billableSeconds))
                 .proWorkTextStyle(.callout)
                 .frame(width: 80, alignment: .trailing)
 
@@ -275,7 +275,7 @@ struct TodoReportRow: Identifiable, Hashable {
     let projectName: String?
     let categoryName: String?
     let actualSeconds: Int
-    let billableMinutes: Int
+    let billableSeconds: Int
     let manualSeconds: Int
     let manualLineCount: Int
     let subtotalMinor: Int

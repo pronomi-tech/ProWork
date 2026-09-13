@@ -117,9 +117,9 @@ struct BillingRunsView: View {
             BillingRunCreateSheet(
                 customers: viewModel.customers,
                 customerCurrencies: viewModel.customerCurrencies
-            ) { customerId, startDate, endDate, title, selectedLineKeys in
+            ) { scope, startDate, endDate, title, selectedLineKeys in
                 try createDraft(
-                    customerId: customerId,
+                    scope: scope,
                     startDate: startDate,
                     endDate: endDate,
                     title: title,
@@ -186,14 +186,14 @@ struct BillingRunsView: View {
     // VM (cancellable Task, not asyncAfter).
 
     private func createDraft(
-        customerId: String,
+        scope: BillingDraftSourceScope,
         startDate: Date,
         endDate: Date,
         title: String?,
         selectedLineKeys: [String]
     ) throws {
         _ = try viewModel.createDraft(
-            customerId: customerId,
+            scope: scope,
             startDate: startDate,
             endDate: endDate,
             title: title,

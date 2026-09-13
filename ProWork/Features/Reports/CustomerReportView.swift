@@ -140,27 +140,27 @@ struct CustomerReportView: View {
             // Durations block
             HStack(alignment: .top, spacing: 24) {
                 metricColumn(settingsStore.localized("reports.customer.group.durations", defaultValue: "Süreler")) {
-                    metricRow(settingsStore.localized("reports.customer.metric.totalActual", defaultValue: "Toplam gerçek"), ProWorkFormatters.durationHM(s.totalActualSeconds))
-                    metricRow(settingsStore.localized("reports.customer.metric.billable", defaultValue: "Ücretlendirilecek"), durationFromMinutes(s.billableMinutes))
-                    metricRow(settingsStore.localized("reports.customer.metric.chargeable", defaultValue: "Faturalandırılabilir"), ProWorkFormatters.durationHM(s.totalActualSeconds - s.nonBillableSeconds))
-                    metricRow(settingsStore.localized("todos.administrative", defaultValue: "İdari"), ProWorkFormatters.durationHM(s.nonBillableSeconds))
+                    metricRow(settingsStore.localized("reports.customer.metric.totalActual", defaultValue: "Toplam gerçek"), ProWorkFormatters.durationHHmmss(s.totalActualSeconds))
+                    metricRow(settingsStore.localized("reports.customer.metric.billable", defaultValue: "Ücretlendirilecek"), ProWorkFormatters.durationHHmmss(s.billableSeconds))
+                    metricRow(settingsStore.localized("reports.customer.metric.chargeable", defaultValue: "Faturalandırılabilir"), ProWorkFormatters.durationHHmmss(s.totalActualSeconds - s.nonBillableSeconds))
+                    metricRow(settingsStore.localized("todos.administrative", defaultValue: "İdari"), ProWorkFormatters.durationHHmmss(s.nonBillableSeconds))
                 }
                 Divider()
                 metricColumn(settingsStore.localized("reports.customer.group.service", defaultValue: "Hizmet")) {
-                    metricRow(settingsStore.localized("serviceType.remote", defaultValue: "Uzaktan"), ProWorkFormatters.durationHM(s.remoteSeconds))
-                    metricRow(settingsStore.localized("serviceType.onsite", defaultValue: "Yerinde"), ProWorkFormatters.durationHM(s.onsiteSeconds))
+                    metricRow(settingsStore.localized("serviceType.remote", defaultValue: "Uzaktan"), ProWorkFormatters.durationHHmmss(s.remoteSeconds))
+                    metricRow(settingsStore.localized("serviceType.onsite", defaultValue: "Yerinde"), ProWorkFormatters.durationHHmmss(s.onsiteSeconds))
                 }
                 Divider()
                 metricColumn(settingsStore.localized("reports.customer.group.timeType", defaultValue: "Zaman Tipi")) {
-                    metricRow(settingsStore.localized("timeType.regular", defaultValue: "Mesai içi"), ProWorkFormatters.durationHM(s.regularSeconds))
-                    metricRow(settingsStore.localized("timeType.afterHours", defaultValue: "Mesai dışı"), ProWorkFormatters.durationHM(s.afterHoursSeconds))
-                    metricRow(settingsStore.localized("timeType.weekend", defaultValue: "Hafta sonu"), ProWorkFormatters.durationHM(s.weekendSeconds))
-                    metricRow(settingsStore.localized("timeType.holiday", defaultValue: "Tatil"), ProWorkFormatters.durationHM(s.holidaySeconds))
+                    metricRow(settingsStore.localized("timeType.regular", defaultValue: "Mesai içi"), ProWorkFormatters.durationHHmmss(s.regularSeconds))
+                    metricRow(settingsStore.localized("timeType.afterHours", defaultValue: "Mesai dışı"), ProWorkFormatters.durationHHmmss(s.afterHoursSeconds))
+                    metricRow(settingsStore.localized("timeType.weekend", defaultValue: "Hafta sonu"), ProWorkFormatters.durationHHmmss(s.weekendSeconds))
+                    metricRow(settingsStore.localized("timeType.holiday", defaultValue: "Tatil"), ProWorkFormatters.durationHHmmss(s.holidaySeconds))
                 }
                 Divider()
                 metricColumn(settingsStore.localized("reports.customer.group.sessions", defaultValue: "Kayıt")) {
-                    metricRow(settingsStore.localized("workSessions.source.automatic", defaultValue: "Otomatik"), ProWorkFormatters.durationHM(s.automaticSeconds))
-                    metricRow(settingsStore.localized("workSessions.source.manual", defaultValue: "Manuel"), ProWorkFormatters.durationHM(s.manualSeconds), highlight: s.manualSeconds > 0)
+                    metricRow(settingsStore.localized("workSessions.source.automatic", defaultValue: "Otomatik"), ProWorkFormatters.durationHHmmss(s.automaticSeconds))
+                    metricRow(settingsStore.localized("workSessions.source.manual", defaultValue: "Manuel"), ProWorkFormatters.durationHHmmss(s.manualSeconds), highlight: s.manualSeconds > 0)
                     metricRow(settingsStore.localized("reports.customer.metric.manualCount", defaultValue: "Manuel adet"), "\(s.manualLineCount)")
                 }
                 Spacer()
@@ -269,11 +269,11 @@ struct CustomerReportView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            Text(ProWorkFormatters.durationHM(s.totalActualSeconds))
+            Text(ProWorkFormatters.durationHHmmss(s.totalActualSeconds))
                 .proWorkTextStyle(.callout)
                 .frame(width: 90, alignment: .trailing)
 
-            Text(durationFromMinutes(s.billableMinutes))
+            Text(ProWorkFormatters.durationHHmmss(s.billableSeconds))
                 .proWorkTextStyle(.callout)
                 .frame(width: 90, alignment: .trailing)
 
@@ -327,9 +327,6 @@ struct CustomerReportView: View {
         }
     }
 
-    private func durationFromMinutes(_ minutes: Int) -> String {
-        ProWorkFormatters.durationHM(minutes * 60)
-    }
 
     // MARK: - Actions
 

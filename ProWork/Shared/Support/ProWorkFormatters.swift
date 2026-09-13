@@ -23,6 +23,16 @@ enum ProWorkFormatters {
         return String(format: "%02d:%02d", hours, minutes)
     }
 
+    static func durationHHmmss(_ seconds: Int) -> String {
+        assertionFailureIfNegative(seconds)
+        let safeSeconds = max(0, seconds)
+        let hours = safeSeconds / 3600
+        let minutes = (safeSeconds % 3600) / 60
+        let remainingSeconds = safeSeconds % 60
+
+        return String(format: "%02d:%02d:%02d", hours, minutes, remainingSeconds)
+    }
+
     static func durationHM(_ seconds: Int) -> String {
         assertionFailureIfNegative(seconds)
         let safeSeconds = max(0, seconds)

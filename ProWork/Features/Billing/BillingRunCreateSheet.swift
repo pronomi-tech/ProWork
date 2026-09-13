@@ -12,20 +12,48 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct BillingRunCreateSheet: View {
+    private enum ScopeMode: String, CaseIterable, Identifiable {
+        case customer
+        case folder
+
+        var id: String { rawValue }
+    }
+
+    private struct FolderOption: Identifiable {
+        let id: String
+        let title: String
+    }
+
+    private enum PreviewColumn: Hashable {
+        case todo
+        case customer
+        case project
+        case serviceType
+        case timeType
+        case startedAt
+        case billable
+        case amount
+        case status
+    }
+
     let customers: [Customer]
     let customerCurrencies: [String: String]
-    let onSave: (String, Date, Date, String?, [String]) throws -> Void
+    let onSave: (BillingDraftSourceScope, Date, Date, String?, [String]) throws -> Void
 
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var settingsStore: AppSettingsStore
     @StateObject private var viewModel = BillingDraftPickerViewModel()
 
     @State private var selectedCustomerId: String = ""
+    @State private var selectedFolderId: String = ""
+    @State private var scopeMode: ScopeMode = .customer
+    @State private var includesDescendantFolders = false
     @State private var selectedLineKeys: Set<String> = []
     @State private var title: String = ""
     @State private var range: DateRangeFilter = .thisMonth
     @State private var customStart: Date = AppCalendar.istanbul.date(from: AppCalendar.istanbul.dateComponents([.year, .month], from: Date())) ?? Date()
     @State private var customEnd: Date = Date()
+    @State private var previewColumnWidths: [PreviewColumn: CGFloat] = [:]
 
     // ViewModel proxy — the sheet body uses these names in 30+ places.
     //
@@ -39,6 +67,8 @@ struct BillingRunCreateSheet: View {
     // switch the field to `@StateObject` first.
     private var availableCustomers: [Customer] { viewModel.availableCustomers }
     private var availableCustomerCurrencies: [String: String] { viewModel.availableCustomerCurrencies }
+    private var availableFolders: [WorkFolder] { viewModel.availableFolders }
+    private var availableProjects: [ProjectListItem] { viewModel.availableProjects }
     private var preview: BillingDraftPreview? { viewModel.preview }
     private var isLoadingPreview: Bool { viewModel.isLoadingPreview }
     private var isImportingTodayRates: Bool { viewModel.isImportingTodayRates }
@@ -80,6 +110,9 @@ struct BillingRunCreateSheet: View {
             loadCustomers()
         }
         .onChange(of: selectedCustomerId) { _, _ in loadPreview() }
+        .onChange(of: selectedFolderId) { _, _ in loadPreview() }
+        .onChange(of: scopeMode) { _, _ in loadPreview() }
+        .onChange(of: includesDescendantFolders) { _, _ in loadPreview() }
         .onChange(of: range) { _, _ in loadPreview() }
         .onChange(of: customStart) { _, _ in loadPreview() }
         .onChange(of: customEnd) { _, _ in loadPreview() }
@@ -101,21 +134,59 @@ struct BillingRunCreateSheet: View {
     private var formFields: some View {
         VStack(alignment: .leading, spacing: ProWorkLayout.formScaled(18, using: settingsStore)) {
             VStack(alignment: .leading, spacing: ProWorkLayout.formScaled(14, using: settingsStore)) {
-                formRow(label: localized("projects.form.customer", defaultValue: "Müşteri")) {
-                    ProWorkSearchPickerField(
-                        placeholder: localized("billing.create.customerPlaceholder", defaultValue: "Müşteri seçin"),
-                        items: availableCustomers,
-                        selectedId: $selectedCustomerId,
-                        isDisabled: availableCustomers.isEmpty,
-                        showsSearch: availableCustomers.count > 8,
-                        systemImage: "person.2",
-                        itemTitle: { $0.name },
-                        itemSubtitle: { availableCustomerCurrencies[$0.id] ?? "TRY" },
-                        matchesSearch: { item, text in
-                            item.name.localizedCaseInsensitiveContains(text)
-                        }
-                    )
+                formRow(label: localized("billing.create.scope", defaultValue: "Kapsam")) {
+                    Picker("", selection: $scopeMode) {
+                        Text(localized("projects.form.customer", defaultValue: "Müşteri"))
+                            .tag(ScopeMode.customer)
+                        Text(localized("todoForm.folder", defaultValue: "Klasör"))
+                            .tag(ScopeMode.folder)
+                    }
+                    .pickerStyle(.segmented)
                     .frame(width: ProWorkLayout.formScaled(360, using: settingsStore))
+                }
+
+                if scopeMode == .customer {
+                    formRow(label: localized("projects.form.customer", defaultValue: "Müşteri")) {
+                        ProWorkSearchPickerField(
+                            placeholder: localized("billing.create.customerPlaceholder", defaultValue: "Müşteri seçin"),
+                            items: availableCustomers,
+                            selectedId: $selectedCustomerId,
+                            isDisabled: availableCustomers.isEmpty,
+                            showsSearch: availableCustomers.count > 8,
+                            systemImage: "person.2",
+                            itemTitle: { $0.name },
+                            itemSubtitle: { availableCustomerCurrencies[$0.id] ?? "TRY" },
+                            matchesSearch: { item, text in
+                                item.name.localizedCaseInsensitiveContains(text)
+                            }
+                        )
+                        .frame(width: ProWorkLayout.formScaled(360, using: settingsStore))
+                    }
+                } else {
+                    formRow(label: localized("todoForm.folder", defaultValue: "Klasör")) {
+                        HStack(spacing: ProWorkLayout.formScaled(14, using: settingsStore)) {
+                            ProWorkSearchPickerField(
+                                placeholder: localized("billing.create.folderPlaceholder", defaultValue: "Klasör seçin"),
+                                items: folderOptions,
+                                selectedId: $selectedFolderId,
+                                isDisabled: folderOptions.isEmpty,
+                                showsSearch: folderOptions.count > 8,
+                                systemImage: "folder",
+                                itemTitle: { $0.title },
+                                itemSubtitle: { _ in nil },
+                                matchesSearch: { item, text in
+                                    item.title.localizedCaseInsensitiveContains(text)
+                                }
+                            )
+                            .frame(width: ProWorkLayout.formScaled(420, using: settingsStore))
+
+                            ProWorkCheckbox(
+                                localized("workFolders.sidebar.includeSubfolders", defaultValue: "Alt klasörleri dahil et"),
+                                isOn: $includesDescendantFolders
+                            )
+                            .fixedSize()
+                        }
+                    }
                 }
 
                 formRow(label: localized("billing.create.runTitle", defaultValue: "Döküm Başlığı")) {
@@ -148,7 +219,7 @@ struct BillingRunCreateSheet: View {
             onCancel: { dismiss() },
             onSave: { saveDraft() },
             saveTitle: localized("common.create", defaultValue: "Oluştur"),
-            saveDisabled: selectedCustomerId.isEmpty || selectedLineKeys.isEmpty || isLoadingPreview
+            saveDisabled: currentScope == nil || selectedLineKeys.isEmpty || isLoadingPreview
         )
     }
 
@@ -205,17 +276,7 @@ struct BillingRunCreateSheet: View {
                         .foregroundStyle(.secondary)
                 }
 
-                if preview.lines.isEmpty {
-                    SettingsEmptyState(
-                            systemImage: "list.bullet.clipboard",
-                            title: localized("billing.previewSelection.empty.title", defaultValue: "Satır bulunamadı"),
-                            message: localized("billing.previewSelection.empty.message", defaultValue: "Seçilen dönem için hesaplanabilir hizmet satırı bulunamadı.")
-                        )
-                    } else {
-                        ScrollView(.horizontal) {
-                            previewTable(preview.lines)
-                        }
-                    }
+                previewTable(preview.lines)
                 } else if isLoadingPreview {
                     HStack(spacing: 12) {
                         ProgressView()
@@ -231,39 +292,56 @@ struct BillingRunCreateSheet: View {
     }
 
     private func previewTable(_ lines: [BillingDraftPreviewLine]) -> some View {
-        SettingsTableContainer {
-            VStack(spacing: 0) {
-                HStack(spacing: 12) {
-                    Color.clear.frame(width: 36)
-                    Text(localized("reports.todo.table.todo", defaultValue: "Görev")).frame(width: 260, alignment: .leading)
-                    Text(localized("projects.title.single", defaultValue: "Proje")).frame(width: 150, alignment: .leading)
-                    Text(localized("priceLists.rows.form.serviceType", defaultValue: "Hizmet")).frame(width: 90, alignment: .leading)
-                    Text(localized("priceLists.rows.form.timeType", defaultValue: "Zaman")).frame(width: 100, alignment: .leading)
-                    Text(localized("workSessions.column.start", defaultValue: "Başlangıç")).frame(width: 150, alignment: .leading)
-                    Text(localized("reports.table.billable", defaultValue: "Ücretli")).frame(width: 70, alignment: .trailing)
-                    Text(localized("reports.table.amount", defaultValue: "Tutar")).frame(width: 130, alignment: .trailing)
-                    Text(localized("projects.form.status", defaultValue: "Durum")).frame(width: 180, alignment: .leading)
-                }
-                .proWorkTextStyle(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(.quaternary.opacity(0.35))
+        ProWorkGrid(
+            items: lines,
+            minTableWidth: previewTableWidth,
+            header: { previewTableHeader },
+            emptyContent: {
+                ProWorkGridEmptyState(
+                    systemImage: "list.bullet.clipboard",
+                    title: localized("billing.previewSelection.empty.title", defaultValue: "Satır bulunamadı"),
+                    message: localized("billing.previewSelection.empty.message", defaultValue: "Seçilen dönem için hesaplanabilir hizmet satırı bulunamadı.")
+                )
+            },
+            row: { line in previewRow(line) }
+        )
+    }
 
-                Divider()
-
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(lines) { line in
-                            previewRow(line)
-                            Divider()
-                        }
-                    }
-                }
-                .frame(maxHeight: .infinity)
+    private var previewTableHeader: some View {
+        HStack(spacing: 12) {
+            Color.gridHeaderSpacer(width: 36)
+            previewHeaderCell(.todo, defaultWidth: 260, minWidth: 140, maxWidth: 520, alignment: .leading) {
+                Text(localized("reports.todo.table.todo", defaultValue: "Görev"))
+            }
+            previewHeaderCell(.customer, defaultWidth: 150, minWidth: 90, maxWidth: 320, alignment: .leading) {
+                Text(localized("projects.form.customer", defaultValue: "Müşteri"))
+            }
+            previewHeaderCell(.project, defaultWidth: 150, minWidth: 90, maxWidth: 320, alignment: .leading) {
+                Text(localized("projects.title.single", defaultValue: "Proje"))
+            }
+            previewHeaderCell(.serviceType, defaultWidth: 90, minWidth: 70, maxWidth: 220, alignment: .leading) {
+                Text(localized("priceLists.rows.form.serviceType", defaultValue: "Hizmet"))
+            }
+            previewHeaderCell(.timeType, defaultWidth: 100, minWidth: 70, maxWidth: 220, alignment: .leading) {
+                Text(localized("priceLists.rows.form.timeType", defaultValue: "Zaman"))
+            }
+            previewHeaderCell(.startedAt, defaultWidth: 150, minWidth: 120, maxWidth: 260, alignment: .leading) {
+                Text(localized("workSessions.column.start", defaultValue: "Başlangıç"))
+            }
+            previewHeaderCell(.billable, defaultWidth: 70, minWidth: 60, maxWidth: 160, alignment: .trailing) {
+                Text(localized("reports.table.billable", defaultValue: "Ücretli"))
+            }
+            previewHeaderCell(.amount, defaultWidth: 130, minWidth: 90, maxWidth: 260, alignment: .trailing) {
+                Text(localized("reports.table.amount", defaultValue: "Tutar"))
+            }
+            previewHeaderCell(.status, defaultWidth: 180, minWidth: 120, maxWidth: 360, alignment: .leading) {
+                Text(localized("projects.form.status", defaultValue: "Durum"))
             }
         }
-        .frame(minWidth: 1210, maxHeight: .infinity, alignment: .leading)
+        .proWorkTextStyle(.caption)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 14)
+        .background(.quaternary.opacity(0.35))
     }
 
     private func previewRow(_ previewLine: BillingDraftPreviewLine) -> some View {
@@ -280,37 +358,42 @@ struct BillingRunCreateSheet: View {
 
             Text(line.todoTitle)
                 .proWorkTextStyle(.callout)
-                .frame(width: 260, alignment: .leading)
+                .frame(width: previewColumnWidth(.todo, defaultWidth: 260), alignment: .leading)
+                .lineLimit(1)
+            Text(line.customerName)
+                .proWorkTextStyle(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: previewColumnWidth(.customer, defaultWidth: 150), alignment: .leading)
                 .lineLimit(1)
             Text(line.projectName ?? "—")
                 .proWorkTextStyle(.caption)
                 .foregroundStyle(.secondary)
-                .frame(width: 150, alignment: .leading)
+                .frame(width: previewColumnWidth(.project, defaultWidth: 150), alignment: .leading)
                 .lineLimit(1)
             Text(line.isFixedFee ? localized("export.column.fixedFee", defaultValue: "Sabit") : line.serviceType.title)
                 .proWorkTextStyle(.caption)
-                .frame(width: 90, alignment: .leading)
+                .frame(width: previewColumnWidth(.serviceType, defaultWidth: 90), alignment: .leading)
             Text(line.isFixedFee ? "—" : line.timeType.title)
                 .proWorkTextStyle(.caption)
-                .frame(width: 100, alignment: .leading)
+                .frame(width: previewColumnWidth(.timeType, defaultWidth: 100), alignment: .leading)
             Text(line.startedAt.map(settingsStore.formatDateTime) ?? "—")
                 .proWorkTextStyle(.caption)
-                .frame(width: 150, alignment: .leading)
+                .frame(width: previewColumnWidth(.startedAt, defaultWidth: 150), alignment: .leading)
                 .lineLimit(1)
             Text(
                 isOpenSession
                 ? "—"
                 : (
                     line.isFixedFee
-                    ? String(format: localized("workSessions.form.duration.minutes", defaultValue: "%d dk"), 0)
-                    : String(format: localized("workSessions.form.duration.minutes", defaultValue: "%d dk"), line.billableMinutes)
+                    ? ProWorkFormatters.durationHHmmss(0)
+                    : ProWorkFormatters.durationHHmmss(line.billableSeconds)
                 )
             )
                 .proWorkTextStyle(.caption)
-                .frame(width: 70, alignment: .trailing)
+                .frame(width: previewColumnWidth(.billable, defaultWidth: 70), alignment: .trailing)
             Text(isOpenSession ? "—" : ProWorkFormatters.money(line.total))
                 .proWorkTextStyle(.caption, weight: .medium)
-                .frame(width: 130, alignment: .trailing)
+                .frame(width: previewColumnWidth(.amount, defaultWidth: 130), alignment: .trailing)
             VStack(alignment: .leading, spacing: 2) {
                 Text(line.isManual
                      ? localized("workSessions.source.manual", defaultValue: "Manuel")
@@ -325,11 +408,46 @@ struct BillingRunCreateSheet: View {
                         .lineLimit(1)
                 }
             }
-            .frame(width: 180, alignment: .leading)
+            .frame(width: previewColumnWidth(.status, defaultWidth: 180), alignment: .leading)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .opacity(previewLine.isSelectable ? 1 : 0.6)
+    }
+
+    private func previewColumnWidth(_ column: PreviewColumn, defaultWidth: CGFloat) -> CGFloat {
+        previewColumnWidths[column] ?? defaultWidth
+    }
+
+    private var previewTableWidth: CGFloat {
+        160
+            + previewColumnWidth(.todo, defaultWidth: 260)
+            + previewColumnWidth(.customer, defaultWidth: 150)
+            + previewColumnWidth(.project, defaultWidth: 150)
+            + previewColumnWidth(.serviceType, defaultWidth: 90)
+            + previewColumnWidth(.timeType, defaultWidth: 100)
+            + previewColumnWidth(.startedAt, defaultWidth: 150)
+            + previewColumnWidth(.billable, defaultWidth: 70)
+            + previewColumnWidth(.amount, defaultWidth: 130)
+            + previewColumnWidth(.status, defaultWidth: 180)
+    }
+
+    private func previewHeaderCell<Content: View>(
+        _ column: PreviewColumn,
+        defaultWidth: CGFloat,
+        minWidth: CGFloat,
+        maxWidth: CGFloat,
+        alignment: Alignment,
+        @ViewBuilder content: @escaping () -> Content
+    ) -> some View {
+        ProWorkResizableGridHeaderCell(
+            width: previewColumnWidth(column, defaultWidth: defaultWidth),
+            minWidth: minWidth,
+            maxWidth: maxWidth,
+            alignment: alignment,
+            onResize: { previewColumnWidths[column] = $0 },
+            content: content
+        )
     }
 
     private func formRow<Content: View>(
@@ -415,9 +533,10 @@ struct BillingRunCreateSheet: View {
     }
 
     private func saveDraft() {
+        guard let currentScope else { return }
         do {
             try onSave(
-                selectedCustomerId,
+                currentScope,
                 effectiveStartDate,
                 inclusiveEndDate,
                 title.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
@@ -430,14 +549,14 @@ struct BillingRunCreateSheet: View {
     }
 
     private func loadPreview() {
-        guard !selectedCustomerId.isEmpty else {
+        guard let currentScope else {
             viewModel.clearPreview()
             selectedLineKeys.removeAll()
             return
         }
 
         viewModel.loadPreview(
-            customerId: selectedCustomerId,
+            scope: currentScope,
             periodStart: effectiveStartDate,
             periodEnd: inclusiveEndDate
         )
@@ -463,7 +582,7 @@ struct BillingRunCreateSheet: View {
         Set(
             selectablePreviewLines
                 .filter { selectedLineKeys.contains($0.selectionKey) }
-                .map(\.line.currency)
+                .map { "\($0.line.customerId)|\($0.line.currency)" }
         ).count
     }
 
@@ -494,9 +613,36 @@ struct BillingRunCreateSheet: View {
         }
 
         if loaded.isEmpty {
-            viewModel.clearPreview()
-            selectedLineKeys.removeAll()
+            scopeMode = .folder
         }
+
+        if selectedFolderId.isEmpty || !Set(folderOptions.map(\.id)).contains(selectedFolderId) {
+            selectedFolderId = folderOptions.first?.id ?? ""
+        }
+        loadPreview()
+    }
+
+    private var currentScope: BillingDraftSourceScope? {
+        switch scopeMode {
+        case .customer:
+            return selectedCustomerId.isEmpty ? nil : .customer(selectedCustomerId)
+        case .folder:
+            return selectedFolderId.isEmpty
+                ? nil
+                : .folder(folderId: selectedFolderId, includesDescendants: includesDescendantFolders)
+        }
+    }
+
+    private var folderOptions: [FolderOption] {
+        var result = WorkFolderHierarchy.flattened(availableFolders, projectId: nil).map {
+            FolderOption(id: $0.id, title: $0.path)
+        }
+        for project in availableProjects.sorted(by: { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }) {
+            result.append(contentsOf: WorkFolderHierarchy.flattened(availableFolders, projectId: project.id).map {
+                FolderOption(id: $0.id, title: "\(project.name) / \($0.path)")
+            })
+        }
+        return result
     }
 
     private var selectedTotalInMasterState: MasterTotalState {

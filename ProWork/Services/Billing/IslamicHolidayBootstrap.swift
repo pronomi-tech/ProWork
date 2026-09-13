@@ -11,6 +11,8 @@ import os
 
 @MainActor
 final class IslamicHolidayBootstrap {
+    private static let seededThroughGregorianYear = 2030
+
     private let holidayRepository: HolidayRepository
     private let organizationId: String
 
@@ -22,10 +24,8 @@ final class IslamicHolidayBootstrap {
         self.organizationId = organizationId ?? BuiltInOrganizationId.default
     }
 
-    /// Inserts religious-holiday + eve rows for the range
-    /// `currentYear..currentYear+yearsAhead`. If a row with the same date
-    /// and name already exists (e.g. a Migration001 seed or a user entry)
-    /// it is left untouched.
+    /// Inserts religious-holiday + eve rows after Migration001's verified
+    /// 2024–2030 seed horizon. Existing date/name pairs are left untouched.
     func ensurePopulated(
         currentYear: Int,
         yearsAhead: Int = BillingDefaults.islamicHolidayYearsAhead,
@@ -45,20 +45,24 @@ final class IslamicHolidayBootstrap {
             fingerprints.insert(Self.fingerprint(date: holiday.dateString, name: holiday.name))
         }
 
-        for offset in 0...yearsAhead {
-            let year = currentYear + offset
-            let generated = TurkishIslamicHolidayGenerator.holidays(
-                forGregorianYear: year,
-                organizationId: organizationId,
-                now: now
-            )
+        let nextHorizon = currentYear + max(0, yearsAhead)
+        let firstGeneratedYear = max(currentYear, Self.seededThroughGregorianYear + 1)
 
-            for holiday in generated {
-                let key = Self.fingerprint(date: holiday.dateString, name: holiday.name)
-                guard !fingerprints.contains(key) else { continue }
+        if firstGeneratedYear <= nextHorizon {
+            for year in firstGeneratedYear...nextHorizon {
+                let generated = TurkishIslamicHolidayGenerator.holidays(
+                    forGregorianYear: year,
+                    organizationId: organizationId,
+                    now: now
+                )
 
-                try holidayRepository.insert(holiday)
-                fingerprints.insert(key)
+                for holiday in generated {
+                    let key = Self.fingerprint(date: holiday.dateString, name: holiday.name)
+                    guard !fingerprints.contains(key) else { continue }
+
+                    try holidayRepository.insert(holiday)
+                    fingerprints.insert(key)
+                }
             }
         }
 
@@ -67,8 +71,8 @@ final class IslamicHolidayBootstrap {
         // `verifiedThroughGregorianYear` must be bumped (and a
         // `diyanetOverrides` row added if needed) — otherwise past years
         // stay correct while future years can drift by 1-2 days.
-        let nextHorizon = currentYear + yearsAhead
-        if nextHorizon > TurkishIslamicHolidayGenerator.verifiedThroughGregorianYear {
+        if firstGeneratedYear <= nextHorizon,
+           nextHorizon > TurkishIslamicHolidayGenerator.verifiedThroughGregorianYear {
             ProWorkLog.app.warning(
                 "Islamic holiday generator: \(nextHorizon - TurkishIslamicHolidayGenerator.verifiedThroughGregorianYear, privacy: .public) year(s) past the verified-through-\(TurkishIslamicHolidayGenerator.verifiedThroughGregorianYear, privacy: .public) cutoff. Compare with Diyanet's official calendar; add `DiyanetHolidayOverride` rows for any mismatches and bump `verifiedThroughGregorianYear`."
             )

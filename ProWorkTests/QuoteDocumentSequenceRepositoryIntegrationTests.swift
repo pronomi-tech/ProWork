@@ -1,15 +1,11 @@
-//  Migration007QuoteSequenceMigrationTests.swift
+//  QuoteDocumentSequenceRepositoryIntegrationTests.swift
 //  ProWorkTests
-// Verifies Migration007:
-//    1. Fresh DB has the `quote_document_sequences` table.
-//    2. QuoteDocumentSequenceRepository.reserveNext returns 1 on fresh state.
-//    3. A pre-existing JSON payload in `app_settings.quoteSequenceByYear`
-//       is seeded into the new table so monotonicity survives the migration.
+//  Quote numbering persistence and concurrency behavior.
 
 import XCTest
 @testable import ProWork
 
-final class Migration007QuoteSequenceMigrationTests: XCTestCase {
+final class QuoteDocumentSequenceRepositoryIntegrationTests: XCTestCase {
 
     private var dbURL: URL!
 
@@ -34,7 +30,7 @@ final class Migration007QuoteSequenceMigrationTests: XCTestCase {
             statement.text(at: 0) ?? ""
         }
         XCTAssertEqual(rows, ["quote_document_sequences"],
-                       "Migration007 should create quote_document_sequences.")
+                       "The consolidated migrations should create quote_document_sequences.")
     }
 
     func test_reserveNext_returnsOne_onFreshTable() throws {
@@ -67,50 +63,6 @@ final class Migration007QuoteSequenceMigrationTests: XCTestCase {
         let peeked2 = try repo.peekCurrent(organizationId: BuiltInOrganizationId.default, year: 2026)
         XCTAssertEqual(peeked1, 1)
         XCTAssertEqual(peeked2, 1, "peekCurrent should NOT advance the counter.")
-    }
-
-    func test_legacyAppSettingsJSON_isPreservedInsideNewTable() throws {
-        // Simulate a DB that lived through the old JSON-counter era by
-        // inserting a quoteSequenceByYear app_settings row, then running
-        // a "re-migration" via a fresh AppDatabase.configure on the same URL.
-        // Since fresh tests start with the table already populated by
-        // Migration007's seed step, the cleanest way to validate the
-        // seed-from-JSON path is to:
-        //   1. Wipe quote_document_sequences.
-        //   2. Insert a JSON row into app_settings (matching the legacy
-        //      payload shape).
-        //   3. Re-invoke the seed step directly.
-        try AppDatabase.shared.execute("DELETE FROM quote_document_sequences;")
-
-        let now = AppDateFormatters.sqliteTimestamp.string(from: Date())
-        try AppDatabase.shared.execute("""
-        INSERT OR REPLACE INTO app_settings (key, value, createdAt, updatedAt)
-        VALUES (?, ?, ?, ?);
-        """) { stmt in
-            stmt.bindText("quoteSequenceByYear", at: 1)
-            stmt.bindText(#"{"2025":7}"#, at: 2)
-            stmt.bindText(now, at: 3)
-            stmt.bindText(now, at: 4)
-        }
-
-        // Re-invoke the migration step (idempotent).
-        try Migration007QuoteSequenceTable().up(AppDatabase.shared)
-
-        let repo = QuoteDocumentSequenceRepository()
-        let peeked = try repo.peekCurrent(
-            organizationId: BuiltInOrganizationId.default,
-            year: 2025
-        )
-        XCTAssertEqual(peeked, 7,
-                       "Legacy JSON value should seed the new table.")
-
-        // The next reservation continues the legacy series — value 8.
-        let next = try repo.reserveNext(
-            organizationId: BuiltInOrganizationId.default,
-            year: 2025
-        )
-        XCTAssertEqual(next, 8,
-                       "reserveNext after seed should continue monotonically.")
     }
 
     // MARK: - Concurrent reservation: duplicate üretmemeli

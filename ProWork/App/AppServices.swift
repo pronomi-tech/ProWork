@@ -37,6 +37,7 @@ final class AppServices: ObservableObject {
 
     let customerRepository: CustomerRepository
     let projectRepository: ProjectRepository
+    let workFolderRepository: WorkFolderRepository
     let categoryRepository: TaskCategoryRepository
     let statusRepository: TodoStatusRepository
     let todoRepository: TodoRepository
@@ -85,6 +86,7 @@ final class AppServices: ObservableObject {
 
         self.customerRepository = CustomerRepository(database: database)
         self.projectRepository = ProjectRepository(database: database)
+        self.workFolderRepository = WorkFolderRepository(database: database)
         self.categoryRepository = TaskCategoryRepository(database: database)
         self.statusRepository = TodoStatusRepository(database: database)
         self.todoRepository = TodoRepository(database: database)

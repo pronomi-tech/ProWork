@@ -166,6 +166,7 @@ private extension TodoListItem {
             categoryId: "",
             categoryName: "",
             categoryColor: nil,
+            categoryIsBillable: true,
             statusId: "",
             statusName: "",
             statusColor: nil,

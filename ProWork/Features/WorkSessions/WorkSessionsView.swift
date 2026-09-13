@@ -11,6 +11,9 @@ struct WorkSessionsView: View {
 
     @State private var isShowingCreateForm = false
     @State private var editingSession: WorkSessionListItem?
+    @State private var locationSelection: WorkLocationSelection = .all
+    @State private var includeDescendantFolders = false
+    @State private var folderFormRequest: WorkSessionFolderFormRequest?
 
     @State private var pendingWorkStart: PendingWorkStart?
     @State private var confirmation: ProWorkConfirmation?
@@ -38,21 +41,68 @@ struct WorkSessionsView: View {
     @EnvironmentObject private var clockTicker: ProWorkClockTicker
 
     var body: some View {
-        VStack(alignment: .leading, spacing: ProWorkLayout.scaled(16, using: settingsStore)) {
-            header
+        HStack(spacing: 0) {
+            WorkFolderSidebar(
+                projects: viewModel.projects,
+                folders: viewModel.folders,
+                itemCount: { selection, includesDescendants in
+                    viewModel.visibleSessions(
+                        for: selection,
+                        includeDescendantFolders: includesDescendants
+                    ).count
+                },
+                selection: $locationSelection,
+                includeDescendantFolders: $includeDescendantFolders,
+                onCreateIndependentFolder: {
+                    folderFormRequest = WorkSessionFolderFormRequest(
+                        existingFolder: nil,
+                        projectId: nil,
+                        parentFolderId: nil
+                    )
+                },
+                onCreateProjectFolder: { project in
+                    folderFormRequest = WorkSessionFolderFormRequest(
+                        existingFolder: nil,
+                        projectId: project.id,
+                        parentFolderId: nil
+                    )
+                },
+                onCreateChildFolder: { folder in
+                    folderFormRequest = WorkSessionFolderFormRequest(
+                        existingFolder: nil,
+                        projectId: folder.projectId,
+                        parentFolderId: folder.id
+                    )
+                },
+                onEditFolder: { folder in
+                    folderFormRequest = WorkSessionFolderFormRequest(
+                        existingFolder: folder,
+                        projectId: folder.projectId,
+                        parentFolderId: folder.parentFolderId
+                    )
+                },
+                onDeleteFolder: askDeleteFolder
+            )
+            .frame(width: 270)
 
-            filterBar
+            Divider()
 
-            if isShowingFilters {
-                filterPanel
+            VStack(alignment: .leading, spacing: ProWorkLayout.scaled(16, using: settingsStore)) {
+                header
+
+                filterBar
+
+                if isShowingFilters {
+                    filterPanel
+                }
+
+                summary
+
+                table
             }
-
-            summary
-
-            table
+            .padding(ProWorkLayout.scaled(24, using: settingsStore))
         }
-        .padding(ProWorkLayout.scaled(24, using: settingsStore))
-        .proWorkFrame(minWidth: 760, minHeight: 760)
+        .proWorkFrame(minWidth: 1_250, minHeight: 760)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .proWorkToastNotifications(errorMessage: viewModel.errorMessage)
         .onAppear {
@@ -67,6 +117,9 @@ struct WorkSessionsView: View {
         // rebuild filtered cache on filter / data changes.
         .onChange(of: viewModel.sessions) { _, _ in rebuildFilteredSessionsCache() }
         .onChange(of: viewModel.todos) { _, _ in rebuildFilteredSessionsCache() }
+        .onChange(of: viewModel.folders) { _, _ in rebuildFilteredSessionsCache() }
+        .onChange(of: locationSelection) { _, _ in rebuildFilteredSessionsCache() }
+        .onChange(of: includeDescendantFolders) { _, _ in rebuildFilteredSessionsCache() }
         .onChange(of: filterRange) { _, _ in rebuildFilteredSessionsCache() }
         .onChange(of: filterCustomerId) { _, _ in rebuildFilteredSessionsCache() }
         .onChange(of: filterProjectId) { _, _ in rebuildFilteredSessionsCache() }
@@ -81,17 +134,20 @@ struct WorkSessionsView: View {
                 todos: viewModel.todos,
                 customers: viewModel.customers,
                 projects: viewModel.projects,
+                folders: viewModel.folders,
                 categories: viewModel.categories,
                 statuses: viewModel.statuses,
                 onTodosChanged: { _ in
                     viewModel.loadData()
                 }
-            ) { _, todoId, startedAt, endedAt, note, _ in
+            ) { _, todoId, startedAt, endedAt, note, _, timeTypeOverride, overrideReason in
                 if viewModel.createManualSession(
                     todoId: todoId,
                     startedAt: startedAt,
                     endedAt: endedAt,
-                    note: note
+                    note: note,
+                    billingTimeTypeOverride: timeTypeOverride,
+                    billingTimeTypeOverrideReason: overrideReason
                 ) {
                     isShowingCreateForm = false
                 }
@@ -103,12 +159,13 @@ struct WorkSessionsView: View {
                 todos: viewModel.todos,
                 customers: viewModel.customers,
                 projects: viewModel.projects,
+                folders: viewModel.folders,
                 categories: viewModel.categories,
                 statuses: viewModel.statuses,
                 onTodosChanged: { _ in
                     viewModel.loadData()
                 }
-            ) { sessionId, todoId, startedAt, endedAt, note, isManual in
+            ) { sessionId, todoId, startedAt, endedAt, note, isManual, timeTypeOverride, overrideReason in
                 guard let sessionId else { return }
 
                 if viewModel.updateSession(
@@ -117,9 +174,24 @@ struct WorkSessionsView: View {
                     startedAt: startedAt,
                     endedAt: endedAt,
                     note: note,
-                    isManual: isManual
+                    isManual: isManual,
+                    billingTimeTypeOverride: timeTypeOverride,
+                    billingTimeTypeOverrideReason: overrideReason
                 ) {
                     editingSession = nil
+                }
+            }
+        }
+        .sheet(item: $folderFormRequest) { request in
+            WorkFolderFormView(
+                existingFolder: request.existingFolder,
+                projectId: request.projectId,
+                parentFolderId: request.parentFolderId,
+                folders: viewModel.folders
+            ) { folder in
+                if viewModel.saveFolder(folder, isNew: request.existingFolder == nil) {
+                    locationSelection = .folder(folder.id)
+                    folderFormRequest = nil
                 }
             }
         }
@@ -142,7 +214,10 @@ struct WorkSessionsView: View {
         let filterByCustomer = !filterCustomerId.isEmpty
         let filterByProject = !filterProjectId.isEmpty
 
-        cachedFilteredSessions = viewModel.sessions.filter { session in
+        cachedFilteredSessions = viewModel.visibleSessions(
+            for: locationSelection,
+            includeDescendantFolders: includeDescendantFolders
+        ).filter { session in
             guard matchesRange(session) else { return false }
             if filterByCustomer || filterByProject {
                 guard let todo = todoLookup[session.todoId] else { return false }
@@ -415,7 +490,7 @@ struct WorkSessionsView: View {
             HStack(spacing: ProWorkLayout.scaled(12, using: settingsStore)) {
                 summaryCard(
                     title: settingsStore.localized("workSessions.summary.totalTime", defaultValue: "Toplam Süre"),
-                    value: ProWorkFormatters.durationHHmm(totalSeconds),
+                    value: ProWorkFormatters.durationHHmmss(totalSeconds),
                     systemImage: "clock"
                 )
 
@@ -501,13 +576,16 @@ struct WorkSessionsView: View {
                 .proWorkFrame(width: 60, alignment: .center)
 
             Text(settingsStore.localized("workSessions.column.duration", defaultValue: "Süre"))
-                .proWorkFrame(width: 60, alignment: .center)
+                .proWorkFrame(width: 80, alignment: .center)
 
             Text(settingsStore.localized("workSessions.column.todo", defaultValue: "Yapılacak İş"))
                 .proWorkFrame(minWidth: 240, maxWidth: .infinity, alignment: .leading)
 
             Text(settingsStore.localized("workSessions.column.customerProject", defaultValue: "Müşteri / Proje"))
                 .proWorkFrame(width: 190, alignment: .leading)
+
+            Text(settingsStore.localized("todoForm.folder", defaultValue: "Klasör"))
+                .proWorkFrame(width: 150, alignment: .leading)
 
             Text(settingsStore.localized("workSessions.column.source", defaultValue: "Kaynak"))
                 .proWorkFrame(width: 60, alignment: .leading)
@@ -540,10 +618,10 @@ struct WorkSessionsView: View {
                 .foregroundStyle(session.endedAt == nil ? ProWorkColors.activeHighlight : .secondary)
                 .proWorkFrame(width: 60, alignment: .center)
 
-            Text(ProWorkFormatters.durationHHmm(durationSeconds(session)))
+            Text(ProWorkFormatters.durationHHmmss(durationSeconds(session)))
                 .proWorkTextStyle(.caption)
                 .monospacedDigit()
-                .proWorkFrame(width: 60, alignment: .center)
+                .proWorkFrame(width: 80, alignment: .center)
 
             VStack(alignment: .leading, spacing: ProWorkLayout.scaled(2, using: settingsStore)) {
                 HStack(spacing: ProWorkLayout.scaled(6, using: settingsStore)) {
@@ -553,6 +631,13 @@ struct WorkSessionsView: View {
 
                     if session.endedAt == nil {
                         activeSessionBadge
+                    }
+
+                    if let timeType = session.billingTimeTypeOverride {
+                        billingTimeTypeOverrideBadge(
+                            timeType,
+                            reason: session.billingTimeTypeOverrideReason
+                        )
                     }
                 }
 
@@ -571,6 +656,12 @@ struct WorkSessionsView: View {
                 .lineLimit(2)
                 .proWorkFrame(width: 190, alignment: .leading)
 
+            Text(viewModel.folderPath(forTodoId: session.todoId) ?? "—")
+                .proWorkTextStyle(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .proWorkFrame(width: 150, alignment: .leading)
+
             sourceBadge(session)
                 .proWorkFrame(width: 60, alignment: .leading)
         }
@@ -580,28 +671,36 @@ struct WorkSessionsView: View {
     }
 
     private func rowActions(_ session: WorkSessionListItem) -> some View {
-        HStack(spacing: ProWorkLayout.scaled(6, using: settingsStore)) {
-            if session.endedAt == nil {
-                Button {
-                    viewModel.stopWork(for: session)
-                } label: {
-                    Image(systemName: "stop.circle.fill")
-                        .proWorkFont(size: 16)
-                        .foregroundStyle(ProWorkColors.stopAction)
+        let actionSize = ProWorkLayout.scaled(18, using: settingsStore)
+
+        return HStack(spacing: ProWorkLayout.scaled(6, using: settingsStore)) {
+            Group {
+                if session.endedAt == nil {
+                    Button {
+                        viewModel.stopWork(for: session)
+                    } label: {
+                        Image(systemName: "stop.circle.fill")
+                            .proWorkFont(size: 16)
+                            .foregroundStyle(ProWorkColors.stopAction)
+                    }
+                    .buttonStyle(.borderless)
+                    .help(settingsStore.localized("workSessions.action.stop", defaultValue: "Çalışmayı durdur"))
+                } else if session.statusStartsTimer && !hasActiveSession(for: session.todoId) {
+                    Button {
+                        requestStartWork(for: session)
+                    } label: {
+                        Image(systemName: "play.circle.fill")
+                            .proWorkFont(size: 16)
+                            .foregroundStyle(ProWorkColors.startAction)
+                    }
+                    .buttonStyle(.borderless)
+                    .help(settingsStore.localized("workSessions.action.start", defaultValue: "Çalışmayı başlat"))
+                } else {
+                    Color.clear
+                        .accessibilityHidden(true)
                 }
-                .buttonStyle(.borderless)
-                .help(settingsStore.localized("workSessions.action.stop", defaultValue: "Çalışmayı durdur"))
-            } else if session.statusStartsTimer && !hasActiveSession(for: session.todoId) {
-                Button {
-                    requestStartWork(for: session)
-                } label: {
-                    Image(systemName: "play.circle.fill")
-                        .proWorkFont(size: 16)
-                        .foregroundStyle(ProWorkColors.startAction)
-                }
-                .buttonStyle(.borderless)
-                .help(settingsStore.localized("workSessions.action.start", defaultValue: "Çalışmayı başlat"))
             }
+            .frame(width: actionSize, height: actionSize)
 
             Button {
                 editingSession = session
@@ -612,6 +711,7 @@ struct WorkSessionsView: View {
             .buttonStyle(.borderless)
             .disabled(session.endedAt == nil)
             .help(session.endedAt == nil ? settingsStore.localized("workSessions.form.error.activeEdit", defaultValue: "Aktif çalışma düzenlenemez. Önce çalışmayı durdurmalısınız.") : settingsStore.localized("customers.action.edit", defaultValue: "Düzenle"))
+            .frame(width: actionSize, height: actionSize)
 
             Button(role: .destructive) {
                 askDeleteSession(session)
@@ -621,7 +721,18 @@ struct WorkSessionsView: View {
             }
             .buttonStyle(.borderless)
             .help(settingsStore.localized("workSessions.delete.confirm", defaultValue: "Sil"))
+            .frame(width: actionSize, height: actionSize)
         }
+    }
+
+    private func billingTimeTypeOverrideBadge(_ timeType: TimeType, reason: String?) -> some View {
+        Text(timeType.title)
+            .proWorkTextStyle(.caption2)
+            .padding(.horizontal, ProWorkLayout.scaled(6, using: settingsStore))
+            .padding(.vertical, ProWorkLayout.scaled(2, using: settingsStore))
+            .background(.blue.opacity(0.14))
+            .clipShape(Capsule())
+            .help(reason ?? settingsStore.localized("workSessions.form.billingTimeType", defaultValue: "Mesai Değerlendirmesi"))
     }
 
     private var activeSessionBadge: some View {
@@ -677,7 +788,7 @@ struct WorkSessionsView: View {
     // MARK: - Computed
 
     private var tableMinWidth: CGFloat {
-        ProWorkLayout.scaled(960, using: settingsStore)
+        ProWorkLayout.scaled(1_140, using: settingsStore)
     }
 
     private var totalSeconds: Int {
@@ -811,6 +922,26 @@ struct WorkSessionsView: View {
             viewModel.deleteSession(id: session.id)
         }
     }
+
+    private func askDeleteFolder(_ folder: WorkFolder) {
+        confirmation = ProWorkConfirmation(
+            title: settingsStore.localized("workFolders.delete.title", defaultValue: "Klasör silinsin mi?"),
+            message: String(
+                format: settingsStore.localized(
+                    "workFolders.delete.message",
+                    defaultValue: "“%@” klasörü yalnızca boşsa silinecek."
+                ),
+                folder.name
+            ),
+            confirmTitle: settingsStore.localized("common.delete", defaultValue: "Sil"),
+            cancelTitle: settingsStore.localized("common.cancel", defaultValue: "Vazgeç"),
+            role: .destructive
+        ) {
+            if viewModel.deleteFolder(id: folder.id), locationSelection == .folder(folder.id) {
+                locationSelection = .all
+            }
+        }
+    }
 }
 
 private enum FilterSource: String {
@@ -841,4 +972,11 @@ private struct PendingWorkStart {
     let targetStatusId: String
     let activeSessionId: String
     let activeTodoTitle: String
+}
+
+private struct WorkSessionFolderFormRequest: Identifiable {
+    let id = UUID()
+    let existingFolder: WorkFolder?
+    let projectId: String?
+    let parentFolderId: String?
 }

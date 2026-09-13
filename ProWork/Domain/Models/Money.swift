@@ -164,6 +164,17 @@ extension Money {
         )
     }
 
+    /// Computes an hourly price from an exact second duration. Monetary
+    /// rounding happens once, at the final minor-unit boundary.
+    static func fromHourlyRate(_ unitPricePerHour: Money, billableSeconds: Int) -> Money {
+        let secondsDecimal = Decimal(billableSeconds)
+        let secondsPerHour: Decimal = 3_600
+        return Money(
+            amount: (unitPricePerHour.amount * secondsDecimal) / secondsPerHour,
+            currency: unitPricePerHour.currency
+        )
+    }
+
     /// Explicit FX conversion. Use this — never `money * rate` — when the
     /// intent is to translate the amount into `target`.
     /// The multiplication operator preserves the source currency by design.

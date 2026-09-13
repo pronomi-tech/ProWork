@@ -31,7 +31,7 @@ enum FormSheetSize {
     static let projectForm = CGSize(width: 580, height: 710)
     static let todoStatusForm = CGSize(width: 640, height: 640)
     static let todoForm = CGSize(width: 680, height: 860)
-    static let workSessionForm = CGSize(width: 760, height: 768)
+    static let workSessionForm = CGSize(width: 760, height: 1000)
     static let todoTimeSessionsForm = CGSize(width: 760, height: 620)
     static let billingRunCreate = CGSize(width: 980, height: 860)
 }

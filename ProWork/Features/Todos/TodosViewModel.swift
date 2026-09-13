@@ -18,6 +18,7 @@ final class TodosViewModel: ObservableObject {
     @Published private(set) var todos: [TodoListItem] = []
     @Published private(set) var customers: [Customer] = []
     @Published private(set) var projects: [ProjectListItem] = []
+    @Published private(set) var folders: [WorkFolder] = []
     @Published private(set) var categories: [TaskCategory] = []
     @Published private(set) var statuses: [TodoStatus] = []
     @Published var quickCategoryId: String = ""
@@ -26,6 +27,7 @@ final class TodosViewModel: ObservableObject {
     private let todoRepository: TodoRepository
     private let customerRepository: CustomerRepository
     private let projectRepository: ProjectRepository
+    private let workFolderRepository: WorkFolderRepository
     private let categoryRepository: TaskCategoryRepository
     private let statusRepository: TodoStatusRepository
     private let timeSessionRepository: TodoTimeSessionRepository
@@ -34,6 +36,7 @@ final class TodosViewModel: ObservableObject {
         self.todoRepository = services.todoRepository
         self.customerRepository = services.customerRepository
         self.projectRepository = services.projectRepository
+        self.workFolderRepository = services.workFolderRepository
         self.categoryRepository = services.categoryRepository
         self.statusRepository = services.statusRepository
         self.timeSessionRepository = services.todoTimeSessionRepository
@@ -57,8 +60,38 @@ final class TodosViewModel: ObservableObject {
         categories.first(where: { $0.id == categoryId })?.isBillableDefault ?? true
     }
 
-    func todosForStatus(_ status: TodoStatus) -> [TodoListItem] {
-        todos.filter { $0.statusId == status.id }
+    func visibleTodos(
+        for selection: WorkLocationSelection,
+        includeDescendantFolders: Bool
+    ) -> [TodoListItem] {
+        switch selection {
+        case .all:
+            return todos
+        case .project(let projectId):
+            return todos.filter {
+                $0.projectId == projectId
+                    && (includeDescendantFolders || $0.folderId == nil)
+            }
+        case .folder(let folderId):
+            let folderIds = includeDescendantFolders
+                ? WorkFolderHierarchy.descendantIds(of: folderId, in: folders)
+                : Set([folderId])
+            return todos.filter { todo in
+                guard let todoFolderId = todo.folderId else { return false }
+                return folderIds.contains(todoFolderId)
+            }
+        }
+    }
+
+    func todosForStatus(
+        _ status: TodoStatus,
+        selection: WorkLocationSelection,
+        includeDescendantFolders: Bool
+    ) -> [TodoListItem] {
+        visibleTodos(
+            for: selection,
+            includeDescendantFolders: includeDescendantFolders
+        ).filter { $0.statusId == status.id }
     }
 
     // MARK: - Load
@@ -67,6 +100,7 @@ final class TodosViewModel: ObservableObject {
         do {
             customers = try customerRepository.fetchAll()
             projects = try projectRepository.fetchAll()
+            folders = try workFolderRepository.fetchAll()
             categories = try categoryRepository.fetchAll()
             statuses = try statusRepository.fetchAll()
             todos = try todoRepository.fetchAll()
@@ -88,13 +122,17 @@ final class TodosViewModel: ObservableObject {
 
     // MARK: - CRUD
 
-    func quickAdd(title: String) {
+    func quickAdd(title: String, location: WorkLocationSelection) {
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanTitle.isEmpty, !quickCategoryId.isEmpty else {
             return
         }
 
+        let assignment = assignment(for: location)
         let todo = Todo(
+            customerId: assignment.customerId,
+            projectId: assignment.projectId,
+            folderId: assignment.folderId,
             categoryId: quickCategoryId,
             title: cleanTitle,
             statusId: defaultTodoStatusId,
@@ -103,6 +141,36 @@ final class TodosViewModel: ObservableObject {
         )
 
         create(todo)
+    }
+
+    @discardableResult
+    func saveFolder(_ folder: WorkFolder, isNew: Bool) -> Bool {
+        do {
+            if isNew {
+                try workFolderRepository.insert(folder)
+            } else {
+                try workFolderRepository.update(folder)
+            }
+            load()
+            errorMessage = nil
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    @discardableResult
+    func deleteFolder(id: String) -> Bool {
+        do {
+            try workFolderRepository.softDelete(id: id, by: AppServices.currentUserId)
+            load()
+            errorMessage = nil
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
     }
 
     /// Returns `true` if `create` succeeded; the View uses this to decide whether to dismiss the dialog.
@@ -310,5 +378,25 @@ final class TodosViewModel: ObservableObject {
         updatedTodo.activeSessionStartedAt = activeSessionStartedAt
         updatedTodo.updatedAt = Date()
         return updatedTodo
+    }
+
+    private func assignment(
+        for location: WorkLocationSelection
+    ) -> (customerId: String?, projectId: String?, folderId: String?) {
+        switch location {
+        case .all:
+            return (nil, nil, nil)
+        case .project(let projectId):
+            let customerId = projects.first(where: { $0.id == projectId })?.customerId
+            return (customerId, projectId, nil)
+        case .folder(let folderId):
+            guard let folder = folders.first(where: { $0.id == folderId }) else {
+                return (nil, nil, nil)
+            }
+            let customerId = folder.projectId.flatMap { projectId in
+                projects.first(where: { $0.id == projectId })?.customerId
+            }
+            return (customerId, folder.projectId, folder.id)
+        }
     }
 }

@@ -73,9 +73,16 @@ final class BillingIntegrationTests: XCTestCase {
     /// 2026-05-07 Perşembe 10:00 (mesai içi) tarihinde başlayan, belirtilen dakika kadar süren manuel session ekler.
     /// Geri dönen Todo + session id.
     @discardableResult
-    private func seedSession(startHour: Int = 10, startMinute: Int = 0, durationMinutes: Int) throws -> (todo: Todo, sessionStart: Date, sessionEnd: Date) {
+    private func seedSession(
+        customerId: String? = nil,
+        folderId: String? = nil,
+        startHour: Int = 10,
+        startMinute: Int = 0,
+        durationMinutes: Int
+    ) throws -> (todo: Todo, sessionStart: Date, sessionEnd: Date) {
         let todo = Todo(
-            customerId: customerId,
+            customerId: customerId ?? self.customerId,
+            folderId: folderId,
             categoryId: categoryId,
             title: "Test todo",
             isBillable: true
@@ -153,6 +160,96 @@ final class BillingIntegrationTests: XCTestCase {
         XCTAssertEqual(lines.count, 0)
     }
 
+    func test_computePeriod_sessionSplitAtWorkdayBoundary_ordersNewestSegmentFirst() throws {
+        try seedSession(startHour: 17, startMinute: 21, durationMinutes: 135)
+
+        let lines = try BillingComputationService().computePeriod(
+            from: dayBoundary(year: 2026, month: 5, day: 7),
+            to: dayBoundary(year: 2026, month: 5, day: 8)
+        )
+
+        XCTAssertEqual(lines.count, 2)
+        XCTAssertEqual(lines.map(\.timeType), [.afterHours, .regular])
+        XCTAssertGreaterThan(
+            try XCTUnwrap(lines[0].startedAt),
+            try XCTUnwrap(lines[1].startedAt)
+        )
+        XCTAssertEqual(lines.map(\.sortOrder), [0, 1])
+    }
+
+    func test_folderPreview_excludesDescendantsByDefault_andIncludesThemOnDemand() throws {
+        let parent = WorkFolder(id: "folder-parent", name: "Teklif")
+        let child = WorkFolder(id: "folder-child", parentFolderId: parent.id, name: "2026")
+        try WorkFolderRepository().insert(parent)
+        try WorkFolderRepository().insert(child)
+        try seedSession(folderId: parent.id, startHour: 10, durationMinutes: 60)
+        try seedSession(folderId: child.id, startHour: 12, durationMinutes: 60)
+
+        let service = BillingRunLifecycleService()
+        let exactPreview = try service.previewDraft(
+            scope: .folder(folderId: parent.id, includesDescendants: false),
+            periodStart: dayBoundary(year: 2026, month: 5, day: 1),
+            periodEnd: dayBoundary(year: 2026, month: 5, day: 31)
+        )
+        let recursivePreview = try service.previewDraft(
+            scope: .folder(folderId: parent.id, includesDescendants: true),
+            periodStart: dayBoundary(year: 2026, month: 5, day: 1),
+            periodEnd: dayBoundary(year: 2026, month: 5, day: 31)
+        )
+
+        XCTAssertEqual(exactPreview.lines.count, 1)
+        XCTAssertEqual(recursivePreview.lines.count, 2)
+    }
+
+    func test_folderDraft_splitsDifferentCustomersIntoSeparateRuns() throws {
+        let secondCustomerId = "cust-test-2"
+        let secondPriceListId = "pl-cust-2"
+        try CustomerRepository().insert(Customer(
+            id: secondCustomerId,
+            name: "Müşteri B",
+            defaultPriceListId: secondPriceListId,
+            defaultServiceType: "remote",
+            defaultMinBillingMinutes: 60
+        ))
+        try PriceListRepository().insert(PriceList(
+            id: secondPriceListId,
+            ownerType: .customer,
+            ownerId: secondCustomerId,
+            name: "Müşteri B Listesi",
+            currency: "TRY"
+        ))
+        try PriceListRowRepository().insert(PriceListRow(
+            priceListId: secondPriceListId,
+            serviceType: .remote,
+            timeType: .regular,
+            unitPriceMinor: 100_000
+        ))
+
+        let folder = WorkFolder(id: "folder-accounting", name: "Muhasebe")
+        try WorkFolderRepository().insert(folder)
+        try seedSession(folderId: folder.id, startHour: 10, durationMinutes: 60)
+        try seedSession(customerId: secondCustomerId, folderId: folder.id, startHour: 12, durationMinutes: 60)
+
+        let service = BillingRunLifecycleService()
+        let preview = try service.previewDraft(
+            scope: .folder(folderId: folder.id, includesDescendants: false),
+            periodStart: dayBoundary(year: 2026, month: 5, day: 1),
+            periodEnd: dayBoundary(year: 2026, month: 5, day: 31)
+        )
+        let drafts = try service.createDrafts(
+            scope: .folder(folderId: folder.id, includesDescendants: false),
+            periodStart: dayBoundary(year: 2026, month: 5, day: 1),
+            periodEnd: dayBoundary(year: 2026, month: 5, day: 31),
+            selectedLineKeys: preview.availableLines.map(\.selectionKey)
+        )
+
+        XCTAssertEqual(drafts.count, 2)
+        XCTAssertEqual(Set(drafts.map { $0.run.customerId }), [customerId, secondCustomerId])
+        XCTAssertTrue(drafts.allSatisfy { bundle in
+            bundle.lines.allSatisfy { $0.customerId == bundle.run.customerId }
+        })
+    }
+
     // MARK: - BillingRunLifecycleService
 
     func test_lifecycle_createDraft_thenFinalize_thenStateChanges() throws {
@@ -177,6 +274,68 @@ final class BillingIntegrationTests: XCTestCase {
         XCTAssertEqual(finalized.run.status, .final)
         XCTAssertEqual(finalized.run.invoiceNumber, "INV-001")
         XCTAssertNotNil(finalized.run.finalizedAt)
+    }
+
+    func test_lifecycle_reportModeRoundsOnlyExplicitlySelectedSessions() throws {
+        var organization = try XCTUnwrap(try OrganizationRepository().fetchDefault())
+        organization.billingWindowMode = .report
+        try OrganizationRepository().update(organization)
+
+        try seedSession(startHour: 10, durationMinutes: 10)
+        try seedSession(startHour: 14, durationMinutes: 20)
+
+        let periodStart = dayBoundary(year: 2026, month: 5, day: 1)
+        let periodEnd = dayBoundary(year: 2026, month: 5, day: 31)
+        let service = BillingRunLifecycleService()
+        let preview = try service.previewDraft(
+            customerId: customerId,
+            periodStart: periodStart,
+            periodEnd: periodEnd
+        )
+        let selectedLine = try XCTUnwrap(
+            preview.availableLines.min {
+                ($0.line.startedAt ?? .distantFuture) < ($1.line.startedAt ?? .distantFuture)
+            }
+        )
+
+        let draft = try service.createDraft(
+            customerId: customerId,
+            periodStart: periodStart,
+            periodEnd: periodEnd,
+            selectedLineKeys: [selectedLine.selectionKey]
+        )
+
+        XCTAssertEqual(draft.lines.count, 1)
+        XCTAssertEqual(draft.lines[0].actualSeconds, 10 * 60)
+        XCTAssertEqual(draft.lines[0].billableMinutes, 60)
+        XCTAssertEqual(draft.run.subtotalMinor, 200_000)
+        XCTAssertEqual(draft.run.totalMinor, 240_000)
+
+        let refreshed = try service.refreshRun(runId: draft.run.id)
+        XCTAssertEqual(refreshed.lines.count, 1)
+        XCTAssertEqual(refreshed.lines[0].billableMinutes, 60)
+        XCTAssertEqual(refreshed.run.totalMinor, 240_000)
+    }
+
+    func test_reportMode_pricesEqualRateLinesAsSingleTotal_withoutMinorUnitDrift() throws {
+        var organization = try XCTUnwrap(try OrganizationRepository().fetchDefault())
+        organization.billingWindowMode = .report
+        try OrganizationRepository().update(organization)
+
+        try seedSession(startHour: 10, durationMinutes: 1)
+        try seedSession(startHour: 11, durationMinutes: 1)
+        try seedSession(startHour: 12, durationMinutes: 1)
+
+        let lines = try BillingComputationService().computePeriod(
+            customerId: customerId,
+            from: dayBoundary(year: 2026, month: 5, day: 7),
+            to: dayBoundary(year: 2026, month: 5, day: 8)
+        )
+
+        XCTAssertEqual(lines.map(\.billableMinutes).reduce(0, +), 60)
+        XCTAssertEqual(lines.map(\.amountMinor).reduce(0, +), 200_000)
+        XCTAssertEqual(lines.map(\.vatMinor).reduce(0, +), 40_000)
+        XCTAssertEqual(lines.map(\.totalMinor).reduce(0, +), 240_000)
     }
 
     func test_lifecycle_createDraft_noSessions_throwsNoBillableLines() throws {

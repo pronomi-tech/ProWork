@@ -13,9 +13,13 @@ struct TodoListItem: Identifiable, Hashable {
     var projectId: String?
     var projectName: String?
 
+    var folderId: String? = nil
+    var folderName: String? = nil
+
     var categoryId: String
     var categoryName: String
     var categoryColor: String?
+    var categoryIsBillable: Bool
 
     var statusId: String
     var statusName: String

@@ -32,16 +32,7 @@ struct ReportsDashboardView: View {
                 VStack(alignment: .leading, spacing: ProWorkLayout.scaled(16, using: settingsStore)) {
                     overviewCards
 
-                    breakdownCharts
-
-                    HStack(alignment: .top, spacing: ProWorkLayout.scaled(20, using: settingsStore)) {
-                        customerBreakdown
-                        billableBreakdown
-                    }
-
-                    projectBreakdown
-
-                    todoBreakdown
+                    breakdownGrid
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
                 .padding(.bottom, ProWorkLayout.scaled(24, using: settingsStore))
@@ -76,8 +67,6 @@ struct ReportsDashboardView: View {
             noCustomerTitle: settingsStore.localized("home.pie.noCustomer", defaultValue: "Müşterisiz"),
             noProjectFormat: settingsStore.localized("reports.dashboard.project.noProject", defaultValue: "%@ (Proje yok)"),
             administrativeTitle: settingsStore.localized("todos.administrative", defaultValue: "İdari"),
-            unknownCategoryTitle: settingsStore.localized("home.pie.unknownCategory", defaultValue: "Kategorisiz"),
-            otherTitle: settingsStore.localized("home.pie.other", defaultValue: "Diğer"),
             billableTitle: settingsStore.localized("reports.dashboard.breakdown.billable", defaultValue: "Faturalandırılabilir")
         )
         viewModel.recompute(
@@ -350,36 +339,36 @@ struct ReportsDashboardView: View {
         )
     }
 
-    // MARK: - Customer Breakdown
+    // MARK: - Breakdowns
 
-    /// Extracted card builders to share between the
-    /// horizontal and vertical branches of the ViewThatFits. The
-    /// previous code duplicated each card's full configuration, so a
-    /// localiser key change had to land in two places.
-    @ViewBuilder
-    private var breakdownCards: some View {
-        ProWorkDonutBreakdownCard(
-            title: settingsStore.localized("reports.dashboard.chart.category", defaultValue: "Kategori Dağılımı"),
-            systemImage: "tag.fill",
-            rows: viewModel.categoryBreakdownRows,
-            emptyMessage: settingsStore.localized("reports.empty.period", defaultValue: "Bu dönemde kayıt yok")
-        )
-
-        ProWorkDonutBreakdownCard(
-            title: settingsStore.localized("reports.dashboard.chart.customer", defaultValue: "Müşteri Dağılımı"),
-            systemImage: "person.2.fill",
-            rows: viewModel.customerBreakdownRows,
-            emptyMessage: settingsStore.localized("reports.empty.period", defaultValue: "Bu dönemde kayıt yok")
-        )
+    private var breakdownCardHeight: CGFloat {
+        ProWorkLayout.scaled(280, using: settingsStore)
     }
 
-    private var breakdownCharts: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .top, spacing: ProWorkLayout.scaled(20, using: settingsStore)) {
-                breakdownCards
+    private var breakdownGrid: some View {
+        let spacing = ProWorkLayout.scaled(20, using: settingsStore)
+        let columnMinimumWidth = ProWorkLayout.scaled(400, using: settingsStore)
+
+        return ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: spacing) {
+                VStack(alignment: .leading, spacing: spacing) {
+                    customerBreakdown
+                    billableBreakdown
+                }
+                .frame(minWidth: columnMinimumWidth, maxWidth: .infinity, alignment: .topLeading)
+
+                VStack(alignment: .leading, spacing: spacing) {
+                    projectBreakdown
+                    todoBreakdown
+                }
+                .frame(minWidth: columnMinimumWidth, maxWidth: .infinity, alignment: .topLeading)
             }
-            VStack(alignment: .leading, spacing: ProWorkLayout.scaled(20, using: settingsStore)) {
-                breakdownCards
+
+            VStack(alignment: .leading, spacing: spacing) {
+                customerBreakdown
+                billableBreakdown
+                projectBreakdown
+                todoBreakdown
             }
         }
     }
@@ -392,6 +381,7 @@ struct ReportsDashboardView: View {
             total: viewModel.totalSeconds
         )
         .frame(maxWidth: .infinity)
+        .frame(height: breakdownCardHeight)
     }
 
     private var billableBreakdown: some View {
@@ -402,6 +392,7 @@ struct ReportsDashboardView: View {
             total: viewModel.totalSeconds
         )
         .frame(maxWidth: .infinity)
+        .frame(height: breakdownCardHeight)
     }
 
     private var projectBreakdown: some View {
@@ -411,6 +402,7 @@ struct ReportsDashboardView: View {
             rows: viewModel.projectBreakdownData.map { ($0.name, $0.seconds) },
             total: viewModel.totalSeconds
         )
+        .frame(height: breakdownCardHeight)
     }
 
     private var todoBreakdown: some View {
@@ -420,6 +412,7 @@ struct ReportsDashboardView: View {
             rows: viewModel.todoBreakdownData.map { ($0.name, $0.seconds) },
             total: viewModel.totalSeconds
         )
+        .frame(height: breakdownCardHeight)
     }
 
     // MARK: - Breakdown Table
@@ -460,15 +453,13 @@ struct ReportsDashboardView: View {
                 .padding(ProWorkLayout.scaled(16, using: settingsStore))
                 .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                // Previously rendered as a plain ForEach in
-                // a VStack, so a long category breakdown materialised every
-                // row even when off-screen. Wrap in LazyVStack so rendering
-                // is bounded by what's actually visible.
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                        breakdownRow(name: row.0, seconds: row.1, total: total)
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                            breakdownRow(name: row.0, seconds: row.1, total: total)
 
-                        Divider()
+                            Divider()
+                        }
                     }
                 }
             }
@@ -482,13 +473,26 @@ struct ReportsDashboardView: View {
     }
 
     private func breakdownRow(name: String, seconds: Int, total: Int) -> some View {
-        HStack(spacing: ProWorkLayout.scaled(12, using: settingsStore)) {
-            Text(name)
-                .proWorkTextStyle(.callout)
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: ProWorkLayout.scaled(7, using: settingsStore)) {
+            HStack(alignment: .firstTextBaseline, spacing: ProWorkLayout.scaled(10, using: settingsStore)) {
+                Text(name)
+                    .proWorkTextStyle(.callout)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-            GeometryReader { geo in
+                Text(ProWorkFormatters.durationHHmm(seconds))
+                    .proWorkTextStyle(.callout)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+
+                let pct = total > 0 ? Int(Double(seconds) / Double(total) * 100) : 0
+                Text("\(pct)%")
+                    .proWorkTextStyle(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: ProWorkLayout.scaled(36, using: settingsStore), alignment: .trailing)
+            }
+
+            GeometryReader { geometry in
                 let ratio = total > 0 ? CGFloat(seconds) / CGFloat(total) : 0
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 4)
@@ -497,22 +501,10 @@ struct ReportsDashboardView: View {
 
                     RoundedRectangle(cornerRadius: 4)
                         .fill(Color.accentColor.opacity(0.7))
-                        .frame(width: geo.size.width * ratio)
+                        .frame(width: geometry.size.width * ratio)
                 }
             }
-            .frame(width: ProWorkLayout.scaled(120, using: settingsStore), height: ProWorkLayout.scaled(8, using: settingsStore))
-
-            Text(ProWorkFormatters.durationHHmm(seconds))
-                .proWorkTextStyle(.callout)
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-                .frame(width: ProWorkLayout.scaled(72, using: settingsStore), alignment: .trailing)
-
-            let pct = total > 0 ? Int(Double(seconds) / Double(total) * 100) : 0
-            Text("\(pct)%")
-                .proWorkTextStyle(.caption)
-                .foregroundStyle(.secondary)
-                .frame(width: ProWorkLayout.scaled(36, using: settingsStore), alignment: .trailing)
+            .frame(height: ProWorkLayout.scaled(7, using: settingsStore))
         }
         .padding(.horizontal, ProWorkLayout.scaled(14, using: settingsStore))
         .padding(.vertical, ProWorkLayout.scaled(10, using: settingsStore))

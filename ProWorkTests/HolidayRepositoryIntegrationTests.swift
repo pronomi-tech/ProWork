@@ -33,6 +33,35 @@ final class HolidayRepositoryIntegrationTests: XCTestCase {
         XCTAssertTrue(holidays.contains { $0.name.contains("Ulusal Egemenlik") })
     }
 
+    @MainActor
+    func test_islamicBootstrap_doesNotDuplicateSeededYears() throws {
+        let religious2027Before = try repository.fetchAll(organizationId: BuiltInOrganizationId.default)
+            .filter {
+                $0.dateString.hasPrefix("2027-") &&
+                    ($0.name.hasPrefix("Ramazan Bayramı") || $0.name.hasPrefix("Kurban Bayramı"))
+            }
+
+        try IslamicHolidayBootstrap(holidayRepository: repository).ensurePopulated(
+            currentYear: 2026,
+            yearsAhead: 5
+        )
+
+        let holidays = try repository.fetchAll(organizationId: BuiltInOrganizationId.default)
+        let religious2027After = holidays.filter {
+            $0.dateString.hasPrefix("2027-") &&
+                ($0.name.hasPrefix("Ramazan Bayramı") || $0.name.hasPrefix("Kurban Bayramı"))
+        }
+        let religious2031 = holidays.filter {
+            $0.dateString.hasPrefix("2031-") &&
+                ($0.name.hasPrefix("Ramazan Bayramı") || $0.name.hasPrefix("Kurban Bayramı"))
+        }
+
+        XCTAssertEqual(religious2027Before.count, 9)
+        XCTAssertEqual(religious2027After.count, religious2027Before.count)
+        XCTAssertEqual(Set(religious2027After.map(\.id)), Set(religious2027Before.map(\.id)))
+        XCTAssertEqual(religious2031.count, 9)
+    }
+
     func test_insert_thenFetchAll_returnsCustomHoliday() throws {
         let holiday = Holiday(
             scope: .global,

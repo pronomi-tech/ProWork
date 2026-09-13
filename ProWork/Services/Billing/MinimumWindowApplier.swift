@@ -30,11 +30,14 @@ enum MinimumWindowApplier {
         return nWindows * window
     }
 
-    /// Takes actual duration in seconds and returns the billable duration in minutes.
+    /// Rounds an exact second duration to the configured minute window.
+    /// Only the minimum-window boundary is rounded; the source duration is not
+    /// converted to whole minutes first.
     static func applySeconds(actualSeconds: Int, windowMinutes: Int?) -> Int {
         guard actualSeconds > 0 else { return 0 }
-        // Round seconds up when converting to minutes (even 1 second counts as 1 minute)
-        let actualMinutes = (actualSeconds + 59) / 60
-        return apply(actualMinutes: actualMinutes, windowMinutes: windowMinutes)
+        guard let windowMinutes, windowMinutes > 0 else { return actualSeconds }
+        let windowSeconds = windowMinutes * 60
+        let windowCount = (actualSeconds + windowSeconds - 1) / windowSeconds
+        return windowCount * windowSeconds
     }
 }

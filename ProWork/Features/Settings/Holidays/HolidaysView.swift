@@ -19,7 +19,7 @@ struct HolidaysView: View {
     var body: some View {
         SettingsScreenScaffold(
             title: settingsStore.localized("holidays.title", defaultValue: "Resmi Tatiller"),
-            subtitle: settingsStore.localized("holidays.subtitle", defaultValue: "Tatil günlerinde yapılan çalışmalar 'Tatil' zaman tipi olarak ücretlendirilir. 2025–2030 TR tatilleri ön-yüklü gelir; düzenleyebilir, ekleyebilir veya silebilirsiniz."),
+            subtitle: settingsStore.localized("holidays.subtitle", defaultValue: "Tatil günlerinde yapılan çalışmalar 'Tatil' zaman tipi olarak ücretlendirilir. 2024–2030 TR tatilleri ön-yüklü gelir; düzenleyebilir, ekleyebilir veya silebilirsiniz."),
             errorMessage: viewModel.errorMessage,
             contentScrollBehavior: .fixed,
             toolbar: {

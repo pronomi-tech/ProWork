@@ -113,7 +113,7 @@ struct ProjectReportView: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(settingsStore.localized("workSessions.summary.totalTime", defaultValue: "Toplam Süre")).proWorkTextStyle(.caption).foregroundStyle(.secondary)
-                Text(ProWorkFormatters.durationHM(totalActual)).proWorkTextStyle(.title3, weight: .semibold)
+                Text(ProWorkFormatters.durationHHmmss(totalActual)).proWorkTextStyle(.title3, weight: .semibold)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(settingsStore.localized("reports.summary.totalAmount", defaultValue: "Toplam Tutar")).proWorkTextStyle(.caption).foregroundStyle(.secondary)
@@ -163,10 +163,10 @@ struct ProjectReportView: View {
             Text(row.projectName)
                 .proWorkTextStyle(.callout, weight: .medium)
                 .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
-            Text(ProWorkFormatters.durationHM(row.actualSeconds))
+            Text(ProWorkFormatters.durationHHmmss(row.actualSeconds))
                 .proWorkTextStyle(.callout)
                 .frame(width: 90, alignment: .trailing)
-            Text(ProWorkFormatters.durationHM(row.billableMinutes * 60))
+            Text(ProWorkFormatters.durationHHmmss(row.billableSeconds))
                 .proWorkTextStyle(.callout)
                 .frame(width: 90, alignment: .trailing)
             Text(ProWorkFormatters.money(Money(minorUnits: row.totalMinor, currency: row.currency)))
@@ -210,7 +210,7 @@ struct ProjectReportRow: Identifiable, Hashable {
     let projectId: String?
     let projectName: String
     let actualSeconds: Int
-    let billableMinutes: Int
+    let billableSeconds: Int
     let subtotalMinor: Int
     let vatMinor: Int
     let totalMinor: Int

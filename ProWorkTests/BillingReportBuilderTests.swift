@@ -78,8 +78,7 @@ final class BillingReportBuilderTests: XCTestCase {
             customerId: "C1", customerName: "Müşteri A", lines: lines, currency: "TRY"
         )
         XCTAssertEqual(report.summary.totalActualSeconds, 5400)
-        // Yalnızca billable satırların dakikası billable'a sayılır
-        XCTAssertEqual(report.summary.billableMinutes, 60)
+        XCTAssertEqual(report.summary.billableSeconds, 3_600)
         // Non-billable satırın actualSeconds'ı non-billable bucket'a gider
         XCTAssertEqual(report.summary.nonBillableSeconds, 1800)
     }

@@ -26,6 +26,8 @@ struct WorkSessionListItem: Identifiable, Hashable {
     var durationSeconds: Int?
     var isManual: Bool
     var note: String?
+    var billingTimeTypeOverride: TimeType?
+    var billingTimeTypeOverrideReason: String?
 
     var createdAt: Date
     var updatedAt: Date

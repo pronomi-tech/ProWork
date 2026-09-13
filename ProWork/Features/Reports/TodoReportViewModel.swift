@@ -89,7 +89,7 @@ final class TodoReportViewModel: ObservableObject {
                     projectName: first.projectName,
                     categoryName: first.categoryName,
                     actualSeconds: lines.reduce(0) { $0 + $1.actualSeconds },
-                    billableMinutes: lines.reduce(0) { $0 + $1.billableMinutes },
+                    billableSeconds: lines.reduce(0) { $0 + $1.billableSeconds },
                     manualSeconds: manualSeconds,
                     manualLineCount: manualLines,
                     subtotalMinor: lines.reduce(0) { $0 + $1.amountMinor },

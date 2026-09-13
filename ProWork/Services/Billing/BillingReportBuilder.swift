@@ -13,10 +13,9 @@ import os
 /// metrics that have no rounding policy attached.
 typealias ActualSeconds = Int
 
-/// Billable duration in whole minutes after the billing-window rounding
-/// rules have been applied. Different scale than ActualSeconds — never
-/// add them together without going through BillingCalculator.
-typealias BillableMinutes = Int
+/// Billable duration in seconds after the billing-window rule has been
+/// applied. It shares the same scale as ActualSeconds.
+typealias BillableSeconds = Int
 
 /// Monetary amount in the smallest currency unit (kuruş, cent, fils).
 /// Pairing this with the currency string yields a Money value.
@@ -26,7 +25,7 @@ typealias MinorUnits = Int
 
 struct BillingPeriodSummary: Hashable {
     let totalActualSeconds: ActualSeconds
-    let billableMinutes: BillableMinutes
+    let billableSeconds: BillableSeconds
     let nonBillableSeconds: ActualSeconds
 
     let manualSeconds: ActualSeconds
@@ -178,7 +177,7 @@ enum BillingReportBuilder {
         for line in lines {
             totalActual += line.actualSeconds
             if line.isBillable {
-                billable += line.billableMinutes
+                billable += line.billableSeconds
             } else {
                 nonBillableSeconds += line.actualSeconds
             }
@@ -209,7 +208,7 @@ enum BillingReportBuilder {
 
         return BillingPeriodSummary(
             totalActualSeconds: totalActual,
-            billableMinutes: billable,
+            billableSeconds: billable,
             nonBillableSeconds: nonBillableSeconds,
             manualSeconds: manual,
             automaticSeconds: automatic,

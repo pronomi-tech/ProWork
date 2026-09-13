@@ -314,7 +314,7 @@
 "common.close" = "Kapat";
 
 "holidays.title" = "Resmi Tatiller";
-"holidays.subtitle" = "Tatil günlerinde yapılan çalışmalar 'Tatil' zaman tipi olarak ücretlendirilir. 2025–2030 TR tatilleri ön-yüklü gelir; düzenleyebilir, ekleyebilir veya silebilirsiniz.";
+"holidays.subtitle" = "Tatil günlerinde yapılan çalışmalar 'Tatil' zaman tipi olarak ücretlendirilir. 2024–2030 TR tatilleri ön-yüklü gelir; düzenleyebilir, ekleyebilir veya silebilirsiniz.";
 "holidays.action.new" = "Yeni Tatil";
 "holidays.empty.year" = "%d için tatil yok";
 "holidays.empty.message" = "Sağ üstten yeni tatil ekleyebilirsiniz.";
@@ -446,9 +446,11 @@
 "weekday.short.sunday" = "Paz";
 
 "billingWindow.timeline.title" = "Zaman Akışı Bazlı";
-"billingWindow.timeline.subtitle" = "Aynı açık pencere içine düşen kayıtlar ortak ücretlendirilir.";
+"billingWindow.timeline.subtitle" = "Kayıtlar, çalışmaların kapladığı açık zaman pencerelerinde zincirlenir.";
 "billingWindow.session.title" = "Kayıt Bazlı";
 "billingWindow.session.subtitle" = "Her kayıt minimum pencereyi bağımsız olarak açar.";
+"billingWindow.report.title" = "Döküm Bazlı";
+"billingWindow.report.subtitle" = "Dökümdeki süreler birlikte değerlendirilir; yuvarlama farkı son kayda eklenir.";
 
 "billingRules.title" = "Mesai Kuralları";
 "billingRules.subtitle" = "Mesai içi/dışı ayrımı için her gün için çalışma saatlerini ve hafta sonu günlerini tanımlayın. Bu ayar tüm müşteriler için varsayılandır; müşteri kartından override edilebilir.";
@@ -761,6 +763,11 @@
 "workSessions.form.duration.minutes" = "%d dk";
 "workSessions.form.duration.hours" = "%d saat";
 "workSessions.form.note.placeholder" = "Opsiyonel not";
+"workSessions.form.billingTimeType" = "Mesai Değerlendirmesi";
+"workSessions.form.billingTimeType.automatic" = "Otomatik";
+"workSessions.form.billingTimeType.reason" = "Düzeltme Nedeni";
+"workSessions.form.billingTimeType.reason.placeholder" = "Opsiyonel açıklama";
+"workSessions.form.billingTimeType.help" = "Otomatik seçim çalışma aralığını mesai kurallarına göre böler. Manuel seçim kaydın faturalandırılabilir süresinin tamamına uygulanır.";
 "workSessions.form.error.invalidRange" = "Yapılacak iş seçilmeli ve bitiş zamanı başlangıçtan sonra olmalıdır.";
 "workSessions.form.error.activeEdit" = "Aktif çalışma kaydı düzenlenemez. Önce çalışmayı durdurmalısınız.";
 
@@ -1046,12 +1053,12 @@
 "billing.confirm.deletePayment.message" = "Bu tahsilat kaydı silinecek.";
 "billing.document.defaultTitle" = "Hizmet Dökümü";
 "billing.create.title" = "Yeni Hizmet Dökümü Taslağı";
-"billing.create.subtitle" = "Müşteri ve dönem seçin, ardından gönderilecek hizmet satırlarını işaretleyin.";
+"billing.create.subtitle" = "Müşteri veya klasör ile dönem seçin, ardından gönderilecek hizmet satırlarını işaretleyin.";
 "billing.create.customerPlaceholder" = "Müşteri seçin";
 "billing.create.runTitle" = "Döküm Başlığı";
 "billing.previewSelection.title" = "Satır Seçimi";
 "billing.previewSelection.subtitle" = "Aynı hesap satırı birden fazla hizmet dökümünde kullanılamaz. Kilitli satırlar görünür ama seçilemez.";
-"billing.previewSelection.multipleCurrencies" = "Seçili satırlar %d farklı para birimine dağılıyor. Oluşturma işleminde her para birimi için ayrı hizmet dökümü taslağı açılacak.";
+"billing.previewSelection.multipleCurrencies" = "Seçili satırlar %d ayrı taslağa dağılıyor. Her müşteri ve para birimi için ayrı hizmet dökümü taslağı açılacak.";
 "billing.previewSelection.empty.title" = "Satır bulunamadı";
 "billing.previewSelection.empty.message" = "Seçilen dönem için hesaplanabilir hizmet satırı bulunamadı.";
 "billing.previewSelection.loading" = "Hizmet satırları hazırlanıyor...";
@@ -1091,7 +1098,7 @@
 "export.error.pdfAsyncRequired" = "PDF çıktısı yeni render motoru ile asenkron üretilmelidir.";
 "export.filename.default" = "hizmet_dokumu";
 "export.column.todoTitle" = "İş Tanımı";
-"export.column.billableMinutes" = "Ücretli Süre (dk)";
+"export.column.billableMinutes" = "Ücretli Süre (sa:dk:sn)";
 "export.column.unitPrice" = "Birim Fiyat";
 "export.column.fixedFee" = "Sabit Fiyat";
 "export.column.currency" = "Para Birimi";
@@ -1230,3 +1237,28 @@
 "quote.recipientSheet.action.generate" = "PDF Oluştur";
 
 "common.remove" = "Kaldır";
+
+"workFolders.action.newChild" = "Alt Klasör Ekle";
+"workFolders.action.newIndependent" = "Yeni bağımsız klasör";
+"workFolders.delete.message" = "“%@” klasörü yalnızca boşsa silinecek.";
+"workFolders.delete.title" = "Klasör silinsin mi?";
+"workFolders.error.notEmpty" = "Alt klasör veya çalışma içeren bir klasör silinemez.";
+"workFolders.error.notFound" = "Klasör bulunamadı.";
+"workFolders.form.create" = "Yeni Klasör";
+"workFolders.form.edit" = "Klasörü Düzenle";
+"workFolders.form.name" = "Klasör Adı";
+"workFolders.form.name.placeholder" = "Örn. Teklif";
+"workFolders.form.parent" = "Üst Klasör";
+"workFolders.form.parent.none" = "Ana düzey";
+"workFolders.form.subtitle" = "Çalışmaları sınırsız alt klasörlerle düzenleyin.";
+"workFolders.sidebar.all" = "Tüm Çalışmalar";
+"workFolders.sidebar.emptyProject" = "Klasör yok";
+"workFolders.sidebar.independent" = "Bağımsız Klasörler";
+"workFolders.sidebar.includeSubfolders" = "Alt klasörleri dahil et";
+"workFolders.sidebar.title" = "Klasörler ve Projeler";
+"todoForm.folder" = "Klasör";
+"todoForm.folder.none" = "Klasör yok";
+"todoForm.folder.placeholder" = "Klasör seçin";
+"billing.create.scope" = "Kapsam";
+"billing.create.folderPlaceholder" = "Klasör seçin";
+"billingRuns.error.folderNotFound" = "Çalışma klasörü bulunamadı.";
