@@ -163,21 +163,18 @@ struct ContentView: View {
         }
     }
 
-    private var fontScale: CGFloat {
-        ProWorkLayout.scale(using: settingsStore)
-    }
-
-    /// Derive min dimensions from `fontScale` instead of
-    /// maintaining a per-fontSize lookup table. The previous table
-    /// would drift if anyone tweaked the layout — every cell needed
-    /// to be re-measured. Base values (normal scale) match the
-    /// historical normal-row, and `fontScale` already encapsulates
-    /// the per-fontSize multiplier (`ProWorkLayout.scale(using:)`).
-    private static let appBaseMinWidth: CGFloat = 1392
+    /// WorkSessionsView owns the widest detail layout in the app. The main
+    /// window must reserve that width in addition to the navigation sidebar;
+    /// otherwise NavigationSplitView clips the entire detail page before the
+    /// grid's own horizontal ScrollView gets a chance to scroll its columns.
+    private static let widestDetailBaseMinWidth: CGFloat = 1_250
+    private static let splitDividerWidth: CGFloat = 1
     private static let appBaseMinHeight: CGFloat = 768
 
     private var appMinWidth: CGFloat {
-        ProWorkLayout.scaled(Self.appBaseMinWidth, using: settingsStore)
+        sidebarMaxWidth
+            + ProWorkLayout.scaled(Self.widestDetailBaseMinWidth, using: settingsStore)
+            + Self.splitDividerWidth
     }
 
     private var appMinHeight: CGFloat {

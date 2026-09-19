@@ -5,6 +5,21 @@
 import SwiftUI
 import os
 
+private enum TodoFormTab: String, CaseIterable, Identifiable {
+    case details
+    case planningAndBilling
+
+    var id: String { rawValue }
+}
+
+private enum TodoBillingMethod: String, CaseIterable, Identifiable {
+    case trackedTime
+    case projectedFee
+    case fixedFee
+
+    var id: String { rawValue }
+}
+
 /// TodoFormView previously declared 26 individual
 /// `@State` properties at the top of the type, mixing identity, content,
 /// dates, and billing-override concerns. Grouping them by domain keeps
@@ -30,6 +45,7 @@ struct TodoFormView: View {
     @State private var priority: String = "normal"
     @State private var estimatedMinutesText: String = ""
     @State private var isBillable: Bool = true
+    @State private var isAIAgentTask: Bool = false
 
     // MARK: - Schedule
     @State private var hasPlannedDate: Bool = false
@@ -41,20 +57,28 @@ struct TodoFormView: View {
 
     // MARK: - UI
     @State private var confirmation: ProWorkConfirmation?
+    @State private var selectedTab: TodoFormTab = .details
 
-    // MARK: - Billing override (only in edit mode)
-    @State private var hasBillingOverride: Bool = false
-    @State private var billingOverrideType: TodoBillingOverrideType = .unitPrice
+    // MARK: - Billing
+    @State private var billingMethod: TodoBillingMethod = .trackedTime
+    @State private var hasCustomHourlyRate = false
     @State private var billingOverrideAmountText: String = ""
+    @State private var projectedHoursText: String = ""
     @State private var billingOverrideCurrency: String = "TRY"
+    @State private var billingNote: String = ""
     @State private var billingOverrideRecord: TodoBillingOverride?
     @State private var hasCustomBillingOverrideCurrency: Bool = false
+    @State private var priceLists: [PriceList] = []
+    @State private var priceListRowsByListId: [String: [PriceListRow]] = [:]
+    @State private var priceListLoadFailed = false
+    @State private var isShowingHourlyRatePicker = false
 
     // Repository / resolver dependencies are pulled from the shared AppServices
     // instance so they are not reopened every time the View struct is recreated
     private let billingOverrideRepository = AppServices.shared.todoBillingOverrideRepository
     private let currencyResolver = AppServices.shared.pricingCurrencyResolver
-    private let organizationRepository = AppServices.shared.organizationRepository
+    private let priceListRepository = AppServices.shared.priceListRepository
+    private let priceListRowRepository = AppServices.shared.priceListRowRepository
 
     let mode: TodoFormMode
     let customers: [Customer]
@@ -62,7 +86,28 @@ struct TodoFormView: View {
     let folders: [WorkFolder]
     let categories: [TaskCategory]
     let statuses: [TodoStatus]
-    let onSave: (Todo) -> Void
+    let initialLocation: WorkLocationSelection
+    let onSave: (Todo, TodoBillingOverride?) -> Void
+
+    init(
+        mode: TodoFormMode,
+        customers: [Customer],
+        projects: [ProjectListItem],
+        folders: [WorkFolder],
+        categories: [TaskCategory],
+        statuses: [TodoStatus],
+        initialLocation: WorkLocationSelection = .all,
+        onSave: @escaping (Todo, TodoBillingOverride?) -> Void
+    ) {
+        self.mode = mode
+        self.customers = customers
+        self.projects = projects
+        self.folders = folders
+        self.categories = categories
+        self.statuses = statuses
+        self.initialLocation = initialLocation
+        self.onSave = onSave
+    }
 
     // Previously the file declared two separate helpers
     // `formW` and `formH` with identical bodies, picked at call sites to
@@ -220,18 +265,46 @@ struct TodoFormView: View {
         )
     }
 
+    private var hourlyRateOptions: [TodoHourlyRateOption] {
+        TodoHourlyRateOptionBuilder.build(
+            priceLists: priceLists,
+            rowsByListId: priceListRowsByListId,
+            customerId: customerId.isEmpty ? nil : customerId,
+            projectId: projectId.isEmpty ? nil : projectId,
+            categoryId: categoryId.isEmpty ? nil : categoryId,
+            dateString: AppDateFormatters.istanbulDay.string(from: Date())
+        )
+    }
+
     var body: some View {
         ProWorkFormShell(
             title: mode.title(using: settingsStore),
             subtitle: formSubtitle,
             systemImage: "checklist",
             width: FormSheetSize.todoForm.width,
-            height: FormSheetSize.todoForm.height
+            height: FormSheetSize.todoForm.height,
+            contentScrollBehavior: .fitsContent
         ) {
-            formFields
+            VStack(alignment: .leading, spacing: formH(14)) {
+                formTabBar
+
+                Divider()
+
+                Group {
+                    switch selectedTab {
+                    case .details:
+                        detailFields
+                    case .planningAndBilling:
+                        planningAndBillingFields
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         } footer: {
             footer
         }
+        .proWorkToastNotifications(errorMessage: billingCustomerErrorMessage)
         // LoadInitialValues includes a synchronous
         // billingOverrideRepository.fetch which was blocking the main
         // thread on .onAppear. Use .task so the DB hop runs on a
@@ -251,7 +324,12 @@ struct TodoFormView: View {
             ensureValidFolderSelection()
             refreshSuggestedBillingOverrideCurrency()
         }
-        .onChange(of: hasBillingOverride) { _, enabled in
+        .onChange(of: billingMethod) { _, method in
+            if method != .trackedTime || hasCustomHourlyRate {
+                refreshSuggestedBillingOverrideCurrency()
+            }
+        }
+        .onChange(of: hasCustomHourlyRate) { _, enabled in
             if enabled {
                 refreshSuggestedBillingOverrideCurrency()
             }
@@ -268,7 +346,7 @@ struct TodoFormView: View {
         }
     }
 
-    private var formFields: some View {
+    private var detailFields: some View {
         VStack(alignment: .leading, spacing: formH(14)) {
             formRow(label: settingsStore.localized("todoForm.title", defaultValue: "Başlık"), alignment: .center) {
                 ProWorkTextField(
@@ -402,77 +480,6 @@ struct TodoFormView: View {
                 .frame(width: formW(320))
             }
 
-            formRow(label: settingsStore.localized("todoForm.priority", defaultValue: "Öncelik"), alignment: .center) {
-                ProWorkSearchPickerField(
-                    placeholder: settingsStore.localized("todoForm.priority.placeholder", defaultValue: "Öncelik seçin"),
-                    items: priorityOptions,
-                    selectedId: $priority,
-                    isDisabled: false,
-                    showsSearch: false,
-                    systemImage: "flag",
-                    itemTitle: { item in
-                        item.title
-                    },
-                    itemSubtitle: { item in
-                        item.subtitle
-                    },
-                    itemColor: { item in
-                        ProWorkColors.fromName(item.systemColorName)
-                    },
-                    matchesSearch: { item, searchText in
-                        item.title.localizedCaseInsensitiveContains(searchText)
-                    }
-                )
-                .frame(width: formW(240))
-            }
-
-            formRow(label: settingsStore.localized("todoForm.estimated", defaultValue: "Tahmini Süre"), alignment: .center) {
-                HStack(spacing: formW(8)) {
-                    ProWorkNumberField(
-                        placeholder: settingsStore.localized("todoForm.estimated.placeholder", defaultValue: "60"),
-                        text: $estimatedMinutesText,
-                        style: .integer(),
-                        minHeight: 40
-                    )
-                    .frame(width: formW(100))
-
-                    Text(settingsStore.localized("todoForm.estimated.minutes", defaultValue: "dk"))
-                        .proWorkTextStyle(.callout)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            formRow(label: settingsStore.localized("todoForm.plannedDate", defaultValue: "Planlanan Tarih"), alignment: .center) {
-                optionalDateField(
-                    isEnabled: $hasPlannedDate,
-                    date: $plannedDate,
-                    placeholder: settingsStore.localized("todoForm.plannedDate.placeholder", defaultValue: "Planlanan tarih seçin")
-                )
-            }
-
-            formRow(label: settingsStore.localized("todoForm.dueDate", defaultValue: "Termin"), alignment: .center) {
-                optionalDateField(
-                    isEnabled: $hasDueDate,
-                    date: $dueDate,
-                    placeholder: settingsStore.localized("todoForm.dueDate.placeholder", defaultValue: "Termin seçin")
-                )
-            }
-
-            formRow(label: settingsStore.localized("todoForm.billing", defaultValue: "Faturalandırma"), alignment: .center) {
-                ProWorkCheckbox(
-                    settingsStore.localized("todos.billable", defaultValue: "Faturalandırılır"),
-                    isOn: $isBillable,
-                    boxSize: 22
-                )
-            }
-
-            // Custom rate — only in edit mode (cannot add override if todo is not yet in DB)
-            if isEditMode, isBillable {
-                formRow(label: settingsStore.localized("todoForm.billingOverride", defaultValue: "Özel Ücret"), alignment: .top) {
-                    billingOverrideField
-                }
-            }
-
             formRow(label: settingsStore.localized("todoForm.description", defaultValue: "Açıklama"), alignment: .top) {
                 ProWorkTextEditor(
                     placeholder: settingsStore.localized("todoForm.description.placeholder", defaultValue: "Opsiyonel açıklama"),
@@ -481,83 +488,369 @@ struct TodoFormView: View {
                 )
                 .frame(width: formW(430))
             }
-        }
-    }
 
-    private var isEditMode: Bool {
-        if case .edit = mode { return true }
-        return false
-    }
-
-    @ViewBuilder
-    private var billingOverrideField: some View {
-        VStack(alignment: .leading, spacing: formH(8)) {
-            ProWorkCheckbox(
-                settingsStore.localized("todoForm.billingOverride.toggle", defaultValue: "Bu görev için özel ücret kullan"),
-                isOn: $hasBillingOverride,
-                boxSize: 22
-            )
-
-            if hasBillingOverride {
-                Picker("", selection: $billingOverrideType) {
-                    Text(settingsStore.localized("todoForm.billingOverride.unitPrice", defaultValue: "Birim Ücret")).tag(TodoBillingOverrideType.unitPrice)
-                    Text(settingsStore.localized("todoForm.billingOverride.fixedFee", defaultValue: "Sabit Tutar")).tag(TodoBillingOverrideType.fixedFee)
-                }
-                .pickerStyle(.segmented)
-                .frame(width: formW(360))
-
-                HStack(spacing: formW(8)) {
-                    Text(
-                        billingOverrideType == .unitPrice
-                        ? settingsStore.localized("todoForm.billingOverride.hourly", defaultValue: "Saatlik:")
-                        : settingsStore.localized("todoForm.billingOverride.total", defaultValue: "Toplam:")
+            formRow(label: settingsStore.localized("todoForm.aiAgent", defaultValue: "AI Agent"), alignment: .top) {
+                VStack(alignment: .leading, spacing: formH(6)) {
+                    ProWorkCheckbox(
+                        settingsStore.localized("todoForm.aiAgent.toggle", defaultValue: "Bu görevde AI agent kullanılıyor"),
+                        isOn: $isAIAgentTask,
+                        boxSize: 22
                     )
-                        .proWorkTextStyle(.caption)
-                        .foregroundStyle(.secondary)
-
-                    ProWorkNumberField(
-                        placeholder: "",
-                        text: $billingOverrideAmountText,
-                        style: .decimal(maxFractionDigits: 4),
-                        minHeight: 32
-                    )
-                    .frame(width: formW(150))
-
-                    ProWorkSearchPickerField(
-                        placeholder: settingsStore.localized("todoForm.billingOverride.currency", defaultValue: "Para birimi"),
-                        items: currencyOptions,
-                        selectedId: billingOverrideCurrencyBinding,
-                        isDisabled: false,
-                        showsSearch: false,
-                        systemImage: "banknote",
-                        itemTitle: { item in
-                            item.title
-                        },
-                        itemSubtitle: { item in
-                            item.subtitle
-                        },
-                        itemColor: { item in
-                            ProWorkColors.fromName(item.systemColorName)
-                        },
-                        matchesSearch: { item, searchText in
-                            item.title.localizedCaseInsensitiveContains(searchText) ||
-                            (item.subtitle?.localizedCaseInsensitiveContains(searchText) ?? false)
-                        }
-                    )
-                    .frame(width: formW(180))
-                }
-
-                Text(
-                    billingOverrideType == .unitPrice
-                    ? settingsStore.localized("todoForm.billingOverride.help.unitPrice", defaultValue: "Bu görevdeki çalışmalar fiyat listesi yerine bu saatlik ücretle hesaplanır.")
-                    : settingsStore.localized("todoForm.billingOverride.help.fixedFee", defaultValue: "Bu görev için süre fark etmeksizin tek tutar uygulanır.")
-                )
+                    Text(settingsStore.localized(
+                        "todoForm.aiAgent.help",
+                        defaultValue: "AI görevleri bilgisayar boşta kaldığında otomatik duraklatılmaz."
+                    ))
                     .proWorkTextStyle(.caption)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(width: formW(430), alignment: .leading)
+                }
+                .frame(width: formW(430), alignment: .leading)
             }
         }
+    }
+
+    private var formTabBar: some View {
+        HStack(spacing: formW(10)) {
+            formTabButton(
+                .details,
+                title: settingsStore.localized("todoForm.tab.details", defaultValue: "İş Bilgileri"),
+                systemImage: "list.bullet.clipboard"
+            )
+            formTabButton(
+                .planningAndBilling,
+                title: settingsStore.localized("todoForm.tab.planningAndBilling", defaultValue: "Planlama ve Ücret"),
+                systemImage: "calendar.badge.clock"
+            )
+        }
+    }
+
+    private func formTabButton(
+        _ tab: TodoFormTab,
+        title: String,
+        systemImage: String
+    ) -> some View {
+        let selected = selectedTab == tab
+        let showsError = tab == .planningAndBilling && !billingConfigurationIsValid
+
+        return Button {
+            selectedTab = tab
+        } label: {
+            HStack(spacing: formW(10)) {
+                Image(systemName: systemImage)
+                    .proWorkFont(size: 16, weight: .semibold)
+                Text(title)
+                    .proWorkTextStyle(.callout, weight: .semibold)
+                Spacer(minLength: 0)
+                if showsError {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundStyle(.red)
+                }
+            }
+            .foregroundStyle(selected ? Color.white : Color.primary)
+            .padding(.horizontal, formW(18))
+            .frame(maxWidth: .infinity, minHeight: formH(58), alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: formW(10))
+                    .fill(selected ? Color.accentColor : Color.secondary.opacity(0.08))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+    }
+
+    private var planningAndBillingFields: some View {
+        VStack(alignment: .leading, spacing: formH(14)) {
+            planningFields
+            Divider()
+            billingFields
+        }
+    }
+
+    private var planningFields: some View {
+        VStack(alignment: .leading, spacing: formH(14)) {
+            Text(settingsStore.localized("todoForm.planning", defaultValue: "Planlama"))
+                .proWorkTextStyle(.headline)
+
+            HStack(alignment: .top, spacing: formW(18)) {
+                compactPlanningField(
+                    title: settingsStore.localized("todoForm.priority", defaultValue: "Öncelik")
+                ) {
+                    ProWorkSearchPickerField(
+                        placeholder: settingsStore.localized("todoForm.priority.placeholder", defaultValue: "Öncelik seçin"),
+                        items: priorityOptions,
+                        selectedId: $priority,
+                        isDisabled: false,
+                        showsSearch: false,
+                        systemImage: "flag",
+                        itemTitle: { $0.title },
+                        itemSubtitle: { $0.subtitle },
+                        itemColor: { ProWorkColors.fromName($0.systemColorName) },
+                        matchesSearch: { item, searchText in
+                            item.title.localizedCaseInsensitiveContains(searchText)
+                        }
+                    )
+                }
+
+                compactPlanningField(
+                    title: settingsStore.localized("todoForm.estimated", defaultValue: "Tahmini Süre")
+                ) {
+                    HStack(spacing: formW(8)) {
+                        ProWorkNumberField(
+                            placeholder: settingsStore.localized("todoForm.estimated.placeholder", defaultValue: "60"),
+                            text: $estimatedMinutesText,
+                            style: .integer(),
+                            minHeight: 40
+                        )
+                        Text(settingsStore.localized("todoForm.estimated.minutes", defaultValue: "dk"))
+                            .proWorkTextStyle(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            HStack(alignment: .top, spacing: formW(18)) {
+                compactPlanningField(
+                    title: settingsStore.localized("todoForm.plannedDate", defaultValue: "Planlanan Tarih")
+                ) {
+                    optionalDateField(
+                        isEnabled: $hasPlannedDate,
+                        date: $plannedDate,
+                        placeholder: settingsStore.localized("todoForm.plannedDate.placeholder", defaultValue: "Planlanan tarih seçin")
+                    )
+                }
+
+                compactPlanningField(
+                    title: settingsStore.localized("todoForm.dueDate", defaultValue: "Termin")
+                ) {
+                    optionalDateField(
+                        isEnabled: $hasDueDate,
+                        date: $dueDate,
+                        placeholder: settingsStore.localized("todoForm.dueDate.placeholder", defaultValue: "Termin seçin")
+                    )
+                }
+            }
+        }
+    }
+
+    private func compactPlanningField<Content: View>(
+        title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: formH(7)) {
+            Text(title)
+                .proWorkTextStyle(.caption, weight: .medium)
+                .foregroundStyle(.secondary)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var billingFields: some View {
+        VStack(alignment: .leading, spacing: formH(12)) {
+            formRow(label: settingsStore.localized("todoForm.billing", defaultValue: "Faturalandırma"), alignment: .center) {
+                ProWorkCheckbox(
+                    settingsStore.localized("todos.billable", defaultValue: "Faturalandırılır"),
+                    isOn: $isBillable,
+                    boxSize: 22
+                )
+            }
+
+            if isBillable {
+                formRow(label: settingsStore.localized("todoForm.billingMethod", defaultValue: "Ücretlendirme Yöntemi"), alignment: .top) {
+                    VStack(alignment: .leading, spacing: formH(8)) {
+                        Picker("", selection: $billingMethod) {
+                            Text(settingsStore.localized("todoForm.billingMethod.tracked", defaultValue: "Gerçekleşen Süre"))
+                                .tag(TodoBillingMethod.trackedTime)
+                            Text(settingsStore.localized("todoForm.billingMethod.projected", defaultValue: "Projelendirilmiş Ücret"))
+                                .tag(TodoBillingMethod.projectedFee)
+                            Text(settingsStore.localized("todoForm.billingMethod.fixed", defaultValue: "Sabit Tutar"))
+                                .tag(TodoBillingMethod.fixedFee)
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: formW(450))
+
+                        Text(billingMethodHelp)
+                            .proWorkTextStyle(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(width: formW(450), alignment: .leading)
+                    }
+                }
+
+                switch billingMethod {
+                case .trackedTime:
+                    formRow(label: settingsStore.localized("todoForm.customHourlyRate", defaultValue: "Özel Saatlik Ücret"), alignment: .top) {
+                        VStack(alignment: .leading, spacing: formH(10)) {
+                            ProWorkCheckbox(
+                                settingsStore.localized("todoForm.customHourlyRate.toggle", defaultValue: "Fiyat listesi yerine özel saatlik ücret kullan"),
+                                isOn: $hasCustomHourlyRate,
+                                boxSize: 22
+                            )
+                            if hasCustomHourlyRate {
+                                billingAmountAndCurrency(showsHourlyRatePicker: true)
+                            }
+                        }
+                    }
+                case .projectedFee:
+                    formRow(label: settingsStore.localized("todoForm.projectedFeeDetails", defaultValue: "Projelendirme"), alignment: .top) {
+                        HStack(alignment: .bottom, spacing: formW(12)) {
+                            compactPlanningField(
+                                title: settingsStore.localized("todoForm.projectedHours", defaultValue: "Adam/Saat")
+                            ) {
+                                ProWorkNumberField(
+                                    placeholder: "0",
+                                    text: $projectedHoursText,
+                                    style: .decimal(maxFractionDigits: 4),
+                                    minHeight: 40
+                                )
+                            }
+                            .frame(width: formW(115))
+
+                            compactPlanningField(
+                                title: settingsStore.localized("todoForm.hourlyUnitPrice", defaultValue: "Birim Ücret")
+                            ) {
+                                billingAmountAndCurrency(
+                                    showsHourlyRatePicker: true,
+                                    amountWidth: 135,
+                                    currencyWidth: 178
+                                )
+                            }
+                        }
+                        .frame(width: formW(450), alignment: .leading)
+                    }
+
+                    formRow(label: settingsStore.localized("todoForm.calculatedServiceFee", defaultValue: "Hesaplanan Hizmet Bedeli"), alignment: .center) {
+                        Text(projectedTotalDisplay)
+                            .proWorkTextStyle(.headline)
+                            .monospacedDigit()
+                    }
+                case .fixedFee:
+                    formRow(label: settingsStore.localized("todoForm.fixedFee", defaultValue: "Sabit Tutar"), alignment: .center) {
+                        billingAmountAndCurrency(showsHourlyRatePicker: false)
+                    }
+                }
+
+                if billingMethod != .trackedTime || hasCustomHourlyRate {
+                    formRow(label: settingsStore.localized("todoForm.billingNote", defaultValue: "Ücret Açıklaması"), alignment: .top) {
+                        ProWorkTextEditor(
+                            placeholder: settingsStore.localized("todoForm.billingNote.placeholder", defaultValue: "Opsiyonel açıklama"),
+                            text: $billingNote,
+                            minHeight: 64
+                        )
+                        .frame(width: formW(430))
+                    }
+                }
+
+            }
+        }
+    }
+
+    private func billingAmountAndCurrency(
+        showsHourlyRatePicker: Bool,
+        amountWidth: CGFloat = 160,
+        currencyWidth: CGFloat = 210
+    ) -> some View {
+        HStack(spacing: formW(10)) {
+            if showsHourlyRatePicker {
+                hourlyRateAmountField
+                    .frame(width: formW(amountWidth))
+            } else {
+                ProWorkNumberField(
+                    placeholder: "0",
+                    text: $billingOverrideAmountText,
+                    style: .decimal(maxFractionDigits: 4),
+                    minHeight: 40
+                )
+                .frame(width: formW(amountWidth))
+            }
+
+            ProWorkSearchPickerField(
+                placeholder: settingsStore.localized("todoForm.billingOverride.currency", defaultValue: "Para birimi"),
+                items: currencyOptions,
+                selectedId: billingOverrideCurrencyBinding,
+                isDisabled: false,
+                showsSearch: false,
+                systemImage: "banknote",
+                itemTitle: { $0.title },
+                itemSubtitle: { $0.subtitle },
+                itemColor: { ProWorkColors.fromName($0.systemColorName) },
+                matchesSearch: { item, searchText in
+                    item.title.localizedCaseInsensitiveContains(searchText) ||
+                    (item.subtitle?.localizedCaseInsensitiveContains(searchText) ?? false)
+                }
+            )
+            .frame(width: formW(currencyWidth))
+        }
+    }
+
+    private var hourlyRateAmountField: some View {
+        ProWorkNumberField(
+            placeholder: "0",
+            text: $billingOverrideAmountText,
+            style: .decimal(maxFractionDigits: 4),
+            minHeight: 40
+        )
+        .overlay(alignment: .trailing) {
+            HStack(spacing: 0) {
+                Divider()
+                    .frame(height: formH(22))
+
+                Button {
+                    isShowingHourlyRatePicker.toggle()
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .proWorkFont(size: 11, weight: .semibold)
+                        .foregroundStyle(.secondary)
+                        .frame(width: formW(30))
+                        .frame(minHeight: formH(34))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(settingsStore.localized("todoForm.hourlyRatePicker.help", defaultValue: "Fiyat listesinden saatlik ücret seç"))
+                .popover(isPresented: $isShowingHourlyRatePicker, arrowEdge: .bottom) {
+                    hourlyRatePickerPopover
+                }
+            }
+            .padding(.trailing, formW(4))
+            .background(.background.opacity(0.96))
+        }
+    }
+
+    private var hourlyRatePickerPopover: some View {
+        TodoHourlyRatePickerPopover(
+            options: hourlyRateOptions,
+            categories: categories,
+            customers: customers,
+            projects: projects,
+            loadFailed: priceListLoadFailed
+        ) { option in
+            applyHourlyRate(option)
+            isShowingHourlyRatePicker = false
+        }
+    }
+
+    private var billingMethodHelp: String {
+        switch billingMethod {
+        case .trackedTime:
+            return settingsStore.localized("todoForm.billingMethod.tracked.help", defaultValue: "Hizmet bedeli tamamlanan çalışma kayıtlarının süresinden hesaplanır.")
+        case .projectedFee:
+            return settingsStore.localized("todoForm.billingMethod.projected.help", defaultValue: "Mutabık kalınan adam/saat ve birim ücret, tarih aralığından bağımsız olarak hizmet dökümüne eklenebilir.")
+        case .fixedFee:
+            return settingsStore.localized("todoForm.billingMethod.fixed.help", defaultValue: "Görev, süre kayıtlarından bağımsız tek bir sabit tutarla hizmet dökümüne eklenir.")
+        }
+    }
+
+    private var billingCustomerErrorMessage: String? {
+        guard isBillable,
+              customerId.isEmpty,
+              billingMethod == .projectedFee || billingMethod == .fixedFee else {
+            return nil
+        }
+
+        return settingsStore.localized(
+            "todoForm.billing.customerRequired",
+            defaultValue: "Projelendirilmiş veya sabit ücret için İş Bilgileri sekmesinden bir müşteri seçin."
+        )
     }
 
     private func formRow<Content: View>(
@@ -634,7 +927,72 @@ struct TodoFormView: View {
 
     private var canSave: Bool {
         !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        !categoryId.isEmpty
+        !categoryId.isEmpty &&
+        billingConfigurationIsValid
+    }
+
+    private var billingConfigurationIsValid: Bool {
+        guard isBillable else { return true }
+
+        switch billingMethod {
+        case .trackedTime:
+            return !hasCustomHourlyRate || positiveBillingAmount != nil
+        case .projectedFee:
+            return !customerId.isEmpty &&
+                positiveBillingAmount != nil &&
+                positiveProjectedHours != nil
+        case .fixedFee:
+            return !customerId.isEmpty && positiveBillingAmount != nil
+        }
+    }
+
+    private var positiveBillingAmount: Decimal? {
+        guard let amount = decimalValue(from: billingOverrideAmountText), amount > 0 else {
+            return nil
+        }
+        return amount
+    }
+
+    private var positiveProjectedHours: Decimal? {
+        guard let hours = decimalValue(from: projectedHoursText), hours > 0 else {
+            return nil
+        }
+        return hours
+    }
+
+    private var projectedTotalDisplay: String {
+        guard let hours = positiveProjectedHours,
+              let rate = positiveBillingAmount else {
+            return "—"
+        }
+        return ProWorkFormatters.money(
+            Money(amount: hours * rate, currency: billingOverrideCurrency)
+        )
+    }
+
+    private func decimalValue(from text: String) -> Decimal? {
+        let formatter = ProWorkFormatters.cachedDecimalFormatter(
+            localeIdentifier: settingsStore.locale.identifier,
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 4
+        )
+        return formatter.number(from: text)?.decimalValue
+    }
+
+    private func displayDecimal(_ value: Decimal) -> String {
+        let formatter = ProWorkFormatters.cachedDecimalFormatter(
+            localeIdentifier: settingsStore.locale.identifier,
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 4
+        )
+        return formatter.string(from: NSDecimalNumber(decimal: value)) ?? ""
+    }
+
+    private func projectedSeconds(from hours: Decimal) -> Int {
+        var raw = hours * Decimal(3_600)
+        var rounded = Decimal()
+        NSDecimalRound(&rounded, &raw, 0, .bankers)
+        return max(0, NSDecimalNumber(decimal: rounded).intValue)
     }
 
     private func statusSubtitle(_ status: TodoStatus) -> String? {
@@ -665,6 +1023,8 @@ struct TodoFormView: View {
     /// in-memory @State assignments still happen up front; only the DB
     /// lookup is awaited off main.
     private func loadInitialValues() async {
+        loadHourlyRateOptions()
+
         if categoryId.isEmpty {
             categoryId = categories.first?.id ?? ""
         }
@@ -676,6 +1036,11 @@ struct TodoFormView: View {
         }
 
         guard case .edit(let todo) = mode else {
+            let assignment = initialLocation.assignment(projects: projects, folders: folders)
+            customerId = assignment.customerId ?? ""
+            projectId = assignment.projectId ?? ""
+            folderId = assignment.folderId ?? ""
+            refreshSuggestedBillingOverrideCurrency(force: !hasCustomBillingOverrideCurrency)
             return
         }
 
@@ -697,6 +1062,7 @@ struct TodoFormView: View {
         priority = todo.priority
         estimatedMinutesText = todo.estimatedMinutes.map(String.init) ?? ""
         isBillable = todo.isBillable
+        isAIAgentTask = todo.isAIAgentTask
         createdAt = todo.createdAt
         completedAt = todo.completedAt
 
@@ -729,18 +1095,30 @@ struct TodoFormView: View {
 
         if let override {
             billingOverrideRecord = override
-            hasBillingOverride = true
-            billingOverrideType = override.overrideType
             billingOverrideCurrency = override.currency
+            billingNote = override.note ?? ""
             hasCustomBillingOverrideCurrency = true
             switch override.overrideType {
             case .unitPrice:
+                billingMethod = .trackedTime
+                hasCustomHourlyRate = true
                 if let m = override.unitPriceMinor {
                     billingOverrideAmountText = ProWorkFormatters.moneyAmount(
                         Money(minorUnits: m, currency: override.currency)
                     )
                 }
+            case .projectedFee:
+                billingMethod = .projectedFee
+                if let m = override.unitPriceMinor {
+                    billingOverrideAmountText = ProWorkFormatters.moneyAmount(
+                        Money(minorUnits: m, currency: override.currency)
+                    )
+                }
+                if let seconds = override.projectedBillableSeconds {
+                    projectedHoursText = displayDecimal(Decimal(seconds) / Decimal(3_600))
+                }
             case .fixedFee:
+                billingMethod = .fixedFee
                 if let m = override.fixedFeeMinor {
                     billingOverrideAmountText = ProWorkFormatters.moneyAmount(
                         Money(minorUnits: m, currency: override.currency)
@@ -752,12 +1130,46 @@ struct TodoFormView: View {
         refreshSuggestedBillingOverrideCurrency(force: !hasCustomBillingOverrideCurrency)
     }
 
+    private func loadHourlyRateOptions() {
+        do {
+            let lists = try priceListRepository.fetchAll(
+                organizationId: BuiltInOrganizationId.default
+            )
+            priceLists = lists
+            priceListRowsByListId = try priceListRowRepository.fetchAll(
+                priceListIds: lists.map(\.id)
+            )
+            priceListLoadFailed = false
+        } catch {
+            priceLists = []
+            priceListRowsByListId = [:]
+            priceListLoadFailed = true
+            ProWorkLog.app.error(
+                "TodoFormView price-list rates load failed: \(error.localizedDescription, privacy: .private)"
+            )
+        }
+    }
+
+    private func applyHourlyRate(_ option: TodoHourlyRateOption) {
+        billingOverrideAmountText = ProWorkFormatters.moneyAmount(
+            option.row.unitPrice,
+            localeIdentifier: settingsStore.locale.identifier
+        )
+        billingOverrideCurrency = option.row.currency
+        hasCustomBillingOverrideCurrency = true
+    }
+
     private func save() {
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
         let estimatedMinutes = Int(estimatedMinutesText.trimmingCharacters(in: .whitespacesAndNewlines))
 
         guard !cleanTitle.isEmpty, !categoryId.isEmpty else {
+            selectedTab = .details
+            return
+        }
+        guard billingConfigurationIsValid else {
+            selectedTab = .planningAndBilling
             return
         }
 
@@ -784,14 +1196,16 @@ struct TodoFormView: View {
             dueDate: hasDueDate ? dueDate : nil,
             estimatedMinutes: estimatedMinutes,
             isBillable: isBillable,
+            isAIAgentTask: isAIAgentTask,
             completedAt: finalCompletedAt,
             createdAt: createdAt,
             updatedAt: Date()
         )
+        let billingOverride = makeBillingOverride(todoId: todo.id)
 
         switch mode {
         case .create:
-            onSave(todo)
+            onSave(todo, billingOverride)
 
         case .edit:
             confirmation = ProWorkConfirmation(
@@ -800,8 +1214,7 @@ struct TodoFormView: View {
                 confirmTitle: settingsStore.localized("common.save", defaultValue: "Kaydet"),
                 cancelTitle: settingsStore.localized("common.cancel", defaultValue: "Vazgeç")
             ) {
-                persistBillingOverride(for: todo.id)
-                onSave(todo)
+                onSave(todo, billingOverride)
             }
         }
     }
@@ -814,64 +1227,53 @@ struct TodoFormView: View {
         }
     }
 
-    /// Upserts/removes the billing override in edit mode.
-    ///
-    /// The previous `try?` silenced both upsert
-    /// and remove failures, so a write error left the override stale
-    /// while the parent's `onSave(todo)` happily updated the todo —
-    /// the partial-failure window the audit calls out. Now we route
-    /// through `ProWorkToastStore` on failure (parent already shows
-    /// its own toast on the todo write) so the user sees a real
-    /// signal. Full atomicity needs the override write to share a
-    /// transaction with the todo write; that requires lifting the
-    /// closure out of the View (Tier 7 VM-style refactor) and is
-    /// flagged in as a separate architectural item.
-    private func persistBillingOverride(for todoId: String) {
-        guard isEditMode else { return }
+    private func makeBillingOverride(todoId: String) -> TodoBillingOverride? {
+        guard isBillable else { return nil }
 
-        if hasBillingOverride && isBillable {
-            // Cache adoption mirrors PriceListRowFormView.
-            let formatter = ProWorkFormatters.cachedDecimalFormatter(
-                localeIdentifier: settingsStore.locale.identifier,
-                minimumFractionDigits: 0,
-                maximumFractionDigits: 4
-            )
+        let type: TodoBillingOverrideType
+        let unitPriceMinor: Int?
+        let projectedBillableSeconds: Int?
+        let fixedFeeMinor: Int?
 
-            guard let n = formatter.number(from: billingOverrideAmountText), n.decimalValue >= 0 else {
-                return  // silently ignore; no UI-level validation
+        switch billingMethod {
+        case .trackedTime:
+            guard hasCustomHourlyRate, let amount = positiveBillingAmount else {
+                return nil
             }
-            let money = Money(amount: n.decimalValue, currency: billingOverrideCurrency)
-            let minor = money.minorUnits
-
-            let override = TodoBillingOverride(
-                id: billingOverrideRecord?.id ?? UUID().uuidString,
-                todoId: todoId,
-                overrideType: billingOverrideType,
-                unitPriceMinor: billingOverrideType == .unitPrice ? minor : nil,
-                fixedFeeMinor: billingOverrideType == .fixedFee ? minor : nil,
-                currency: billingOverrideCurrency,
-                organizationId: BuiltInOrganizationId.default,
-                createdAt: billingOverrideRecord?.createdAt ?? Date()
-            )
-            do {
-                try billingOverrideRepository.upsert(override)
-            } catch {
-                ProWorkToastStore.shared.show(
-                    error.localizedDescription,
-                    style: .error
-                )
+            type = .unitPrice
+            unitPriceMinor = Money(amount: amount, currency: billingOverrideCurrency).minorUnits
+            projectedBillableSeconds = nil
+            fixedFeeMinor = nil
+        case .projectedFee:
+            guard let amount = positiveBillingAmount,
+                  let hours = positiveProjectedHours else {
+                return nil
             }
-        } else {
-            // Override disabled or billable=false → soft-delete
-            do {
-                try billingOverrideRepository.remove(todoId: todoId)
-            } catch {
-                ProWorkToastStore.shared.show(
-                    error.localizedDescription,
-                    style: .error
-                )
-            }
+            type = .projectedFee
+            unitPriceMinor = Money(amount: amount, currency: billingOverrideCurrency).minorUnits
+            projectedBillableSeconds = projectedSeconds(from: hours)
+            fixedFeeMinor = nil
+        case .fixedFee:
+            guard let amount = positiveBillingAmount else { return nil }
+            type = .fixedFee
+            unitPriceMinor = nil
+            projectedBillableSeconds = nil
+            fixedFeeMinor = Money(amount: amount, currency: billingOverrideCurrency).minorUnits
         }
+
+        let trimmedNote = billingNote.trimmingCharacters(in: .whitespacesAndNewlines)
+        return TodoBillingOverride(
+            id: billingOverrideRecord?.id ?? UUID().uuidString,
+            todoId: todoId,
+            overrideType: type,
+            unitPriceMinor: unitPriceMinor,
+            projectedBillableSeconds: projectedBillableSeconds,
+            fixedFeeMinor: fixedFeeMinor,
+            currency: billingOverrideCurrency,
+            note: trimmedNote.isEmpty ? nil : trimmedNote,
+            organizationId: BuiltInOrganizationId.default,
+            createdAt: billingOverrideRecord?.createdAt ?? Date()
+        )
     }
 
     private func refreshSuggestedBillingOverrideCurrency(force: Bool = false) {
@@ -924,4 +1326,270 @@ private struct TodoFormSelectOption: Identifiable {
     let title: String
     let subtitle: String?
     let systemColorName: String?
+}
+
+struct TodoHourlyRateOption: Identifiable, Hashable {
+    var id: String { row.id }
+    let priceList: PriceList
+    let row: PriceListRow
+}
+
+enum TodoHourlyRateOptionBuilder {
+    static func build(
+        priceLists: [PriceList],
+        rowsByListId: [String: [PriceListRow]],
+        customerId: String?,
+        projectId: String?,
+        categoryId: String?,
+        dateString: String
+    ) -> [TodoHourlyRateOption] {
+        priceLists
+            .filter { list in
+                guard list.isActive,
+                      list.deletedAt == nil,
+                      PriceListResolver.isWithin(
+                          date: dateString,
+                          from: list.validFrom,
+                          to: list.validTo
+                      ) else {
+                    return false
+                }
+
+                switch list.ownerType {
+                case .project:
+                    return projectId != nil && list.ownerId == projectId
+                case .customer:
+                    return customerId != nil && list.ownerId == customerId
+                case .global:
+                    return list.ownerId == nil
+                }
+            }
+            .sorted(by: listSortOrder)
+            .flatMap { list in
+                (rowsByListId[list.id] ?? [])
+                    .filter { row in
+                        row.isActive &&
+                        row.deletedAt == nil &&
+                        (row.categoryId == nil || row.categoryId == categoryId) &&
+                        PriceListResolver.isWithin(
+                            date: dateString,
+                            from: row.validFrom,
+                            to: row.validTo
+                        )
+                    }
+                    .sorted(by: rowSortOrder)
+                    .map { TodoHourlyRateOption(priceList: list, row: $0) }
+            }
+    }
+
+    nonisolated private static func listSortOrder(_ lhs: PriceList, _ rhs: PriceList) -> Bool {
+        let lhsScope = scopePriority(lhs.ownerType)
+        let rhsScope = scopePriority(rhs.ownerType)
+        if lhsScope != rhsScope { return lhsScope < rhsScope }
+        if lhs.isDefault != rhs.isDefault { return lhs.isDefault }
+        return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+    }
+
+    nonisolated private static func rowSortOrder(_ lhs: PriceListRow, _ rhs: PriceListRow) -> Bool {
+        if lhs.sortOrder != rhs.sortOrder { return lhs.sortOrder < rhs.sortOrder }
+        let lhsService = servicePriority(lhs.serviceType)
+        let rhsService = servicePriority(rhs.serviceType)
+        if lhsService != rhsService {
+            return lhsService < rhsService
+        }
+        let lhsTime = timePriority(lhs.timeType)
+        let rhsTime = timePriority(rhs.timeType)
+        if lhsTime != rhsTime {
+            return lhsTime < rhsTime
+        }
+        return lhs.id < rhs.id
+    }
+
+    nonisolated private static func servicePriority(_ serviceType: ServiceType) -> Int {
+        switch serviceType {
+        case .onsite: return 10
+        case .remote: return 20
+        }
+    }
+
+    nonisolated private static func timePriority(_ timeType: TimeType) -> Int {
+        switch timeType {
+        case .regular: return 10
+        case .afterHours: return 20
+        case .weekend: return 30
+        case .holiday: return 40
+        }
+    }
+
+    nonisolated private static func scopePriority(_ ownerType: PriceListOwnerType) -> Int {
+        switch ownerType {
+        case .project: return 0
+        case .customer: return 1
+        case .global: return 2
+        }
+    }
+}
+
+private struct TodoHourlyRatePickerPopover: View {
+    @EnvironmentObject private var settingsStore: AppSettingsStore
+
+    let options: [TodoHourlyRateOption]
+    let categories: [TaskCategory]
+    let customers: [Customer]
+    let projects: [ProjectListItem]
+    let loadFailed: Bool
+    let onSelect: (TodoHourlyRateOption) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: ProWorkLayout.scaled(12, using: settingsStore)) {
+            HStack(spacing: ProWorkLayout.scaled(8, using: settingsStore)) {
+                Image(systemName: "list.bullet.rectangle")
+                    .foregroundStyle(.blue)
+                Text(settingsStore.localized("todoForm.hourlyRatePicker.title", defaultValue: "Fiyat Listesinden Seç"))
+                    .proWorkTextStyle(.headline)
+            }
+
+            Divider()
+
+            if loadFailed {
+                emptyState(
+                    systemImage: "exclamationmark.triangle",
+                    message: settingsStore.localized(
+                        "todoForm.hourlyRatePicker.loadError",
+                        defaultValue: "Fiyat listeleri yüklenemedi. Ücreti manuel girebilirsiniz."
+                    )
+                )
+            } else if options.isEmpty {
+                emptyState(
+                    systemImage: "list.bullet.rectangle",
+                    message: settingsStore.localized(
+                        "todoForm.hourlyRatePicker.empty",
+                        defaultValue: "Bu müşteri, proje ve kategori için geçerli bir ücret bulunamadı."
+                    )
+                )
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: ProWorkLayout.scaled(6, using: settingsStore)) {
+                        ForEach(options) { option in
+                            Button {
+                                onSelect(option)
+                            } label: {
+                                optionRow(option)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .frame(maxHeight: ProWorkLayout.scaled(360, using: settingsStore))
+            }
+        }
+        .padding(ProWorkLayout.scaled(16, using: settingsStore))
+        .frame(width: ProWorkLayout.scaled(460, using: settingsStore))
+    }
+
+    private func optionRow(_ option: TodoHourlyRateOption) -> some View {
+        HStack(alignment: .top, spacing: ProWorkLayout.scaled(12, using: settingsStore)) {
+            VStack(alignment: .leading, spacing: ProWorkLayout.scaled(4, using: settingsStore)) {
+                HStack(spacing: ProWorkLayout.scaled(6, using: settingsStore)) {
+                    Text(option.priceList.name)
+                        .proWorkTextStyle(.callout, weight: .semibold)
+                        .lineLimit(1)
+
+                    if option.priceList.isDefault {
+                        Text(settingsStore.localized("todoForm.hourlyRatePicker.default", defaultValue: "Varsayılan"))
+                            .proWorkTextStyle(.caption, weight: .semibold)
+                            .foregroundStyle(.blue)
+                    }
+                }
+
+                Text(optionDetail(option))
+                    .proWorkTextStyle(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+
+                if let conditions = conditionDetail(option.row) {
+                    Text(conditions)
+                        .proWorkTextStyle(.caption)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(2)
+                }
+            }
+
+            Spacer(minLength: ProWorkLayout.scaled(10, using: settingsStore))
+
+            Text(ProWorkFormatters.hourlyRate(
+                option.row.unitPrice,
+                localeIdentifier: settingsStore.locale.identifier
+            ))
+            .proWorkTextStyle(.callout, weight: .semibold)
+            .monospacedDigit()
+            .foregroundStyle(.blue)
+        }
+        .padding(.horizontal, ProWorkLayout.scaled(12, using: settingsStore))
+        .padding(.vertical, ProWorkLayout.scaled(10, using: settingsStore))
+        .background(Color.secondary.opacity(0.07))
+        .clipShape(RoundedRectangle(cornerRadius: ProWorkLayout.scaled(10, using: settingsStore)))
+        .contentShape(Rectangle())
+    }
+
+    private func optionDetail(_ option: TodoHourlyRateOption) -> String {
+        var parts = [scopeTitle(option.priceList)]
+        parts.append(option.row.serviceType.title)
+        parts.append(option.row.timeType.title)
+        if let categoryId = option.row.categoryId,
+           let category = categories.first(where: { $0.id == categoryId }) {
+            parts.append(category.name)
+        } else {
+            parts.append(settingsStore.localized("todoForm.hourlyRatePicker.allCategories", defaultValue: "Tüm kategoriler"))
+        }
+        return parts.joined(separator: " • ")
+    }
+
+    private func scopeTitle(_ list: PriceList) -> String {
+        switch list.ownerType {
+        case .project:
+            let name = projects.first(where: { $0.id == list.ownerId })?.name
+            return [list.ownerType.title, name].compactMap { $0 }.joined(separator: ": ")
+        case .customer:
+            let name = customers.first(where: { $0.id == list.ownerId })?.name
+            return [list.ownerType.title, name].compactMap { $0 }.joined(separator: ": ")
+        case .global:
+            return list.ownerType.title
+        }
+    }
+
+    private func conditionDetail(_ row: PriceListRow) -> String? {
+        var parts: [String] = []
+        if let mask = row.weekdayMask {
+            let days = Weekday.allCases
+                .filter { PriceListRow.weekdays(fromMask: mask).contains($0) }
+                .map(\.title)
+                .joined(separator: ", ")
+            if !days.isEmpty { parts.append(days) }
+        }
+        if row.startTime != nil || row.endTime != nil {
+            let start = row.startTime?.formatted ?? "00:00"
+            let end = row.endTime?.formatted ?? "24:00"
+            parts.append("\(start)–\(end)")
+        }
+        if row.validFrom != nil || row.validTo != nil {
+            let from = row.validFrom ?? "…"
+            let to = row.validTo ?? "…"
+            parts.append("\(from)–\(to)")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " • ")
+    }
+
+    private func emptyState(systemImage: String, message: String) -> some View {
+        HStack(spacing: ProWorkLayout.scaled(10, using: settingsStore)) {
+            Image(systemName: systemImage)
+                .foregroundStyle(.secondary)
+            Text(message)
+                .proWorkTextStyle(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, ProWorkLayout.scaled(8, using: settingsStore))
+    }
 }

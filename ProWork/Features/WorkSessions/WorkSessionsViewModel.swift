@@ -35,6 +35,17 @@ final class WorkSessionsViewModel: ObservableObject {
         self.statusRepository = services.statusRepository
     }
 
+    var activeFolders: [WorkFolder] {
+        folders.filter { !$0.isArchived }
+    }
+
+    var activeTodos: [TodoListItem] {
+        let activeFolderIds = Set(activeFolders.map(\.id))
+        return todos.filter { todo in
+            todo.folderId.map { activeFolderIds.contains($0) } ?? true
+        }
+    }
+
     // MARK: - Loading
 
     func loadData() {
@@ -43,7 +54,7 @@ final class WorkSessionsViewModel: ObservableObject {
             todos = try todoRepository.fetchAll()
             customers = try customerRepository.fetchAll()
             projects = try projectRepository.fetchAll()
-            folders = try workFolderRepository.fetchAll()
+            folders = try workFolderRepository.fetchAll(includeArchived: true)
             folderPathByTodoId = Self.makeFolderPathByTodoId(
                 todos: todos,
                 folders: folders,
@@ -59,16 +70,28 @@ final class WorkSessionsViewModel: ObservableObject {
 
     func visibleSessions(
         for selection: WorkLocationSelection,
-        includeDescendantFolders: Bool
+        includeDescendantFolders: Bool,
+        showArchivedFolders: Bool = false
     ) -> [WorkSessionListItem] {
-        guard selection != .all else { return sessions }
-
         let todoById = Dictionary(uniqueKeysWithValues: todos.map { ($0.id, $0) })
+        let displayedFolderIds = Set(
+            folders.lazy
+                .filter { showArchivedFolders || !$0.isArchived }
+                .map(\.id)
+        )
+        if selection == .all {
+            return sessions.filter { session in
+                guard let todo = todoById[session.todoId] else { return false }
+                return todo.folderId.map { displayedFolderIds.contains($0) } ?? true
+            }
+        }
+
         let folderIds: Set<String>?
         if case .folder(let folderId) = selection {
-            folderIds = includeDescendantFolders
+            let selectedFolderIds = includeDescendantFolders
                 ? WorkFolderHierarchy.descendantIds(of: folderId, in: folders)
                 : [folderId]
+            folderIds = selectedFolderIds.intersection(displayedFolderIds)
         } else {
             folderIds = nil
         }
@@ -79,8 +102,9 @@ final class WorkSessionsViewModel: ObservableObject {
             case .all:
                 return true
             case .project(let projectId):
-                return todo.projectId == projectId
-                    && (includeDescendantFolders || todo.folderId == nil)
+                guard todo.projectId == projectId else { return false }
+                guard includeDescendantFolders else { return todo.folderId == nil }
+                return todo.folderId.map { displayedFolderIds.contains($0) } ?? true
             case .folder:
                 guard let todoFolderId = todo.folderId else { return false }
                 return folderIds?.contains(todoFolderId) == true
@@ -138,6 +162,32 @@ final class WorkSessionsViewModel: ObservableObject {
     func deleteFolder(id: String) -> Bool {
         do {
             try workFolderRepository.softDelete(id: id, by: AppServices.currentUserId)
+            loadData()
+            errorMessage = nil
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    @discardableResult
+    func archiveFolder(id: String) -> Bool {
+        do {
+            try workFolderRepository.archive(id: id, by: AppServices.currentUserId)
+            loadData()
+            errorMessage = nil
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    @discardableResult
+    func restoreFolder(id: String) -> Bool {
+        do {
+            try workFolderRepository.restore(id: id, by: AppServices.currentUserId)
             loadData()
             errorMessage = nil
             return true
@@ -214,6 +264,30 @@ final class WorkSessionsViewModel: ObservableObject {
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    func canResumeRecentlyEndedSession(
+        _ session: WorkSessionListItem,
+        now: Date = Date()
+    ) -> Bool {
+        TodoTimeSessionRepository.canResumeRecentlyEndedSession(
+            session,
+            among: sessions,
+            now: now
+        )
+    }
+
+    @discardableResult
+    func resumeRecentlyEndedSession(id: String) -> Bool {
+        do {
+            try sessionRepository.resumeRecentlyEndedSession(sessionId: id)
+            loadData()
+            errorMessage = nil
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
         }
     }
 

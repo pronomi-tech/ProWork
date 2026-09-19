@@ -33,13 +33,15 @@ final class TodoRepositoryIntegrationTests: XCTestCase {
     // MARK: - Insert / fetch single
 
     func test_insert_thenFetchById_returnsTodo() throws {
-        let todo = makeTodo(title: "İlk iş")
+        var todo = makeTodo(title: "İlk iş")
+        todo.isAIAgentTask = true
         try repository.insert(todo)
 
         let fetched = try repository.fetch(id: todo.id)
         XCTAssertEqual(fetched?.id, todo.id)
         XCTAssertEqual(fetched?.title, "İlk iş")
         XCTAssertEqual(fetched?.categoryId, category.id)
+        XCTAssertEqual(fetched?.isAIAgentTask, true)
     }
 
     func test_fetchById_returnsNil_forUnknownId() throws {
@@ -114,6 +116,17 @@ final class TodoRepositoryIntegrationTests: XCTestCase {
 
         let fetched = try repository.fetch(id: todo.id)
         XCTAssertEqual(fetched?.title, "Yeni başlık")
+    }
+
+    func test_update_persistsAIAgentTaskChange() throws {
+        var todo = makeTodo(title: "AI işi")
+        try repository.insert(todo)
+
+        todo.isAIAgentTask = true
+        try repository.update(todo)
+
+        XCTAssertEqual(try repository.fetch(id: todo.id)?.isAIAgentTask, true)
+        XCTAssertEqual(try repository.fetchListItem(id: todo.id)?.isAIAgentTask, true)
     }
 
     func test_updateStatus_stampsCompletedAt_whenTransitioningToDone() throws {

@@ -90,6 +90,57 @@ final class Migration001SeedTests: XCTestCase {
         }
 
         XCTAssertTrue(columns.contains("billableSeconds"))
+        XCTAssertTrue(columns.contains("sourceKind"))
+        XCTAssertTrue(columns.contains("sourceId"))
+    }
+
+    func test_todoBillingOverrides_hasProjectedDurationColumn() throws {
+        let columns = try AppDatabase.shared.query(
+            "PRAGMA table_info(todo_billing_overrides);"
+        ) { statement in
+            statement.text(at: 1) ?? ""
+        }
+
+        XCTAssertTrue(columns.contains("projectedBillableSeconds"))
+    }
+
+    func test_workFolders_hasArchiveTimestampColumn() throws {
+        let columns = try AppDatabase.shared.query(
+            "PRAGMA table_info(work_folders);"
+        ) { statement in
+            statement.text(at: 1) ?? ""
+        }
+
+        XCTAssertTrue(columns.contains("archivedAt"))
+    }
+
+    func test_migration004_repairsLegacyGlobalHolidayOrganizationReference() throws {
+        try AppDatabase.shared.execute("PRAGMA foreign_keys = OFF;")
+        try AppDatabase.shared.execute("""
+        INSERT INTO holidays (
+            id, organizationId, scope, customerId, date, name,
+            isHalfDay, isActive, createdAt, updatedAt, rowVersion, syncStatus
+        )
+        VALUES (
+            'legacy-global-holiday', 'default_organization', 'global', NULL,
+            '2035-01-01', 'Legacy Holiday', 0, 1,
+            '2026-09-19T00:00:00.000Z', '2026-09-19T00:00:00.000Z', 0, 'local'
+        );
+        """)
+        try AppDatabase.shared.execute("PRAGMA foreign_keys = ON;")
+
+        try Migration004.repairLegacyDefaultOrganizationReferences(AppDatabase.shared)
+
+        let organizationId = try AppDatabase.shared.query("""
+        SELECT organizationId FROM holidays WHERE id = 'legacy-global-holiday';
+        """) { statement in
+            statement.text(at: 0)
+        }.first
+        XCTAssertEqual(organizationId, BuiltInOrganizationId.default)
+        let violations = try AppDatabase.shared.query("PRAGMA foreign_key_check;") { statement in
+            statement.text(at: 0)
+        }
+        XCTAssertTrue(violations.isEmpty)
     }
 
     // MARK: - KDV oranları

@@ -27,6 +27,13 @@ enum WorkSessionFormMode {
     }
 }
 
+private enum WorkSessionFormTab: String, CaseIterable, Identifiable {
+    case session
+    case assessment
+
+    var id: String { rawValue }
+}
+
 struct WorkSessionFormView: View {
     @EnvironmentObject private var settingsStore: AppSettingsStore
     @Environment(\.dismiss) private var dismiss
@@ -41,6 +48,7 @@ struct WorkSessionFormView: View {
     let fixedTodo: TodoListItem?
 
     let onTodosChanged: (([TodoListItem]) -> Void)?
+    let onContinue: (() -> Void)?
 
     let onSave: (
         _ sessionId: String?,
@@ -64,6 +72,7 @@ struct WorkSessionFormView: View {
     @State private var billingTimeTypeOverrideRawValue: String = ""
     @State private var billingTimeTypeOverrideReason: String = ""
     @State private var isShowingCreateTodoForm = false
+    @State private var selectedTab: WorkSessionFormTab = .session
     @StateObject private var viewModel = WorkSessionFormViewModel()
 
     init(
@@ -76,6 +85,7 @@ struct WorkSessionFormView: View {
         statuses: [TodoStatus],
         fixedTodo: TodoListItem? = nil,
         onTodosChanged: (([TodoListItem]) -> Void)? = nil,
+        onContinue: (() -> Void)? = nil,
         onSave: @escaping (
             _ sessionId: String?,
             _ todoId: String,
@@ -96,6 +106,7 @@ struct WorkSessionFormView: View {
         self.statuses = statuses
         self.fixedTodo = fixedTodo
         self.onTodosChanged = onTodosChanged
+        self.onContinue = onContinue
         self.onSave = onSave
         _localTodos = State(initialValue: todos)
     }
@@ -106,21 +117,27 @@ struct WorkSessionFormView: View {
             subtitle: headerSubtitle,
             systemImage: "clock.badge",
             width: FormSheetSize.workSessionForm.width,
-            height: FormSheetSize.workSessionForm.height
+            height: FormSheetSize.workSessionForm.height,
+            contentScrollBehavior: .fitsContent
         ) {
             headerDurationSummary
         } content: {
-            todoSection
+            VStack(alignment: .leading, spacing: ProWorkLayout.scaled(14, using: settingsStore)) {
+                formTabBar
 
-            dateSection
+                Divider()
 
-            timeCards
-
-            quickDurationsCompact
-
-            billingTimeTypeSection
-
-            noteSection
+                Group {
+                    switch selectedTab {
+                    case .session:
+                        sessionFields
+                    case .assessment:
+                        assessmentFields
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         } footer: {
             footer
         }
@@ -149,9 +166,71 @@ struct WorkSessionFormView: View {
                 folders: folders,
                 categories: categories,
                 statuses: statuses
-            ) { todo in
-                createTodoFromForm(todo)
+            ) { todo, billingOverride in
+                createTodoFromForm(todo, billingOverride: billingOverride)
             }
+        }
+    }
+
+    private var formTabBar: some View {
+        HStack(spacing: ProWorkLayout.scaled(10, using: settingsStore)) {
+            formTabButton(
+                .session,
+                title: settingsStore.localized("workSessions.form.tab.session", defaultValue: "Çalışma Bilgileri"),
+                systemImage: "clock"
+            )
+            formTabButton(
+                .assessment,
+                title: settingsStore.localized("workSessions.form.tab.assessment", defaultValue: "Mesai ve Not"),
+                systemImage: "clock.badge.checkmark"
+            )
+        }
+    }
+
+    private func formTabButton(
+        _ tab: WorkSessionFormTab,
+        title: String,
+        systemImage: String
+    ) -> some View {
+        let selected = selectedTab == tab
+        return Button {
+            selectedTab = tab
+        } label: {
+            HStack(spacing: ProWorkLayout.scaled(10, using: settingsStore)) {
+                Image(systemName: systemImage)
+                    .proWorkFont(size: 16, weight: .semibold)
+                Text(title)
+                    .proWorkTextStyle(.callout, weight: .semibold)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(selected ? Color.white : Color.primary)
+            .padding(.horizontal, ProWorkLayout.scaled(18, using: settingsStore))
+            .frame(maxWidth: .infinity, minHeight: ProWorkLayout.scaled(58, using: settingsStore), alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: ProWorkLayout.scaled(10, using: settingsStore))
+                    .fill(selected ? Color.accentColor : Color.secondary.opacity(0.08))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+    }
+
+    private var sessionFields: some View {
+        VStack(alignment: .leading, spacing: ProWorkLayout.scaled(14, using: settingsStore)) {
+            todoSection
+            dateSection
+            timeCards
+            if showsQuickDurations {
+                quickDurationsCompact
+            }
+        }
+    }
+
+    private var assessmentFields: some View {
+        VStack(alignment: .leading, spacing: ProWorkLayout.scaled(14, using: settingsStore)) {
+            billingTimeTypeSection
+            noteSection
         }
     }
 
@@ -172,7 +251,20 @@ struct WorkSessionFormView: View {
         return session.endedAt == nil
     }
 
+    private var showsQuickDurations: Bool {
+        switch mode {
+        case .create:
+            return true
+        case .edit(let session):
+            return session.isManual && session.endedAt != nil
+        }
+    }
+
     private var headerDurationSummary: some View {
+        durationSummaryCard
+    }
+
+    private var durationSummaryCard: some View {
         HStack(spacing: ProWorkLayout.scaled(10, using: settingsStore)) {
             Image(systemName: isValidDateRange ? "checkmark.circle" : "exclamationmark.triangle")
                 .proWorkFont(size: 22)
@@ -332,27 +424,28 @@ struct WorkSessionFormView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            Divider()
-                .frame(height: ProWorkLayout.scaled(56, using: settingsStore))
+            if !isActiveEditMode {
+                Divider()
+                    .frame(height: ProWorkLayout.scaled(56, using: settingsStore))
 
-            HStack(spacing: ProWorkLayout.scaled(14, using: settingsStore)) {
-                Image(systemName: "moon.stars")
-                    .proWorkFont(size: 22)
-                    .foregroundStyle(.secondary)
-                    .frame(width: ProWorkLayout.scaled(34, using: settingsStore))
-
-                VStack(alignment: .leading, spacing: ProWorkLayout.scaled(8, using: settingsStore)) {
-                    Text(settingsStore.localized("workSessions.form.endDay", defaultValue: "Bitiş Günü"))
-                        .proWorkTextStyle(.caption)
+                HStack(spacing: ProWorkLayout.scaled(14, using: settingsStore)) {
+                    Image(systemName: "moon.stars")
+                        .proWorkFont(size: 22)
                         .foregroundStyle(.secondary)
+                        .frame(width: ProWorkLayout.scaled(34, using: settingsStore))
 
-                    Picker("", selection: $endDayOffset) {
-                        Text(settingsStore.localized("workSessions.form.endDay.same", defaultValue: "Aynı gün")).tag(0)
-                        Text(settingsStore.localized("workSessions.form.endDay.next", defaultValue: "Ertesi gün")).tag(1)
+                    VStack(alignment: .leading, spacing: ProWorkLayout.scaled(8, using: settingsStore)) {
+                        Text(settingsStore.localized("workSessions.form.endDay", defaultValue: "Bitiş Günü"))
+                            .proWorkTextStyle(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Picker("", selection: $endDayOffset) {
+                            Text(settingsStore.localized("workSessions.form.endDay.same", defaultValue: "Aynı gün")).tag(0)
+                            Text(settingsStore.localized("workSessions.form.endDay.next", defaultValue: "Ertesi gün")).tag(1)
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: ProWorkLayout.scaled(230, using: settingsStore))
                     }
-                    .pickerStyle(.segmented)
-                    .frame(width: ProWorkLayout.scaled(230, using: settingsStore))
-                    .disabled(isActiveEditMode)
                 }
             }
         }
@@ -374,11 +467,13 @@ struct WorkSessionFormView: View {
                 date: $startedAt
             )
 
-            timeCard(
-                title: settingsStore.localized("workSessions.column.end", defaultValue: "Bitiş"),
-                systemImage: "stop.circle",
-                date: $endedAt
-            )
+            if !isActiveEditMode {
+                timeCard(
+                    title: settingsStore.localized("workSessions.column.end", defaultValue: "Bitiş"),
+                    systemImage: "stop.circle",
+                    date: $endedAt
+                )
+            }
         }
         .frame(maxWidth: .infinity)
     }
@@ -561,6 +656,9 @@ struct WorkSessionFormView: View {
         ProWorkFormFooter(
             onCancel: { dismiss() },
             onSave: { save() },
+            onAuxiliary: onContinue,
+            auxiliaryTitle: settingsStore.localized("workSessions.action.continue", defaultValue: "Devam Ettir"),
+            auxiliarySystemImage: "arrow.uturn.forward.circle",
             saveTitle: mode.saveButtonTitle(using: settingsStore),
             saveDisabled: !canSave || isActiveEditMode
         )
@@ -670,8 +768,14 @@ struct WorkSessionFormView: View {
         }
     }
 
-    private func createTodoFromForm(_ todo: Todo) {
-        guard let refreshedTodos = viewModel.createTodo(todo) else { return }
+    private func createTodoFromForm(
+        _ todo: Todo,
+        billingOverride: TodoBillingOverride?
+    ) {
+        guard let refreshedTodos = viewModel.createTodo(
+            todo,
+            billingOverride: billingOverride
+        ) else { return }
 
         localTodos = refreshedTodos
         selectedTodoId = todo.id

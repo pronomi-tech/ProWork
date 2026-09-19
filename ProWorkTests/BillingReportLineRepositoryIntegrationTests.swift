@@ -178,6 +178,55 @@ final class BillingReportLineRepositoryIntegrationTests: XCTestCase {
         XCTAssertEqual(fetched.billableMinutes, 107)
     }
 
+    func test_projectedFeeSource_roundTripsAndKeepsStableSelectionKey() throws {
+        let sourceId = "override-projected-1"
+        let line = BillingReportLine(
+            runId: run.id,
+            sourceKind: .projectedFee,
+            sourceId: sourceId,
+            todoId: todo.id,
+            todoTitle: todo.title,
+            customerId: customer.id,
+            customerName: customer.name,
+            serviceType: .remote,
+            timeType: .regular,
+            actualSeconds: 0,
+            billableSeconds: 36_000,
+            unitPriceMinor: 200_000,
+            amountMinor: 2_000_000,
+            currency: "TRY",
+            totalMinor: 2_000_000
+        )
+        try lineRepository.insert(line)
+
+        let fetched = try XCTUnwrap(lineRepository.fetchAll(runId: run.id).first)
+        XCTAssertEqual(fetched.sourceKind, .projectedFee)
+        XCTAssertEqual(fetched.sourceId, sourceId)
+        XCTAssertEqual(fetched.selectionKey, "todoBillingOverride:\(sourceId)")
+
+        let assignments = try lineRepository.fetchSelectionAssignments(
+            organizationId: BuiltInOrganizationId.default,
+            customerId: customer.id
+        )
+        XCTAssertEqual(assignments.map(\.selectionKey), ["todoBillingOverride:\(sourceId)"])
+
+        let sameOverrideAsFixedFee = BillingReportLine(
+            runId: run.id,
+            sourceKind: .fixedFee,
+            sourceId: sourceId,
+            todoId: todo.id,
+            todoTitle: todo.title,
+            customerId: customer.id,
+            customerName: customer.name,
+            serviceType: .remote,
+            timeType: .regular,
+            fixedFeeMinor: 2_000_000,
+            amountMinor: 2_000_000,
+            isFixedFee: true
+        )
+        XCTAssertEqual(sameOverrideAsFixedFee.selectionKey, fetched.selectionKey)
+    }
+
     // MARK: - Helper
 
     private func makeLine(

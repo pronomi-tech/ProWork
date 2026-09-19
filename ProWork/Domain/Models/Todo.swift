@@ -18,6 +18,7 @@ struct Todo: Identifiable, Hashable {
     var dueDate: Date?
     var estimatedMinutes: Int?
     var isBillable: Bool
+    var isAIAgentTask: Bool
     var completedAt: Date?
 
     // Tenant + audit + sync
@@ -46,6 +47,7 @@ struct Todo: Identifiable, Hashable {
         dueDate: Date? = nil,
         estimatedMinutes: Int? = nil,
         isBillable: Bool = true,
+        isAIAgentTask: Bool = false,
         completedAt: Date? = nil,
         organizationId: String = BuiltInOrganizationId.default,
         createdByUserId: String? = BuiltInUserId.defaultOwner,
@@ -71,6 +73,7 @@ struct Todo: Identifiable, Hashable {
         self.dueDate = dueDate
         self.estimatedMinutes = estimatedMinutes
         self.isBillable = isBillable
+        self.isAIAgentTask = isAIAgentTask
         self.completedAt = completedAt
         self.organizationId = organizationId
         self.createdByUserId = createdByUserId
@@ -115,6 +118,7 @@ extension Todo {
         dueDate: Date? = nil,
         estimatedMinutes: Int? = nil,
         isBillable: Bool = true,
+        isAIAgentTask: Bool = false,
         completedAt: Date? = nil,
         meta: RecordMetadata
     ) {
@@ -132,6 +136,7 @@ extension Todo {
             dueDate: dueDate,
             estimatedMinutes: estimatedMinutes,
             isBillable: isBillable,
+            isAIAgentTask: isAIAgentTask,
             completedAt: completedAt,
             organizationId: meta.organizationId,
             createdByUserId: meta.createdByUserId,

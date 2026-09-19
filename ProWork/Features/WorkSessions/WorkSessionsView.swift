@@ -7,12 +7,14 @@ import Combine
 
 struct WorkSessionsView: View {
     @EnvironmentObject private var settingsStore: AppSettingsStore
+    @EnvironmentObject private var automationController: WorkAutomationController
     @StateObject private var viewModel = WorkSessionsViewModel()
 
     @State private var isShowingCreateForm = false
     @State private var editingSession: WorkSessionListItem?
     @State private var locationSelection: WorkLocationSelection = .all
     @State private var includeDescendantFolders = false
+    @State private var showArchivedFolders = false
     @State private var folderFormRequest: WorkSessionFolderFormRequest?
 
     @State private var pendingWorkStart: PendingWorkStart?
@@ -45,14 +47,16 @@ struct WorkSessionsView: View {
             WorkFolderSidebar(
                 projects: viewModel.projects,
                 folders: viewModel.folders,
-                itemCount: { selection, includesDescendants in
+                itemCount: { selection, includesDescendants, showsArchived in
                     viewModel.visibleSessions(
                         for: selection,
-                        includeDescendantFolders: includesDescendants
+                        includeDescendantFolders: includesDescendants,
+                        showArchivedFolders: showsArchived
                     ).count
                 },
                 selection: $locationSelection,
                 includeDescendantFolders: $includeDescendantFolders,
+                showArchivedFolders: $showArchivedFolders,
                 onCreateIndependentFolder: {
                     folderFormRequest = WorkSessionFolderFormRequest(
                         existingFolder: nil,
@@ -80,6 +84,10 @@ struct WorkSessionsView: View {
                         projectId: folder.projectId,
                         parentFolderId: folder.parentFolderId
                     )
+                },
+                onArchiveFolder: archiveFolder,
+                onRestoreFolder: { folder in
+                    _ = viewModel.restoreFolder(id: folder.id)
                 },
                 onDeleteFolder: askDeleteFolder
             )
@@ -109,6 +117,9 @@ struct WorkSessionsView: View {
             viewModel.loadData()
             rebuildFilteredSessionsCache()
         }
+        .onChange(of: automationController.workSessionRevision) { _, _ in
+            viewModel.loadData()
+        }
         // ClockTicker is consumed directly by the
         // open-session row via `clockTicker.halfMinute`. The previous
         // .onReceive ran on every tick even when no session was open
@@ -120,6 +131,14 @@ struct WorkSessionsView: View {
         .onChange(of: viewModel.folders) { _, _ in rebuildFilteredSessionsCache() }
         .onChange(of: locationSelection) { _, _ in rebuildFilteredSessionsCache() }
         .onChange(of: includeDescendantFolders) { _, _ in rebuildFilteredSessionsCache() }
+        .onChange(of: showArchivedFolders) { _, showsArchived in
+            if !showsArchived,
+               case .folder(let folderId) = locationSelection,
+               viewModel.folders.first(where: { $0.id == folderId })?.isArchived == true {
+                locationSelection = .all
+            }
+            rebuildFilteredSessionsCache()
+        }
         .onChange(of: filterRange) { _, _ in rebuildFilteredSessionsCache() }
         .onChange(of: filterCustomerId) { _, _ in rebuildFilteredSessionsCache() }
         .onChange(of: filterProjectId) { _, _ in rebuildFilteredSessionsCache() }
@@ -131,10 +150,10 @@ struct WorkSessionsView: View {
         .sheet(isPresented: $isShowingCreateForm) {
             WorkSessionFormView(
                 mode: .create,
-                todos: viewModel.todos,
+                todos: viewModel.activeTodos,
                 customers: viewModel.customers,
                 projects: viewModel.projects,
-                folders: viewModel.folders,
+                folders: viewModel.activeFolders,
                 categories: viewModel.categories,
                 statuses: viewModel.statuses,
                 onTodosChanged: { _ in
@@ -159,12 +178,18 @@ struct WorkSessionsView: View {
                 todos: viewModel.todos,
                 customers: viewModel.customers,
                 projects: viewModel.projects,
-                folders: viewModel.folders,
+                folders: viewModel.activeFolders,
                 categories: viewModel.categories,
                 statuses: viewModel.statuses,
                 onTodosChanged: { _ in
                     viewModel.loadData()
-                }
+                },
+                onContinue: viewModel.canResumeRecentlyEndedSession(session) ? {
+                    if viewModel.resumeRecentlyEndedSession(id: session.id) {
+                        automationController.refresh()
+                        editingSession = nil
+                    }
+                } : nil
             ) { sessionId, todoId, startedAt, endedAt, note, isManual, timeTypeOverride, overrideReason in
                 guard let sessionId else { return }
 
@@ -187,7 +212,7 @@ struct WorkSessionsView: View {
                 existingFolder: request.existingFolder,
                 projectId: request.projectId,
                 parentFolderId: request.parentFolderId,
-                folders: viewModel.folders
+                folders: viewModel.activeFolders
             ) { folder in
                 if viewModel.saveFolder(folder, isNew: request.existingFolder == nil) {
                     locationSelection = .folder(folder.id)
@@ -216,7 +241,8 @@ struct WorkSessionsView: View {
 
         cachedFilteredSessions = viewModel.visibleSessions(
             for: locationSelection,
-            includeDescendantFolders: includeDescendantFolders
+            includeDescendantFolders: includeDescendantFolders,
+            showArchivedFolders: showArchivedFolders
         ).filter { session in
             guard matchesRange(session) else { return false }
             if filterByCustomer || filterByProject {
@@ -941,6 +967,16 @@ struct WorkSessionsView: View {
                 locationSelection = .all
             }
         }
+    }
+
+    private func archiveFolder(_ folder: WorkFolder) {
+        guard viewModel.archiveFolder(id: folder.id) else { return }
+        if !showArchivedFolders,
+           case .folder(let selectedFolderId) = locationSelection,
+           viewModel.folders.first(where: { $0.id == selectedFolderId })?.isArchived == true {
+            locationSelection = .all
+        }
+        rebuildFilteredSessionsCache()
     }
 }
 

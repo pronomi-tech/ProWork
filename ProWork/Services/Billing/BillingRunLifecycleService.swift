@@ -261,6 +261,19 @@ final class BillingRunLifecycleService {
         // creation loop in a single write transaction so SQLite atomically
         // rolls back every insert if any step throws.
         return try runRepository.inWriteTransaction { () -> [BillingRunBundle] in
+            // Re-check after acquiring the write lock. The preview-time check
+            // above gives fast feedback, but only this serialized check closes
+            // the race between two windows selecting the same billing source.
+            let lockedAssignments = try lineRepository.fetchSelectionAssignments(
+                organizationId: organizationId,
+                customerId: customerId
+            )
+            if let conflicting = lockedAssignments.first(where: {
+                selectionKeys.contains($0.selectionKey)
+            }) {
+                throw BillingRunLifecycleError.conflictingRunExists(conflicting.runLabel)
+            }
+
             return try currencies.map { currency in
                 let now = Date()
                 let runLines = lines
@@ -650,7 +663,7 @@ final class BillingRunLifecycleService {
         let previewLines = lines.map { line in
             BillingDraftPreviewLine(
                 line: line,
-                blockingRunLabel: assignmentByKey[line.selectionKey] ?? (line.endedAt == nil ? ProWorkLocalizer.shared.string("billingRuns.blocking.openSession", defaultValue: "Açık oturum") : nil)
+                blockingRunLabel: assignmentByKey[line.selectionKey] ?? (line.sourceKind == .timeSession && line.endedAt == nil ? ProWorkLocalizer.shared.string("billingRuns.blocking.openSession", defaultValue: "Açık oturum") : nil)
             )
         }
         return BillingDraftPreview(
@@ -697,7 +710,7 @@ final class BillingRunLifecycleService {
                     BillingDraftPreviewLine(
                         line: line,
                         blockingRunLabel: assignmentByKey[line.selectionKey]
-                            ?? (line.endedAt == nil ? ProWorkLocalizer.shared.string("billingRuns.blocking.openSession", defaultValue: "Açık oturum") : nil)
+                            ?? (line.sourceKind == .timeSession && line.endedAt == nil ? ProWorkLocalizer.shared.string("billingRuns.blocking.openSession", defaultValue: "Açık oturum") : nil)
                     )
                 }
             )

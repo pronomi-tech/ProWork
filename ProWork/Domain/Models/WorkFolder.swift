@@ -10,6 +10,7 @@ struct WorkFolder: Identifiable, Hashable {
     var parentFolderId: String?
     var name: String
     var sortOrder: Int
+    var archivedAt: Date?
 
     var organizationId: String
     var createdByUserId: String?
@@ -28,6 +29,7 @@ struct WorkFolder: Identifiable, Hashable {
         parentFolderId: String? = nil,
         name: String,
         sortOrder: Int = 0,
+        archivedAt: Date? = nil,
         organizationId: String = BuiltInOrganizationId.default,
         createdByUserId: String? = BuiltInUserId.defaultOwner,
         updatedByUserId: String? = BuiltInUserId.defaultOwner,
@@ -44,6 +46,7 @@ struct WorkFolder: Identifiable, Hashable {
         self.parentFolderId = parentFolderId
         self.name = name
         self.sortOrder = sortOrder
+        self.archivedAt = archivedAt
         self.organizationId = organizationId
         self.createdByUserId = createdByUserId
         self.updatedByUserId = updatedByUserId
@@ -79,6 +82,7 @@ extension WorkFolder {
         parentFolderId: String?,
         name: String,
         sortOrder: Int,
+        archivedAt: Date?,
         meta: RecordMetadata
     ) {
         self.init(
@@ -87,6 +91,7 @@ extension WorkFolder {
             parentFolderId: parentFolderId,
             name: name,
             sortOrder: sortOrder,
+            archivedAt: archivedAt,
             organizationId: meta.organizationId,
             createdByUserId: meta.createdByUserId,
             updatedByUserId: meta.updatedByUserId,
@@ -99,4 +104,6 @@ extension WorkFolder {
             originDeviceId: meta.originDeviceId
         )
     }
+
+    var isArchived: Bool { archivedAt != nil }
 }

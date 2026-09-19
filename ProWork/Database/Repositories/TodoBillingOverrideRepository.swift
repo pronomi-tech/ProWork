@@ -15,7 +15,8 @@ final class TodoBillingOverrideRepository {
     func fetch(todoId: String) throws -> TodoBillingOverride? {
         let sql = """
         SELECT
-            id, todoId, overrideType, unitPriceMinor, fixedFeeMinor, currency, note,
+            id, todoId, overrideType, unitPriceMinor, projectedBillableSeconds,
+            fixedFeeMinor, currency, note,
             \(RecordMetadataSQL.columns)
         FROM todo_billing_overrides
         WHERE todoId = ? AND deletedAt IS NULL
@@ -42,7 +43,8 @@ final class TodoBillingOverrideRepository {
             let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
             let sql = """
             SELECT
-                id, todoId, overrideType, unitPriceMinor, fixedFeeMinor, currency, note,
+                id, todoId, overrideType, unitPriceMinor, projectedBillableSeconds,
+                fixedFeeMinor, currency, note,
                 \(RecordMetadataSQL.columns)
             FROM todo_billing_overrides
             WHERE todoId IN (\(placeholders)) AND deletedAt IS NULL;
@@ -66,6 +68,31 @@ final class TodoBillingOverrideRepository {
         return map
     }
 
+    /// Session-independent arrangements are always eligible for a statement;
+    /// the statement period filters tracked sessions only. Assignment to an
+    /// existing draft/final run is resolved later through billing-line sources.
+    func fetchSessionIndependent(
+        organizationId: String
+    ) throws -> [TodoBillingOverride] {
+        let sql = """
+        SELECT
+            id, todoId, overrideType, unitPriceMinor, projectedBillableSeconds,
+            fixedFeeMinor, currency, note,
+            \(RecordMetadataSQL.columns)
+        FROM todo_billing_overrides
+        WHERE organizationId = ?
+          AND overrideType IN ('projectedFee', 'fixedFee')
+          AND deletedAt IS NULL
+        ORDER BY createdAt ASC, id ASC;
+        """
+
+        return try database.query(
+            sql,
+            map: { try Self.makeOverride(from: $0) },
+            bind: { $0.bindText(organizationId, at: 1) }
+        )
+    }
+
     func upsert(_ override: TodoBillingOverride) throws {
         // ON CONFLICT(todoId): an existing row for the same todo is
         // updated in place; if that row had been soft-deleted, we
@@ -79,15 +106,16 @@ final class TodoBillingOverrideRepository {
         let sql = """
         INSERT INTO todo_billing_overrides (
             id, organizationId, todoId, overrideType,
-            unitPriceMinor, fixedFeeMinor, currency, note,
+            unitPriceMinor, projectedBillableSeconds, fixedFeeMinor, currency, note,
             createdByUserId, updatedByUserId,
             createdAt, updatedAt, deletedAt, rowVersion,
             syncStatus, lastSyncedAt, originDeviceId
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(todoId) DO UPDATE SET
             overrideType = excluded.overrideType,
             unitPriceMinor = excluded.unitPriceMinor,
+            projectedBillableSeconds = excluded.projectedBillableSeconds,
             fixedFeeMinor = excluded.fixedFeeMinor,
             currency = excluded.currency,
             note = excluded.note,
@@ -104,18 +132,19 @@ final class TodoBillingOverrideRepository {
             stmt.bindText(override.todoId, at: 3)
             stmt.bindText(override.overrideType.rawValue, at: 4)
             stmt.bindOptionalInt(override.unitPriceMinor, at: 5)
-            stmt.bindOptionalInt(override.fixedFeeMinor, at: 6)
-            stmt.bindText(override.currency, at: 7)
-            stmt.bindText(override.note, at: 8)
-            stmt.bindText(override.createdByUserId, at: 9)
-            stmt.bindText(override.updatedByUserId ?? BuiltInUserId.defaultOwner, at: 10)
-            stmt.bindText(DateFormatter.proWorkSQLite.string(from: override.createdAt), at: 11)
-            stmt.bindText(DateFormatter.proWorkSQLite.string(from: Date()), at: 12)
-            stmt.bindText(override.deletedAt.map(DateFormatter.proWorkSQLite.string(from:)), at: 13)
-            stmt.bindInt(override.rowVersion, at: 14)
-            stmt.bindText(override.syncStatus.rawValue, at: 15)
-            stmt.bindText(override.lastSyncedAt.map(DateFormatter.proWorkSQLite.string(from:)), at: 16)
-            stmt.bindText(override.originDeviceId, at: 17)
+            stmt.bindOptionalInt(override.projectedBillableSeconds, at: 6)
+            stmt.bindOptionalInt(override.fixedFeeMinor, at: 7)
+            stmt.bindText(override.currency, at: 8)
+            stmt.bindText(override.note, at: 9)
+            stmt.bindText(override.createdByUserId, at: 10)
+            stmt.bindText(override.updatedByUserId ?? BuiltInUserId.defaultOwner, at: 11)
+            stmt.bindText(DateFormatter.proWorkSQLite.string(from: override.createdAt), at: 12)
+            stmt.bindText(DateFormatter.proWorkSQLite.string(from: Date()), at: 13)
+            stmt.bindText(override.deletedAt.map(DateFormatter.proWorkSQLite.string(from:)), at: 14)
+            stmt.bindInt(override.rowVersion, at: 15)
+            stmt.bindText(override.syncStatus.rawValue, at: 16)
+            stmt.bindText(override.lastSyncedAt.map(DateFormatter.proWorkSQLite.string(from:)), at: 17)
+            stmt.bindText(override.originDeviceId, at: 18)
         }
     }
 
@@ -142,10 +171,11 @@ final class TodoBillingOverrideRepository {
             todoId: statement.text(at: 1) ?? "",
             overrideType: TodoBillingOverrideType(rawValue: statement.text(at: 2) ?? "unitPrice") ?? .unitPrice,
             unitPriceMinor: statement.optionalInt(at: 3),
-            fixedFeeMinor: statement.optionalInt(at: 4),
-            currency: statement.text(at: 5) ?? "TRY",
-            note: statement.text(at: 6),
-            meta: try statement.readMetadata(startingAt: 7)
+            projectedBillableSeconds: statement.optionalInt(at: 4),
+            fixedFeeMinor: statement.optionalInt(at: 5),
+            currency: statement.text(at: 6) ?? "TRY",
+            note: statement.text(at: 7),
+            meta: try statement.readMetadata(startingAt: 8)
         )
     }
 }

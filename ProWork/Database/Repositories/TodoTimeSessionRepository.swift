@@ -16,6 +16,38 @@ struct PausedTodoTimeSession: Hashable {
 }
 
 final class TodoTimeSessionRepository {
+    static let recentlyEndedResumeWindow: TimeInterval = 10 * 60
+
+    static func canResumeRecentlyEndedSession(
+        _ session: WorkSessionListItem,
+        among sessions: [WorkSessionListItem],
+        now: Date = Date()
+    ) -> Bool {
+        guard !session.isManual,
+              let endedAt = session.endedAt,
+              sessions.allSatisfy({ $0.endedAt != nil }) else {
+            return false
+        }
+
+        let elapsed = now.timeIntervalSince(endedAt)
+        guard elapsed >= 0, elapsed <= recentlyEndedResumeWindow else {
+            return false
+        }
+
+        let latest = sessions.max { lhs, rhs in
+            let lhsDate = lhs.endedAt ?? lhs.startedAt
+            let rhsDate = rhs.endedAt ?? rhs.startedAt
+            if lhsDate != rhsDate {
+                return lhsDate < rhsDate
+            }
+            if lhs.createdAt != rhs.createdAt {
+                return lhs.createdAt < rhs.createdAt
+            }
+            return lhs.id < rhs.id
+        }
+        return latest?.id == session.id
+    }
+
     private let database: AppDatabase
 
     init(database: AppDatabase = .shared) {
@@ -509,6 +541,72 @@ final class TodoTimeSessionRepository {
         }
     }
 
+    func resumeRecentlyEndedSession(
+        sessionId: String,
+        now: Date = Date(),
+        by userId: String = BuiltInUserId.defaultOwner
+    ) throws {
+        try database.inWriteTransaction {
+            let latestSessionId = try database.query("""
+            SELECT id
+            FROM todo_time_sessions
+            WHERE deletedAt IS NULL
+            ORDER BY
+                CASE WHEN endedAt IS NULL THEN 0 ELSE 1 END,
+                COALESCE(endedAt, startedAt) DESC,
+                createdAt DESC,
+                id DESC
+            LIMIT 1;
+            """) { statement in
+                statement.text(at: 0) ?? ""
+            }.first
+
+            guard latestSessionId == sessionId else {
+                throw TodoTimeSessionRepositoryError.recentSessionCannotResume
+            }
+
+            let rows = try database.query("""
+            SELECT endedAt, isManual
+            FROM todo_time_sessions
+            WHERE id = ? AND deletedAt IS NULL
+            LIMIT 1;
+            """, map: { statement in
+                (statement.text(at: 0), statement.int(at: 1) == 1)
+            }, bind: { statement in
+                statement.bindText(sessionId, at: 1)
+            })
+
+            guard let row = rows.first,
+                  !row.1,
+                  let endedAt = Self.parseDate(row.0) else {
+                throw TodoTimeSessionRepositoryError.recentSessionCannotResume
+            }
+
+            let elapsed = now.timeIntervalSince(endedAt)
+            guard elapsed >= 0, elapsed <= Self.recentlyEndedResumeWindow else {
+                throw TodoTimeSessionRepositoryError.recentSessionCannotResume
+            }
+
+            let updateTimestamp = Self.formatDate(now)
+            let sql = """
+            UPDATE todo_time_sessions
+            SET
+                runningSinceAt = ?, pausedAt = NULL, endedAt = NULL, endStatusId = NULL,
+                updatedByUserId = ?, updatedAt = ?,
+                rowVersion = rowVersion + 1, syncStatus = 'local'
+            WHERE id = ? AND endedAt = ? AND isManual = 0 AND deletedAt IS NULL;
+            """
+
+            try database.execute(sql) { statement in
+                statement.bindText(Self.formatDate(endedAt), at: 1)
+                statement.bindText(userId, at: 2)
+                statement.bindText(updateTimestamp, at: 3)
+                statement.bindText(sessionId, at: 4)
+                statement.bindText(Self.formatDate(endedAt), at: 5)
+            }
+        }
+    }
+
     func stopOpenSession(
         todoId: String,
         endStatusId: String
@@ -637,6 +735,7 @@ final class TodoTimeSessionRepository {
 enum TodoTimeSessionRepositoryError: LocalizedError {
     case invalidDateRange
     case preconditionUnmet
+    case recentSessionCannotResume
 
     var errorDescription: String? {
         switch self {
@@ -646,6 +745,11 @@ enum TodoTimeSessionRepositoryError: LocalizedError {
             return ProWorkLocalizer.shared.string(
                 "workSessions.error.preconditionUnmet",
                 defaultValue: "Bu çalışma kaydı düzenlenemiyor — kayıt açık veya silinmiş olabilir."
+            )
+        case .recentSessionCannotResume:
+            return ProWorkLocalizer.shared.string(
+                "workSessions.error.cannotContinue",
+                defaultValue: "Yalnızca son 10 dakika içinde biten en son otomatik çalışma kaydı devam ettirilebilir."
             )
         }
     }

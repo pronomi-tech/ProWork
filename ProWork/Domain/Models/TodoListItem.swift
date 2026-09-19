@@ -43,6 +43,7 @@ struct TodoListItem: Identifiable, Hashable {
     var activeSessionStartedAt: Date?
 
     var isBillable: Bool
+    var isAIAgentTask: Bool = false
 
     var createdAt: Date
     var updatedAt: Date

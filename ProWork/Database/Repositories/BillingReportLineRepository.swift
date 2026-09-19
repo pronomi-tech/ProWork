@@ -41,7 +41,7 @@ final class BillingReportLineRepository {
 
     private static let insertSQL = """
     INSERT INTO billing_report_lines (
-        id, organizationId, runId, sessionId,
+        id, organizationId, runId, sessionId, sourceKind, sourceId,
         todoId, todoTitle, projectId, projectName,
         customerId, customerName, categoryId, categoryName,
         serviceType, timeType, segmentIndex,
@@ -54,7 +54,7 @@ final class BillingReportLineRepository {
         createdAt, updatedAt, deletedAt, rowVersion,
         syncStatus, lastSyncedAt, originDeviceId
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     """
 
     /// Single bind site — `insert` and `executeBatch` share the same code path.
@@ -63,44 +63,46 @@ final class BillingReportLineRepository {
         stmt.bindText(line.organizationId, at: 2)
         stmt.bindText(line.runId, at: 3)
         stmt.bindText(line.sessionId, at: 4)
-        stmt.bindText(line.todoId, at: 5)
-        stmt.bindText(line.todoTitle, at: 6)
-        stmt.bindText(line.projectId, at: 7)
-        stmt.bindText(line.projectName, at: 8)
-        stmt.bindText(line.customerId, at: 9)
-        stmt.bindText(line.customerName, at: 10)
-        stmt.bindText(line.categoryId, at: 11)
-        stmt.bindText(line.categoryName, at: 12)
-        stmt.bindText(line.serviceType.rawValue, at: 13)
-        stmt.bindText(line.timeType.rawValue, at: 14)
-        stmt.bindInt(line.segmentIndex, at: 15)
-        stmt.bindInt(line.actualSeconds, at: 16)
-        stmt.bindInt(line.billableMinutes, at: 17)
-        stmt.bindInt(line.billableSeconds, at: 18)
-        stmt.bindInt(line.unitPriceMinor, at: 19)
-        stmt.bindOptionalInt(line.fixedFeeMinor, at: 20)
-        stmt.bindInt(line.amountMinor, at: 21)
-        stmt.bindText(line.currency, at: 22)
-        stmt.bindText(DecimalPersistence.string(line.vatRate), at: 23)
-        stmt.bindInt(line.vatMinor, at: 24)
-        stmt.bindInt(line.totalMinor, at: 25)
-        stmt.bindInt(line.isVatExempt ? 1 : 0, at: 26)
-        stmt.bindInt(line.isBillable ? 1 : 0, at: 27)
-        stmt.bindInt(line.isManual ? 1 : 0, at: 28)
-        stmt.bindInt(line.isFixedFee ? 1 : 0, at: 29)
-        stmt.bindText(line.startedAt.map(DateFormatter.proWorkSQLite.string(from:)), at: 30)
-        stmt.bindText(line.endedAt.map(DateFormatter.proWorkSQLite.string(from:)), at: 31)
-        stmt.bindText(line.note, at: 32)
-        stmt.bindInt(line.sortOrder, at: 33)
-        stmt.bindText(line.createdByUserId, at: 34)
-        stmt.bindText(line.updatedByUserId, at: 35)
-        stmt.bindText(DateFormatter.proWorkSQLite.string(from: line.createdAt), at: 36)
-        stmt.bindText(DateFormatter.proWorkSQLite.string(from: line.updatedAt), at: 37)
-        stmt.bindText(line.deletedAt.map(DateFormatter.proWorkSQLite.string(from:)), at: 38)
-        stmt.bindInt(line.rowVersion, at: 39)
-        stmt.bindText(line.syncStatus.rawValue, at: 40)
-        stmt.bindText(line.lastSyncedAt.map(DateFormatter.proWorkSQLite.string(from:)), at: 41)
-        stmt.bindText(line.originDeviceId, at: 42)
+        stmt.bindText(line.sourceKind?.rawValue, at: 5)
+        stmt.bindText(line.sourceId, at: 6)
+        stmt.bindText(line.todoId, at: 7)
+        stmt.bindText(line.todoTitle, at: 8)
+        stmt.bindText(line.projectId, at: 9)
+        stmt.bindText(line.projectName, at: 10)
+        stmt.bindText(line.customerId, at: 11)
+        stmt.bindText(line.customerName, at: 12)
+        stmt.bindText(line.categoryId, at: 13)
+        stmt.bindText(line.categoryName, at: 14)
+        stmt.bindText(line.serviceType.rawValue, at: 15)
+        stmt.bindText(line.timeType.rawValue, at: 16)
+        stmt.bindInt(line.segmentIndex, at: 17)
+        stmt.bindInt(line.actualSeconds, at: 18)
+        stmt.bindInt(line.billableMinutes, at: 19)
+        stmt.bindInt(line.billableSeconds, at: 20)
+        stmt.bindInt(line.unitPriceMinor, at: 21)
+        stmt.bindOptionalInt(line.fixedFeeMinor, at: 22)
+        stmt.bindInt(line.amountMinor, at: 23)
+        stmt.bindText(line.currency, at: 24)
+        stmt.bindText(DecimalPersistence.string(line.vatRate), at: 25)
+        stmt.bindInt(line.vatMinor, at: 26)
+        stmt.bindInt(line.totalMinor, at: 27)
+        stmt.bindInt(line.isVatExempt ? 1 : 0, at: 28)
+        stmt.bindInt(line.isBillable ? 1 : 0, at: 29)
+        stmt.bindInt(line.isManual ? 1 : 0, at: 30)
+        stmt.bindInt(line.isFixedFee ? 1 : 0, at: 31)
+        stmt.bindText(line.startedAt.map(DateFormatter.proWorkSQLite.string(from:)), at: 32)
+        stmt.bindText(line.endedAt.map(DateFormatter.proWorkSQLite.string(from:)), at: 33)
+        stmt.bindText(line.note, at: 34)
+        stmt.bindInt(line.sortOrder, at: 35)
+        stmt.bindText(line.createdByUserId, at: 36)
+        stmt.bindText(line.updatedByUserId, at: 37)
+        stmt.bindText(DateFormatter.proWorkSQLite.string(from: line.createdAt), at: 38)
+        stmt.bindText(DateFormatter.proWorkSQLite.string(from: line.updatedAt), at: 39)
+        stmt.bindText(line.deletedAt.map(DateFormatter.proWorkSQLite.string(from:)), at: 40)
+        stmt.bindInt(line.rowVersion, at: 41)
+        stmt.bindText(line.syncStatus.rawValue, at: 42)
+        stmt.bindText(line.lastSyncedAt.map(DateFormatter.proWorkSQLite.string(from:)), at: 43)
+        stmt.bindText(line.originDeviceId, at: 44)
     }
 
     func deleteAll(runId: String) throws {
@@ -141,6 +143,8 @@ final class BillingReportLineRepository {
     ) throws -> [BillingLineSelectionAssignment] {
         let sql = """
         SELECT
+            l.sourceKind,
+            l.sourceId,
             l.sessionId,
             l.todoId,
             l.segmentIndex,
@@ -158,14 +162,18 @@ final class BillingReportLineRepository {
         """
 
         return try database.query(sql, map: { statement in
-            let sessionId = statement.text(at: 0)
-            let todoId = statement.text(at: 1) ?? ""
-            let segmentIndex = statement.int(at: 2)
-            let startedAt = SQLitePersistedDate.parse(statement.text(at: 3))
+            let sourceKind = statement.text(at: 0).flatMap(BillingLineSourceKind.init(rawValue:))
+            let sourceId = statement.text(at: 1)
+            let sessionId = statement.text(at: 2)
+            let todoId = statement.text(at: 3) ?? ""
+            let segmentIndex = statement.int(at: 4)
+            let startedAt = SQLitePersistedDate.parse(statement.text(at: 5))
             return BillingLineSelectionAssignment(
-                runId: statement.text(at: 4) ?? "",
-                runLabel: statement.text(at: 5) ?? "",
+                runId: statement.text(at: 6) ?? "",
+                runLabel: statement.text(at: 7) ?? "",
                 selectionKey: BillingReportLine.makeSelectionKey(
+                    sourceKind: sourceKind,
+                    sourceId: sourceId,
                     sessionId: sessionId,
                     todoId: todoId,
                     segmentIndex: segmentIndex,
@@ -184,7 +192,7 @@ final class BillingReportLineRepository {
 
     private static let selectSQL = """
     SELECT
-        id, runId, sessionId,
+        id, runId, sessionId, sourceKind, sourceId,
         todoId, todoTitle, projectId, projectName,
         customerId, customerName, categoryId, categoryName,
         serviceType, timeType, segmentIndex,
@@ -199,46 +207,48 @@ final class BillingReportLineRepository {
     FROM billing_report_lines
     """
 
-    /// Business fields 0..31 (32 columns), metadata 32..41 (10 columns).
+    /// Business fields 0..33 (34 columns), metadata 34..43 (10 columns).
     /// Metadata block now goes through the centralised `readMetadata`
     /// helper so throw-on-corruption applies here too.
     private static func makeLine(from statement: SQLiteStatement) throws -> BillingReportLine {
-        let vatRate = DecimalPersistence.decimal(from: statement.text(at: 21) ?? "0") ?? 0
-        let meta = try statement.readMetadata(startingAt: 32)
+        let vatRate = DecimalPersistence.decimal(from: statement.text(at: 23) ?? "0") ?? 0
+        let meta = try statement.readMetadata(startingAt: 34)
 
         return BillingReportLine(
             id: statement.text(at: 0) ?? UUID().uuidString,
             runId: statement.text(at: 1) ?? "",
             sessionId: statement.text(at: 2),
-            todoId: statement.text(at: 3) ?? "",
-            todoTitle: statement.text(at: 4) ?? "",
-            projectId: statement.text(at: 5),
-            projectName: statement.text(at: 6),
-            customerId: statement.text(at: 7) ?? "",
-            customerName: statement.text(at: 8) ?? "",
-            categoryId: statement.text(at: 9),
-            categoryName: statement.text(at: 10),
-            serviceType: ServiceType(rawValue: statement.text(at: 11) ?? "remote") ?? .remote,
-            timeType: TimeType(rawValue: statement.text(at: 12) ?? "regular") ?? .regular,
-            segmentIndex: statement.int(at: 13),
-            actualSeconds: statement.int(at: 14),
-            billableMinutes: statement.int(at: 15),
-            billableSeconds: statement.int(at: 16),
-            unitPriceMinor: statement.int(at: 17),
-            fixedFeeMinor: statement.optionalInt(at: 18),
-            amountMinor: statement.int(at: 19),
-            currency: statement.text(at: 20) ?? "TRY",
+            sourceKind: statement.text(at: 3).flatMap(BillingLineSourceKind.init(rawValue:)),
+            sourceId: statement.text(at: 4),
+            todoId: statement.text(at: 5) ?? "",
+            todoTitle: statement.text(at: 6) ?? "",
+            projectId: statement.text(at: 7),
+            projectName: statement.text(at: 8),
+            customerId: statement.text(at: 9) ?? "",
+            customerName: statement.text(at: 10) ?? "",
+            categoryId: statement.text(at: 11),
+            categoryName: statement.text(at: 12),
+            serviceType: ServiceType(rawValue: statement.text(at: 13) ?? "remote") ?? .remote,
+            timeType: TimeType(rawValue: statement.text(at: 14) ?? "regular") ?? .regular,
+            segmentIndex: statement.int(at: 15),
+            actualSeconds: statement.int(at: 16),
+            billableMinutes: statement.int(at: 17),
+            billableSeconds: statement.int(at: 18),
+            unitPriceMinor: statement.int(at: 19),
+            fixedFeeMinor: statement.optionalInt(at: 20),
+            amountMinor: statement.int(at: 21),
+            currency: statement.text(at: 22) ?? "TRY",
             vatRate: vatRate,
-            vatMinor: statement.int(at: 22),
-            totalMinor: statement.int(at: 23),
-            isVatExempt: statement.int(at: 24) == 1,
-            isBillable: statement.int(at: 25) == 1,
-            isManual: statement.int(at: 26) == 1,
-            isFixedFee: statement.int(at: 27) == 1,
-            startedAt: SQLitePersistedDate.parse(statement.text(at: 28)),
-            endedAt: SQLitePersistedDate.parse(statement.text(at: 29)),
-            note: statement.text(at: 30),
-            sortOrder: statement.int(at: 31),
+            vatMinor: statement.int(at: 24),
+            totalMinor: statement.int(at: 25),
+            isVatExempt: statement.int(at: 26) == 1,
+            isBillable: statement.int(at: 27) == 1,
+            isManual: statement.int(at: 28) == 1,
+            isFixedFee: statement.int(at: 29) == 1,
+            startedAt: SQLitePersistedDate.parse(statement.text(at: 30)),
+            endedAt: SQLitePersistedDate.parse(statement.text(at: 31)),
+            note: statement.text(at: 32),
+            sortOrder: statement.int(at: 33),
             organizationId: meta.organizationId,
             createdByUserId: meta.createdByUserId,
             updatedByUserId: meta.updatedByUserId,

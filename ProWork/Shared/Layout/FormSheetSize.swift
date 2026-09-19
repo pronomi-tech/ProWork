@@ -9,15 +9,15 @@
 //   2. Layout drift — a designer rebalance had to touch each call site
 //      individually, and at least one form fell out of sync per
 //      iteration.
-//  The enum below names each historical footprint so future edits live
-//  in one place. The point sizes match the previous literals exactly,
-//  preserving every form's current look.
+//  The enum below names each form footprint so future layout balancing
+//  remains centralized instead of drifting across call sites.
 
 import CoreGraphics
 
 enum FormSheetSize {
-    /// Named (width, height) for every form sheet in the app. Heights
-    /// were tuned individually during the design pass; widths cluster
+    /// Named (width, height) for every form sheet in the app. A height is
+    /// either the fixed footprint or the maximum for a fitted-content form;
+    /// widths cluster
     /// into four tiers (540 / 560 / 580-680 / 760-980) that match the
     /// content density rather than any free-form choice. Adding a new
     /// form should pick an existing tier when its width matches and
@@ -31,7 +31,7 @@ enum FormSheetSize {
     static let projectForm = CGSize(width: 580, height: 710)
     static let todoStatusForm = CGSize(width: 640, height: 640)
     static let todoForm = CGSize(width: 680, height: 860)
-    static let workSessionForm = CGSize(width: 760, height: 1000)
+    static let workSessionForm = CGSize(width: 760, height: 820)
     static let todoTimeSessionsForm = CGSize(width: 760, height: 620)
     static let billingRunCreate = CGSize(width: 980, height: 860)
 }

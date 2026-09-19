@@ -91,4 +91,46 @@ enum WorkLocationSelection: Hashable {
     case all
     case project(String)
     case folder(String)
+
+    func assignment(
+        projects: [ProjectListItem],
+        folders: [WorkFolder]
+    ) -> WorkLocationAssignment {
+        switch self {
+        case .all:
+            return WorkLocationAssignment()
+        case .project(let projectId):
+            let customerId = projects.first(where: { $0.id == projectId })?.customerId
+            return WorkLocationAssignment(customerId: customerId, projectId: projectId)
+        case .folder(let folderId):
+            guard let folder = folders.first(where: { $0.id == folderId }) else {
+                return WorkLocationAssignment()
+            }
+
+            let customerId = folder.projectId.flatMap { projectId in
+                projects.first(where: { $0.id == projectId })?.customerId
+            }
+            return WorkLocationAssignment(
+                customerId: customerId,
+                projectId: folder.projectId,
+                folderId: folder.id
+            )
+        }
+    }
+}
+
+struct WorkLocationAssignment: Equatable {
+    var customerId: String?
+    var projectId: String?
+    var folderId: String?
+
+    init(
+        customerId: String? = nil,
+        projectId: String? = nil,
+        folderId: String? = nil
+    ) {
+        self.customerId = customerId
+        self.projectId = projectId
+        self.folderId = folderId
+    }
 }

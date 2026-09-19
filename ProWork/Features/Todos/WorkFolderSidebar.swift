@@ -11,13 +11,16 @@ struct WorkFolderSidebar: View {
 
     let projects: [ProjectListItem]
     let folders: [WorkFolder]
-    let itemCount: (WorkLocationSelection, Bool) -> Int
+    let itemCount: (WorkLocationSelection, Bool, Bool) -> Int
     @Binding var selection: WorkLocationSelection
     @Binding var includeDescendantFolders: Bool
+    @Binding var showArchivedFolders: Bool
     let onCreateIndependentFolder: () -> Void
     let onCreateProjectFolder: (ProjectListItem) -> Void
     let onCreateChildFolder: (WorkFolder) -> Void
     let onEditFolder: (WorkFolder) -> Void
+    let onArchiveFolder: (WorkFolder) -> Void
+    let onRestoreFolder: (WorkFolder) -> Void
     let onDeleteFolder: (WorkFolder) -> Void
 
     var body: some View {
@@ -38,11 +41,11 @@ struct WorkFolderSidebar: View {
                 selectionRow(
                     title: settingsStore.localized("workFolders.sidebar.all", defaultValue: "Tüm Çalışmalar"),
                     systemImage: "tray.full",
-                    count: itemCount(.all, false),
+                    count: itemCount(.all, false, showArchivedFolders),
                     value: .all
                 )
 
-                let globalNodes = WorkFolderHierarchy.nodes(folders, projectId: nil)
+                let globalNodes = WorkFolderHierarchy.nodes(displayedFolders, projectId: nil)
                 if !globalNodes.isEmpty {
                     Section(settingsStore.localized("workFolders.sidebar.independent", defaultValue: "Bağımsız Klasörler")) {
                         ForEach(visibleFolderRows(globalNodes, startingDepth: 0)) { row in
@@ -54,7 +57,7 @@ struct WorkFolderSidebar: View {
                 if !projects.isEmpty {
                     Section(settingsStore.localized("projects.title", defaultValue: "Projeler")) {
                         ForEach(projects) { project in
-                            let nodes = WorkFolderHierarchy.nodes(folders, projectId: project.id)
+                            let nodes = WorkFolderHierarchy.nodes(displayedFolders, projectId: project.id)
                             projectRow(project, hasChildren: !nodes.isEmpty)
 
                             if expandedProjectIds.contains(project.id) {
@@ -68,16 +71,29 @@ struct WorkFolderSidebar: View {
             }
             .listStyle(.sidebar)
 
-            Toggle(
-                settingsStore.localized(
-                    "workFolders.sidebar.includeSubfolders",
-                    defaultValue: "Alt klasörleri dahil et"
-                ),
-                isOn: $includeDescendantFolders
-            )
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle(
+                    settingsStore.localized(
+                        "workFolders.sidebar.includeSubfolders",
+                        defaultValue: "Alt klasörleri dahil et"
+                    ),
+                    isOn: $includeDescendantFolders
+                )
+                .disabled(!selectionSupportsDescendants)
+
+                Toggle(
+                    settingsStore.localized(
+                        "workFolders.sidebar.showArchived",
+                        defaultValue: "Arşivlenmiş klasörleri göster"
+                    ),
+                    isOn: $showArchivedFolders
+                )
+            }
             .toggleStyle(.checkbox)
+            .controlSize(.small)
+            .proWorkTextStyle(.caption)
+            .foregroundStyle(.secondary)
             .padding(.horizontal, 10)
-            .disabled(!selectionSupportsDescendants)
         }
         .padding(.vertical, 12)
         .background(.regularMaterial)
@@ -88,7 +104,7 @@ struct WorkFolderSidebar: View {
             title: project.name,
             subtitle: project.customerName,
             systemImage: "folder.fill",
-            count: itemCount(.project(project.id), includeDescendantFolders),
+            count: itemCount(.project(project.id), includeDescendantFolders, showArchivedFolders),
             isSelected: selection == .project(project.id),
             depth: 0,
             hasChildren: hasChildren,
@@ -119,9 +135,11 @@ struct WorkFolderSidebar: View {
         let folder = row.node.folder
         return hierarchyRowContent(
             title: folder.name,
-            subtitle: nil,
-            systemImage: "folder",
-            count: itemCount(.folder(folder.id), includeDescendantFolders),
+            subtitle: folder.isArchived
+                ? settingsStore.localized("workFolders.status.archived", defaultValue: "Arşivlendi")
+                : nil,
+            systemImage: folder.isArchived ? "archivebox" : "folder",
+            count: itemCount(.folder(folder.id), includeDescendantFolders, showArchivedFolders),
             isSelected: selection == .folder(folder.id),
             depth: row.depth,
             hasChildren: row.hasChildren,
@@ -129,6 +147,7 @@ struct WorkFolderSidebar: View {
             onSelect: { selection = .folder(folder.id) },
             onToggleExpansion: { toggleExpansion(ofFolder: folder.id) }
         )
+        .opacity(folder.isArchived ? 0.72 : 1)
         .contentShape(Rectangle())
         .simultaneousGesture(
             TapGesture(count: 2).onEnded {
@@ -137,24 +156,43 @@ struct WorkFolderSidebar: View {
             }
         )
         .contextMenu {
-            Button {
-                onCreateChildFolder(folder)
-            } label: {
-                Label(
-                    settingsStore.localized("workFolders.action.newChild", defaultValue: "Alt Klasör Ekle"),
-                    systemImage: "folder.badge.plus"
-                )
-            }
-            Button {
-                onEditFolder(folder)
-            } label: {
-                Label(settingsStore.localized("common.edit", defaultValue: "Düzenle"), systemImage: "pencil")
-            }
-            Divider()
-            Button(role: .destructive) {
-                onDeleteFolder(folder)
-            } label: {
-                Label(settingsStore.localized("common.delete", defaultValue: "Sil"), systemImage: "trash")
+            if folder.isArchived {
+                Button {
+                    onRestoreFolder(folder)
+                } label: {
+                    Label(
+                        settingsStore.localized("workFolders.action.restore", defaultValue: "Arşivden Çıkar"),
+                        systemImage: "arrow.uturn.backward.circle"
+                    )
+                }
+            } else {
+                Button {
+                    onCreateChildFolder(folder)
+                } label: {
+                    Label(
+                        settingsStore.localized("workFolders.action.newChild", defaultValue: "Alt Klasör Ekle"),
+                        systemImage: "folder.badge.plus"
+                    )
+                }
+                Button {
+                    onEditFolder(folder)
+                } label: {
+                    Label(settingsStore.localized("common.edit", defaultValue: "Düzenle"), systemImage: "pencil")
+                }
+                Divider()
+                Button {
+                    onArchiveFolder(folder)
+                } label: {
+                    Label(
+                        settingsStore.localized("workFolders.action.archive", defaultValue: "Arşive Gönder"),
+                        systemImage: "archivebox"
+                    )
+                }
+                Button(role: .destructive) {
+                    onDeleteFolder(folder)
+                } label: {
+                    Label(settingsStore.localized("common.delete", defaultValue: "Sil"), systemImage: "trash")
+                }
             }
         }
     }
@@ -306,6 +344,10 @@ struct WorkFolderSidebar: View {
         case .all:
             return false
         }
+    }
+
+    private var displayedFolders: [WorkFolder] {
+        showArchivedFolders ? folders : folders.filter { !$0.isArchived }
     }
 }
 

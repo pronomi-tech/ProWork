@@ -69,6 +69,14 @@ extension BillingPdfDocument {
     // MARK: - Line text
 
     func lineMetaText(for line: BillingReportLine) -> String {
+        if line.sourceKind == .projectedFee {
+            return String(
+                format: localized("pdf.line.projectedFeeMeta", defaultValue: "Fiyatlandırma: Projelendirilmiş Ücret | Adam/Saat: %@ | Birim: %@"),
+                ProWorkFormatters.durationHHmmss(line.billableSeconds),
+                displayMoney(line.unitPrice)
+            )
+        }
+
         if line.isFixedFee {
             let fixedFee = line.fixedFeeMinor.map {
                 displayMoney(Money(minorUnits: $0, currency: line.currency))

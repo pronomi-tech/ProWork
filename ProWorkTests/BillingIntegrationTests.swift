@@ -114,6 +114,52 @@ final class BillingIntegrationTests: XCTestCase {
         return calendar.date(from: c)!
     }
 
+    @discardableResult
+    private func seedSessionIndependentFee(
+        type: TodoBillingOverrideType = .projectedFee,
+        folderId: String? = nil,
+        projectedHours: Int = 10,
+        unitPriceMinor: Int = 200_000,
+        fixedFeeMinor: Int = 2_000_000,
+        sessionCount: Int = 0
+    ) throws -> TodoBillingOverride {
+        let todo = Todo(
+            customerId: customerId,
+            folderId: folderId,
+            categoryId: categoryId,
+            title: type == .projectedFee ? "Projelendirilmiş iş" : "Sabit ücretli iş",
+            isBillable: true
+        )
+        try TodoRepository().insert(todo)
+
+        for index in 0..<sessionCount {
+            var components = DateComponents()
+            components.year = 2026
+            components.month = 5
+            components.day = 7
+            components.hour = 10 + index
+            components.timeZone = TimeZone(identifier: "Europe/Istanbul")
+            let start = try XCTUnwrap(calendar.date(from: components))
+            try TodoTimeSessionRepository().insertManualSession(
+                todoId: todo.id,
+                startedAt: start,
+                endedAt: start.addingTimeInterval(60 * 60),
+                note: nil
+            )
+        }
+
+        let override = TodoBillingOverride(
+            todoId: todo.id,
+            overrideType: type,
+            unitPriceMinor: type == .projectedFee ? unitPriceMinor : nil,
+            projectedBillableSeconds: type == .projectedFee ? projectedHours * 60 * 60 : nil,
+            fixedFeeMinor: type == .fixedFee ? fixedFeeMinor : nil,
+            currency: "TRY"
+        )
+        try TodoBillingOverrideRepository().upsert(override)
+        return override
+    }
+
     // MARK: - BillingComputationService
 
     func test_computePeriod_singleSession_producesExpectedLineWithVat() throws {
@@ -158,6 +204,98 @@ final class BillingIntegrationTests: XCTestCase {
             to: dayBoundary(year: 2026, month: 5, day: 8)
         )
         XCTAssertEqual(lines.count, 0)
+    }
+
+    func test_computePeriod_projectedFeeWithoutSession_isAvailableOutsidePeriod() throws {
+        let override = try seedSessionIndependentFee(projectedHours: 10)
+
+        let lines = try BillingComputationService().computePeriod(
+            customerId: customerId,
+            from: dayBoundary(year: 2026, month: 3, day: 1),
+            to: dayBoundary(year: 2026, month: 3, day: 31)
+        )
+
+        let line = try XCTUnwrap(lines.first)
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertEqual(line.sourceKind, .projectedFee)
+        XCTAssertEqual(line.sourceId, override.id)
+        XCTAssertNil(line.sessionId)
+        XCTAssertNil(line.startedAt)
+        XCTAssertNil(line.endedAt)
+        XCTAssertEqual(line.actualSeconds, 0)
+        XCTAssertEqual(line.billableSeconds, 36_000)
+        XCTAssertEqual(line.unitPriceMinor, 200_000)
+        XCTAssertEqual(line.amountMinor, 2_000_000)
+        XCTAssertEqual(line.vatMinor, 400_000)
+        XCTAssertEqual(line.totalMinor, 2_400_000)
+    }
+
+    func test_computePeriod_projectedFeeWithTrackedSessions_emitsOnlyProjectedLine() throws {
+        try seedSessionIndependentFee(projectedHours: 10, sessionCount: 2)
+
+        let lines = try BillingComputationService().computePeriod(
+            customerId: customerId,
+            from: dayBoundary(year: 2026, month: 5, day: 1),
+            to: dayBoundary(year: 2026, month: 5, day: 31)
+        )
+
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertEqual(lines.first?.sourceKind, .projectedFee)
+        XCTAssertEqual(lines.first?.actualSeconds, 0)
+    }
+
+    func test_computePeriod_fixedFeeWithTrackedSessions_emitsOnlyOneFixedLine() throws {
+        try seedSessionIndependentFee(type: .fixedFee, sessionCount: 2)
+
+        let lines = try BillingComputationService().computePeriod(
+            customerId: customerId,
+            from: dayBoundary(year: 2026, month: 5, day: 1),
+            to: dayBoundary(year: 2026, month: 5, day: 31)
+        )
+
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertEqual(lines.first?.sourceKind, .fixedFee)
+        XCTAssertEqual(lines.first?.fixedFeeMinor, 2_000_000)
+    }
+
+    func test_projectedFee_selectedIntoDraft_isBlockedFromAnotherActiveDraft() throws {
+        try seedSessionIndependentFee()
+        let service = BillingRunLifecycleService()
+        let periodStart = dayBoundary(year: 2026, month: 5, day: 1)
+        let periodEnd = dayBoundary(year: 2026, month: 5, day: 31)
+        let initialPreview = try service.previewDraft(
+            customerId: customerId,
+            periodStart: periodStart,
+            periodEnd: periodEnd
+        )
+        let selectionKey = try XCTUnwrap(initialPreview.availableLines.first?.selectionKey)
+
+        _ = try service.createDraft(
+            customerId: customerId,
+            periodStart: periodStart,
+            periodEnd: periodEnd,
+            selectedLineKeys: [selectionKey]
+        )
+
+        let secondPreview = try service.previewDraft(
+            customerId: customerId,
+            periodStart: dayBoundary(year: 2026, month: 1, day: 1),
+            periodEnd: dayBoundary(year: 2026, month: 1, day: 31)
+        )
+        XCTAssertEqual(secondPreview.availableLines.count, 0)
+        XCTAssertEqual(secondPreview.blockedLineCount, 1)
+
+        XCTAssertThrowsError(try service.createDraft(
+            customerId: customerId,
+            periodStart: dayBoundary(year: 2026, month: 1, day: 1),
+            periodEnd: dayBoundary(year: 2026, month: 1, day: 31),
+            selectedLineKeys: [selectionKey]
+        )) { error in
+            guard case BillingRunLifecycleError.conflictingRunExists = error else {
+                XCTFail("conflictingRunExists bekleniyordu, alındı: \(error)")
+                return
+            }
+        }
     }
 
     func test_computePeriod_sessionSplitAtWorkdayBoundary_ordersNewestSegmentFirst() throws {

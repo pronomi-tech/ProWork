@@ -6,6 +6,7 @@ import SwiftUI
 
 struct TodosView: View {
     @EnvironmentObject private var settingsStore: AppSettingsStore
+    @EnvironmentObject private var automationController: WorkAutomationController
     @StateObject private var viewModel = TodosViewModel()
 
     @State private var quickTitle: String = ""
@@ -14,6 +15,7 @@ struct TodosView: View {
     @State private var showingSessionsForTodo: TodoListItem?
     @State private var locationSelection: WorkLocationSelection = .all
     @State private var includeDescendantFolders = false
+    @State private var showArchivedFolders = false
     @State private var folderFormRequest: WorkFolderFormRequest?
 
     @State private var pendingWorkStart: PendingWorkStart?
@@ -26,7 +28,13 @@ struct TodosView: View {
 
     private var canQuickAdd: Bool {
         !quickTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        !viewModel.quickCategoryId.isEmpty
+        !viewModel.quickCategoryId.isEmpty &&
+        !selectedFolderIsArchived
+    }
+
+    private var selectedFolderIsArchived: Bool {
+        guard case .folder(let folderId) = locationSelection else { return false }
+        return viewModel.folders.first(where: { $0.id == folderId })?.isArchived == true
     }
 
     var body: some View {
@@ -34,14 +42,16 @@ struct TodosView: View {
             WorkFolderSidebar(
                 projects: viewModel.projects,
                 folders: viewModel.folders,
-                itemCount: { selection, includesDescendants in
+                itemCount: { selection, includesDescendants, showsArchived in
                     viewModel.visibleTodos(
                         for: selection,
-                        includeDescendantFolders: includesDescendants
+                        includeDescendantFolders: includesDescendants,
+                        showArchivedFolders: showsArchived
                     ).count
                 },
                 selection: $locationSelection,
                 includeDescendantFolders: $includeDescendantFolders,
+                showArchivedFolders: $showArchivedFolders,
                 onCreateIndependentFolder: {
                     folderFormRequest = WorkFolderFormRequest(
                         existingFolder: nil,
@@ -70,6 +80,10 @@ struct TodosView: View {
                         parentFolderId: folder.parentFolderId
                     )
                 },
+                onArchiveFolder: archiveFolder,
+                onRestoreFolder: { folder in
+                    _ = viewModel.restoreFolder(id: folder.id)
+                },
                 onDeleteFolder: { folder in
                     askDeleteFolder(folder)
                 }
@@ -87,20 +101,32 @@ struct TodosView: View {
         }
         .proWorkFrame(minWidth: 1_030, minHeight: 600)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .proWorkToastNotifications(errorMessage: viewModel.errorMessage)
+        .proWorkToastNotifications(
+            errorMessage: viewModel.errorMessage,
+            errorEventID: viewModel.errorEventID
+        )
         .onAppear {
             viewModel.load()
+        }
+        .onChange(of: automationController.workSessionRevision) { _, _ in
+            viewModel.load()
+        }
+        .onChange(of: showArchivedFolders) { _, showsArchived in
+            if !showsArchived, selectedFolderIsArchived {
+                locationSelection = .all
+            }
         }
         .sheet(isPresented: $isShowingCreateForm) {
             TodoFormView(
                 mode: .create,
                 customers: viewModel.customers,
                 projects: viewModel.projects,
-                folders: viewModel.folders,
+                folders: viewModel.activeFolders,
                 categories: viewModel.categories,
-                statuses: viewModel.statuses
-            ) { todo in
-                if viewModel.create(todo) {
+                statuses: viewModel.statuses,
+                initialLocation: locationSelection
+            ) { todo, billingOverride in
+                if viewModel.create(todo, billingOverride: billingOverride) {
                     isShowingCreateForm = false
                 }
             }
@@ -110,11 +136,12 @@ struct TodosView: View {
                 mode: .edit(todo),
                 customers: viewModel.customers,
                 projects: viewModel.projects,
-                folders: viewModel.folders,
+                folders: viewModel.activeFolders,
                 categories: viewModel.categories,
                 statuses: viewModel.statuses
-            ) { updatedTodo in
-                if viewModel.update(updatedTodo) {
+            ) { updatedTodo, billingOverride in
+                if viewModel.update(updatedTodo, billingOverride: billingOverride) {
+                    automationController.refresh()
                     editingTodo = nil
                 }
             }
@@ -127,7 +154,7 @@ struct TodosView: View {
                 existingFolder: request.existingFolder,
                 projectId: request.projectId,
                 parentFolderId: request.parentFolderId,
-                folders: viewModel.folders
+                folders: viewModel.activeFolders
             ) { folder in
                 if viewModel.saveFolder(folder, isNew: request.existingFolder == nil) {
                     locationSelection = .folder(folder.id)
@@ -172,7 +199,7 @@ struct TodosView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(viewModel.categories.isEmpty)
+            .disabled(viewModel.categories.isEmpty || selectedFolderIsArchived)
             .help(viewModel.categories.isEmpty ? settingsStore.localized("todos.help.needCategory", defaultValue: "Önce görev kategorisi eklemelisiniz") : settingsStore.localized("todos.help.addDetailed", defaultValue: "Detaylı yapılacak iş ekle"))
         }
     }
@@ -317,7 +344,8 @@ struct TodosView: View {
         ProWorkGrid(
             items: viewModel.visibleTodos(
                 for: locationSelection,
-                includeDescendantFolders: includeDescendantFolders
+                includeDescendantFolders: includeDescendantFolders,
+                showArchivedFolders: showArchivedFolders
             ),
             header: { todoTableHeader },
             emptyContent: {
@@ -473,7 +501,8 @@ struct TodosView: View {
                         todos: viewModel.todosForStatus(
                             status,
                             selection: locationSelection,
-                            includeDescendantFolders: includeDescendantFolders
+                            includeDescendantFolders: includeDescendantFolders,
+                            showArchivedFolders: showArchivedFolders
                         ),
                         onEdit: { todo in
                             editingTodo = todo
@@ -610,6 +639,16 @@ struct TodosView: View {
                 locationSelection = .all
             }
         }
+    }
+
+    private func archiveFolder(_ folder: WorkFolder) {
+        guard viewModel.archiveFolder(id: folder.id) else { return }
+        guard !showArchivedFolders,
+              case .folder(let selectedFolderId) = locationSelection,
+              viewModel.folders.first(where: { $0.id == selectedFolderId })?.isArchived == true else {
+            return
+        }
+        locationSelection = .all
     }
 }
 

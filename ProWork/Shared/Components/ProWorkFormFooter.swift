@@ -2,18 +2,21 @@
 //  ProWork
 //  Created by Pronomi.
 //  Standard footer button bar used in ALL edit/create forms.
-//  Cancel and Save share the same size:
+//  Auxiliary, Cancel and Save actions share the same size:
 //      ProWorkButtonLabel + minHeight 32 + .controlSize(.large)
 //      Cancel: .bordered, Save: .borderedProminent
 
 import SwiftUI
 
-/// Standard two-button (Cancel + Save) form footer.
+/// Standard form footer with Cancel + Save and an optional auxiliary action.
 struct ProWorkFormFooter: View {
     let onCancel: () -> Void
     let onSave: () -> Void
+    var onAuxiliary: (() -> Void)? = nil
     var cancelTitle: String = ""
     var cancelSystemImage: String = "xmark"
+    var auxiliaryTitle: String = ""
+    var auxiliarySystemImage: String = "arrow.uturn.forward.circle"
     var saveTitle: String = ""
     var saveSystemImage: String = "checkmark"
     var saveDisabled: Bool = false
@@ -30,8 +33,28 @@ struct ProWorkFormFooter: View {
             : saveTitle
     }
 
+    private var effectiveAuxiliaryTitle: String {
+        auxiliaryTitle.isEmpty
+            ? ProWorkLocalizer.shared.string("common.continue", defaultValue: "Devam Et")
+            : auxiliaryTitle
+    }
+
     var body: some View {
         HStack(spacing: 12) {
+            if let onAuxiliary {
+                Button(action: onAuxiliary) {
+                    ProWorkButtonLabel(
+                        title: effectiveAuxiliaryTitle,
+                        systemImage: auxiliarySystemImage,
+                        minHeight: 32
+                    )
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .accessibilityIdentifier("prowork.formFooter.auxiliary")
+                .accessibilityLabel(effectiveAuxiliaryTitle)
+            }
+
             Spacer()
 
             // every form footer now exposes stable

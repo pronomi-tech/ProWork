@@ -12,6 +12,10 @@ final class TodoRepository {
         self.database = database
     }
 
+    func transactionally<T>(_ block: () throws -> T) throws -> T {
+        try database.inWriteTransaction(block)
+    }
+
     // MARK: - Read
 
     func fetchAll() throws -> [TodoListItem] {
@@ -71,6 +75,7 @@ final class TodoRepository {
             ) AS activeSessionStartedAt,
 
             t.isBillable,
+            t.isAIAgentTask,
 
             t.createdAt,
             t.updatedAt,
@@ -135,10 +140,11 @@ final class TodoRepository {
             activeSessionStartedAt: parseDate(statement.text(at: 26)),
 
             isBillable: statement.int(at: 27) == 1,
+            isAIAgentTask: statement.int(at: 28) == 1,
 
-            createdAt: parseDate(statement.text(at: 28)) ?? Date(),
-            updatedAt: parseDate(statement.text(at: 29)) ?? Date(),
-            completedAt: parseDate(statement.text(at: 30))
+            createdAt: parseDate(statement.text(at: 29)) ?? Date(),
+            updatedAt: parseDate(statement.text(at: 30)) ?? Date(),
+            completedAt: parseDate(statement.text(at: 31))
         )
     }
 
@@ -191,6 +197,7 @@ final class TodoRepository {
                 LIMIT 1
             ) AS activeSessionStartedAt,
             t.isBillable,
+            t.isAIAgentTask,
             t.createdAt,
             t.updatedAt,
             t.completedAt
@@ -229,7 +236,7 @@ final class TodoRepository {
             SELECT
                 id, customerId, projectId, folderId, categoryId,
                 title, description, statusId, priority,
-                plannedDate, dueDate, estimatedMinutes, isBillable, completedAt,
+                plannedDate, dueDate, estimatedMinutes, isBillable, isAIAgentTask, completedAt,
                 \(RecordMetadataSQL.columns)
             FROM todos
             WHERE id IN (\(placeholders)) AND deletedAt IS NULL;
@@ -256,7 +263,7 @@ final class TodoRepository {
         SELECT
             id, customerId, projectId, folderId, categoryId,
             title, description, statusId, priority,
-            plannedDate, dueDate, estimatedMinutes, isBillable, completedAt,
+            plannedDate, dueDate, estimatedMinutes, isBillable, isAIAgentTask, completedAt,
             \(RecordMetadataSQL.columns)
         FROM todos
         WHERE id = ? AND deletedAt IS NULL
@@ -277,10 +284,10 @@ final class TodoRepository {
         INSERT INTO todos (
             id, customerId, projectId, folderId, categoryId,
             title, description, statusId, priority,
-            plannedDate, dueDate, estimatedMinutes, isBillable, completedAt,
+            plannedDate, dueDate, estimatedMinutes, isBillable, isAIAgentTask, completedAt,
             \(RecordMetadataSQL.columns)
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \(RecordMetadataSQL.placeholders));
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \(RecordMetadataSQL.placeholders));
         """
 
         try database.execute(sql) { statement in
@@ -297,8 +304,9 @@ final class TodoRepository {
             statement.bindText(Self.formatDate(todo.dueDate), at: 11)
             statement.bindOptionalInt(todo.estimatedMinutes, at: 12)
             statement.bindInt(todo.isBillable ? 1 : 0, at: 13)
-            statement.bindText(Self.formatDate(todo.completedAt), at: 14)
-            statement.bindMetadata(todo.meta, startingAt: 15)
+            statement.bindInt(todo.isAIAgentTask ? 1 : 0, at: 14)
+            statement.bindText(Self.formatDate(todo.completedAt), at: 15)
+            statement.bindMetadata(todo.meta, startingAt: 16)
         }
     }
 
@@ -309,7 +317,7 @@ final class TodoRepository {
             customerId = ?, projectId = ?, folderId = ?, categoryId = ?, statusId = ?,
             title = ?, description = ?, priority = ?,
             plannedDate = ?, dueDate = ?, estimatedMinutes = ?, isBillable = ?,
-            completedAt = ?,
+            isAIAgentTask = ?, completedAt = ?,
             updatedByUserId = ?,
             updatedAt = ?,
             rowVersion = rowVersion + 1,
@@ -330,10 +338,11 @@ final class TodoRepository {
             statement.bindText(Self.formatDate(todo.dueDate), at: 10)
             statement.bindOptionalInt(todo.estimatedMinutes, at: 11)
             statement.bindInt(todo.isBillable ? 1 : 0, at: 12)
-            statement.bindText(Self.formatDate(todo.completedAt), at: 13)
-            statement.bindText(todo.updatedByUserId ?? BuiltInUserId.defaultOwner, at: 14)
-            statement.bindText(Self.formatDate(Date()), at: 15)
-            statement.bindText(todo.id, at: 16)
+            statement.bindInt(todo.isAIAgentTask ? 1 : 0, at: 13)
+            statement.bindText(Self.formatDate(todo.completedAt), at: 14)
+            statement.bindText(todo.updatedByUserId ?? BuiltInUserId.defaultOwner, at: 15)
+            statement.bindText(Self.formatDate(Date()), at: 16)
+            statement.bindText(todo.id, at: 17)
         }
     }
 
@@ -386,8 +395,9 @@ final class TodoRepository {
             dueDate: parseDate(statement.text(at: 10)),
             estimatedMinutes: statement.optionalInt(at: 11),
             isBillable: statement.int(at: 12) == 1,
-            completedAt: parseDate(statement.text(at: 13)),
-            meta: try statement.readMetadata(startingAt: 14)
+            isAIAgentTask: statement.int(at: 13) == 1,
+            completedAt: parseDate(statement.text(at: 14)),
+            meta: try statement.readMetadata(startingAt: 15)
         )
     }
 }

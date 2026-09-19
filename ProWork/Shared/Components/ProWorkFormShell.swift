@@ -2,6 +2,7 @@
 //  ProWork
 //  Created by Pronomi.
 
+import AppKit
 import SwiftUI
 
 struct ProWorkFormShell<Content: View, Footer: View, HeaderTrailing: View>: View {
@@ -15,10 +16,13 @@ struct ProWorkFormShell<Content: View, Footer: View, HeaderTrailing: View>: View
     enum ContentScrollBehavior {
         case scrolls
         case fixed
+        /// Sizes the sheet to its intrinsic content up to `height`, then
+        /// falls back to scrolling when the content would exceed the active
+        /// screen's visible frame.
+        case fitsContent
     }
 
     @EnvironmentObject private var settingsStore: AppSettingsStore
-
     let title: String
     let subtitle: String?
     let systemImage: String
@@ -52,6 +56,20 @@ struct ProWorkFormShell<Content: View, Footer: View, HeaderTrailing: View>: View
     }
 
     var body: some View {
+        Group {
+            switch contentScrollBehavior {
+            case .fitsContent:
+                shellBody
+                    .frame(width: scaledWidth)
+                    .frame(maxHeight: maximumFittedHeight)
+            case .scrolls, .fixed:
+                shellBody
+                    .frame(width: scaledWidth, height: scaledHeight)
+            }
+        }
+    }
+
+    private var shellBody: some View {
         VStack(alignment: .leading, spacing: ProWorkLayout.formScaled(16, using: settingsStore)) {
             ProWorkFormHeader(
                 title: title,
@@ -75,6 +93,15 @@ struct ProWorkFormShell<Content: View, Footer: View, HeaderTrailing: View>: View
                     content
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            case .fitsContent:
+                ViewThatFits(in: .vertical) {
+                    contentContainer
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    ScrollView {
+                        contentContainer
+                    }
+                }
             }
 
             Divider()
@@ -82,10 +109,31 @@ struct ProWorkFormShell<Content: View, Footer: View, HeaderTrailing: View>: View
             footer
         }
         .padding(ProWorkLayout.formScaled(24, using: settingsStore))
-        .frame(
-            width: ProWorkLayout.formScaled(width, using: settingsStore),
-            height: ProWorkLayout.formScaled(height, using: settingsStore)
-        )
+    }
+
+    private var contentContainer: some View {
+        VStack(alignment: .leading, spacing: ProWorkLayout.formScaled(14, using: settingsStore)) {
+            content
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(.vertical, ProWorkLayout.formScaled(2, using: settingsStore))
+    }
+
+    private var scaledWidth: CGFloat {
+        ProWorkLayout.formScaled(width, using: settingsStore)
+    }
+
+    private var scaledHeight: CGFloat {
+        ProWorkLayout.formScaled(height, using: settingsStore)
+    }
+
+    private var maximumFittedHeight: CGFloat {
+        guard let screenHeight = NSScreen.main?.visibleFrame.height else {
+            return scaledHeight
+        }
+
+        let screenMargin = ProWorkLayout.formScaled(64, using: settingsStore)
+        return min(scaledHeight, max(0, screenHeight - screenMargin))
     }
 }
 

@@ -46,7 +46,7 @@ struct TodoRowView: View {
                         .proWorkTextStyle(.caption)
                         .foregroundStyle(.green)
                 } else {
-                    Text(settingsStore.localized("todos.administrative", defaultValue: "İdari"))
+                    Text(settingsStore.localized("todos.nonBillable", defaultValue: "Faturalandırılmaz"))
                         .proWorkTextStyle(.caption)
                         .foregroundStyle(.secondary)
                 }

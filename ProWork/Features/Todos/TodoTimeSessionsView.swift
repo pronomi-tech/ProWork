@@ -8,6 +8,7 @@ import Combine
 struct TodoTimeSessionsView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var settingsStore: AppSettingsStore
+    @EnvironmentObject private var automationController: WorkAutomationController
     @StateObject private var viewModel = TodoTimeSessionsViewModel()
 
     let todo: TodoListItem
@@ -74,7 +75,13 @@ struct TodoTimeSessionsView: View {
                 folders: viewModel.folders,
                 categories: viewModel.categories,
                 statuses: viewModel.statuses,
-                fixedTodo: todo
+                fixedTodo: todo,
+                onContinue: viewModel.canResumeRecentlyEndedSession(session) ? {
+                    if viewModel.resumeRecentlyEndedSession(id: session.id, todoId: todo.id) {
+                        automationController.refresh()
+                        editingSession = nil
+                    }
+                } : nil
             ) { sessionId, todoId, startedAt, endedAt, note, isManual, timeTypeOverride, overrideReason in
                 guard let sessionId else {
                     return

@@ -242,7 +242,7 @@ struct TodoBoardCardView: View {
                     .proWorkTextStyle(.caption2)
                     .foregroundStyle(.green)
             } else {
-                Text(settingsStore.localized("todos.administrative", defaultValue: "İdari"))
+                Text(settingsStore.localized("todos.nonBillable", defaultValue: "Faturalandırılmaz"))
                     .proWorkTextStyle(.caption2)
                     .foregroundStyle(.secondary)
             }

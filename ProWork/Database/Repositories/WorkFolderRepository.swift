@@ -8,6 +8,7 @@ import SQLite3
 enum WorkFolderRepositoryError: Error, LocalizedError, Equatable {
     case folderNotFound
     case folderNotEmpty
+    case folderHasUnbilledWork
 
     var errorDescription: String? {
         switch self {
@@ -21,6 +22,11 @@ enum WorkFolderRepositoryError: Error, LocalizedError, Equatable {
                 "workFolders.error.notEmpty",
                 defaultValue: "Alt klasör veya çalışma içeren bir klasör silinemez."
             )
+        case .folderHasUnbilledWork:
+            return ProWorkLocalizer.shared.string(
+                "workFolders.error.unbilledWork",
+                defaultValue: "Faturalandırılmamış çalışma içeren bir klasör arşivlenemez."
+            )
         }
     }
 }
@@ -32,47 +38,61 @@ final class WorkFolderRepository {
         self.database = database
     }
 
-    func fetchAll(organizationId: String = BuiltInOrganizationId.default) throws -> [WorkFolder] {
+    func fetchAll(
+        organizationId: String = BuiltInOrganizationId.default,
+        includeArchived: Bool = false
+    ) throws -> [WorkFolder] {
         let sql = """
         SELECT
-            id, projectId, parentFolderId, name, sortOrder,
+            id, projectId, parentFolderId, name, sortOrder, archivedAt,
             \(RecordMetadataSQL.columns)
         FROM work_folders
-        WHERE organizationId = ? AND deletedAt IS NULL
+        WHERE organizationId = ?
+          AND deletedAt IS NULL
+          AND (? = 1 OR archivedAt IS NULL)
         ORDER BY sortOrder ASC, name COLLATE NOCASE ASC;
         """
 
         return try database.query(
             sql,
             map: { try Self.makeFolder(from: $0) },
-            bind: { $0.bindText(organizationId, at: 1) }
+            bind: {
+                $0.bindText(organizationId, at: 1)
+                $0.bindInt(includeArchived ? 1 : 0, at: 2)
+            }
         )
     }
 
-    func fetch(id: String) throws -> WorkFolder? {
+    func fetch(id: String, includeArchived: Bool = false) throws -> WorkFolder? {
         let sql = """
         SELECT
-            id, projectId, parentFolderId, name, sortOrder,
+            id, projectId, parentFolderId, name, sortOrder, archivedAt,
             \(RecordMetadataSQL.columns)
         FROM work_folders
-        WHERE id = ? AND deletedAt IS NULL
+        WHERE id = ?
+          AND deletedAt IS NULL
+          AND (? = 1 OR archivedAt IS NULL)
         LIMIT 1;
         """
 
         return try database.query(
             sql,
             map: { try Self.makeFolder(from: $0) },
-            bind: { $0.bindText(id, at: 1) }
+            bind: {
+                $0.bindText(id, at: 1)
+                $0.bindInt(includeArchived ? 1 : 0, at: 2)
+            }
         ).first
     }
 
     func insert(_ folder: WorkFolder) throws {
+        let archivedAt = SQLitePersistedDate.format(folder.archivedAt)
         let sql = """
         INSERT INTO work_folders (
-            id, projectId, parentFolderId, name, sortOrder,
+            id, projectId, parentFolderId, name, sortOrder, archivedAt,
             \(RecordMetadataSQL.columns)
         )
-        VALUES (?, ?, ?, ?, ?, \(RecordMetadataSQL.placeholders));
+        VALUES (?, ?, ?, ?, ?, ?, \(RecordMetadataSQL.placeholders));
         """
 
         try database.execute(sql) { statement in
@@ -81,7 +101,8 @@ final class WorkFolderRepository {
             statement.bindText(folder.parentFolderId, at: 3)
             statement.bindText(folder.name, at: 4)
             statement.bindInt(folder.sortOrder, at: 5)
-            statement.bindMetadata(folder.meta, startingAt: 6)
+            statement.bindText(archivedAt, at: 6)
+            statement.bindMetadata(folder.meta, startingAt: 7)
         }
     }
 
@@ -143,6 +164,163 @@ final class WorkFolderRepository {
         }
     }
 
+    func archive(id: String, by userId: String) throws {
+        try database.inWriteTransaction {
+            let exists = try database.query("""
+            SELECT COUNT(*)
+            FROM work_folders
+            WHERE id = ? AND deletedAt IS NULL AND archivedAt IS NULL;
+            """, map: { $0.int(at: 0) }, bind: { $0.bindText(id, at: 1) }).first ?? 0
+            guard exists > 0 else {
+                throw WorkFolderRepositoryError.folderNotFound
+            }
+
+            guard try !hasUnbilledWork(inSubtree: id) else {
+                throw WorkFolderRepositoryError.folderHasUnbilledWork
+            }
+
+            try setArchivedAt(
+                SQLitePersistedDate.format(Date()),
+                forSubtree: id,
+                by: userId
+            )
+        }
+    }
+
+    func restore(id: String, by userId: String) throws {
+        try database.inWriteTransaction {
+            let exists = try database.query("""
+            SELECT COUNT(*)
+            FROM work_folders
+            WHERE id = ? AND deletedAt IS NULL AND archivedAt IS NOT NULL;
+            """, map: { $0.int(at: 0) }, bind: { $0.bindText(id, at: 1) }).first ?? 0
+            guard exists > 0 else {
+                throw WorkFolderRepositoryError.folderNotFound
+            }
+
+            try restoreSubtreeAndAncestors(id, by: userId)
+        }
+    }
+
+    private func hasUnbilledWork(inSubtree folderId: String) throws -> Bool {
+        let sql = """
+        WITH RECURSIVE folder_tree(id) AS (
+            SELECT id FROM work_folders WHERE id = ? AND deletedAt IS NULL
+            UNION ALL
+            SELECT child.id
+            FROM work_folders child
+            INNER JOIN folder_tree parent ON child.parentFolderId = parent.id
+            WHERE child.deletedAt IS NULL
+        ),
+        pending_sources AS (
+            SELECT session.id
+            FROM todo_time_sessions session
+            INNER JOIN todos todo ON todo.id = session.todoId
+            WHERE todo.folderId IN (SELECT id FROM folder_tree)
+              AND todo.deletedAt IS NULL
+              AND todo.isBillable = 1
+              AND session.deletedAt IS NULL
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM billing_report_lines line
+                  INNER JOIN billing_report_runs run ON run.id = line.runId
+                  WHERE line.deletedAt IS NULL
+                    AND run.deletedAt IS NULL
+                    AND run.status != 'cancelled'
+                    AND (line.sessionId = session.id
+                         OR (line.sourceKind = 'timeSession' AND line.sourceId = session.id))
+              )
+            UNION ALL
+            SELECT billing_override.id
+            FROM todo_billing_overrides billing_override
+            INNER JOIN todos todo ON todo.id = billing_override.todoId
+            WHERE todo.folderId IN (SELECT id FROM folder_tree)
+              AND todo.deletedAt IS NULL
+              AND todo.isBillable = 1
+              AND billing_override.deletedAt IS NULL
+              AND billing_override.overrideType IN ('projectedFee', 'fixedFee')
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM billing_report_lines line
+                  INNER JOIN billing_report_runs run ON run.id = line.runId
+                  WHERE line.deletedAt IS NULL
+                    AND run.deletedAt IS NULL
+                    AND run.status != 'cancelled'
+                    AND line.sourceKind = billing_override.overrideType
+                    AND line.sourceId = billing_override.id
+              )
+        )
+        SELECT EXISTS(SELECT 1 FROM pending_sources LIMIT 1);
+        """
+        return try database.query(
+            sql,
+            map: { $0.int(at: 0) == 1 },
+            bind: { $0.bindText(folderId, at: 1) }
+        ).first ?? false
+    }
+
+    private func setArchivedAt(_ archivedAt: String?, forSubtree folderId: String, by userId: String) throws {
+        let now = SQLitePersistedDate.format(Date())
+        try database.execute("""
+        WITH RECURSIVE folder_tree(id) AS (
+            SELECT id FROM work_folders WHERE id = ? AND deletedAt IS NULL
+            UNION ALL
+            SELECT child.id
+            FROM work_folders child
+            INNER JOIN folder_tree parent ON child.parentFolderId = parent.id
+            WHERE child.deletedAt IS NULL
+        )
+        UPDATE work_folders
+        SET archivedAt = ?, updatedAt = ?, updatedByUserId = ?,
+            rowVersion = rowVersion + 1, syncStatus = 'local'
+        WHERE id IN (SELECT id FROM folder_tree);
+        """) { statement in
+            statement.bindText(folderId, at: 1)
+            statement.bindText(archivedAt, at: 2)
+            statement.bindText(now, at: 3)
+            statement.bindText(userId, at: 4)
+        }
+    }
+
+    private func restoreSubtreeAndAncestors(_ folderId: String, by userId: String) throws {
+        let now = SQLitePersistedDate.format(Date())
+        try database.execute("""
+        WITH RECURSIVE
+        folder_tree(id) AS (
+            SELECT id FROM work_folders WHERE id = ? AND deletedAt IS NULL
+            UNION ALL
+            SELECT child.id
+            FROM work_folders child
+            INNER JOIN folder_tree parent ON child.parentFolderId = parent.id
+            WHERE child.deletedAt IS NULL
+        ),
+        ancestor_tree(id, parentFolderId) AS (
+            SELECT id, parentFolderId
+            FROM work_folders
+            WHERE id = ? AND deletedAt IS NULL
+            UNION ALL
+            SELECT parent.id, parent.parentFolderId
+            FROM work_folders parent
+            INNER JOIN ancestor_tree child ON parent.id = child.parentFolderId
+            WHERE parent.deletedAt IS NULL
+        ),
+        restored_folders(id) AS (
+            SELECT id FROM folder_tree
+            UNION
+            SELECT id FROM ancestor_tree
+        )
+        UPDATE work_folders
+        SET archivedAt = NULL, updatedAt = ?, updatedByUserId = ?,
+            rowVersion = rowVersion + 1, syncStatus = 'local'
+        WHERE id IN (SELECT id FROM restored_folders);
+        """) { statement in
+            statement.bindText(folderId, at: 1)
+            statement.bindText(folderId, at: 2)
+            statement.bindText(now, at: 3)
+            statement.bindText(userId, at: 4)
+        }
+    }
+
     private static func makeFolder(from statement: SQLiteStatement) throws -> WorkFolder {
         WorkFolder(
             id: statement.text(at: 0) ?? UUID().uuidString,
@@ -150,7 +328,8 @@ final class WorkFolderRepository {
             parentFolderId: statement.text(at: 2),
             name: statement.text(at: 3) ?? "",
             sortOrder: statement.int(at: 4),
-            meta: try statement.readMetadata(startingAt: 5)
+            archivedAt: SQLitePersistedDate.parse(statement.text(at: 5)),
+            meta: try statement.readMetadata(startingAt: 6)
         )
     }
 }

@@ -13,6 +13,7 @@ struct ActiveWorkSessionSummary: Identifiable, Hashable {
     let startedAt: Date
     let elapsedSeconds: Int
     let isPaused: Bool
+    let isAIAgentTask: Bool
 }
 
 enum WorkSessionControlError: LocalizedError {
@@ -64,7 +65,8 @@ final class WorkSessionControlService {
             statusName: todo?.statusName ?? localized("workSessions.status.active", defaultValue: "Aktif"),
             startedAt: active.session.startedAt,
             elapsedSeconds: currentElapsedSeconds(for: active.session),
-            isPaused: false
+            isPaused: false,
+            isAIAgentTask: todo?.isAIAgentTask ?? false
         )
     }
 
@@ -82,7 +84,8 @@ final class WorkSessionControlService {
             statusName: todo?.statusName ?? localized("menuBar.status.paused", defaultValue: "Duraklatıldı"),
             startedAt: paused.session.startedAt,
             elapsedSeconds: paused.session.durationSeconds ?? 0,
-            isPaused: true
+            isPaused: true,
+            isAIAgentTask: todo?.isAIAgentTask ?? false
         )
     }
 

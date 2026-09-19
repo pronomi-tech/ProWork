@@ -64,6 +64,68 @@ final class TodoBillingOverrideRepositoryIntegrationTests: XCTestCase {
         XCTAssertNil(fetched?.unitPriceMinor)
     }
 
+    func test_upsert_thenFetch_returnsProjectedFeeOverride() throws {
+        let todo = try makeTodo()
+        let override = TodoBillingOverride(
+            todoId: todo.id,
+            overrideType: .projectedFee,
+            unitPriceMinor: 200_000,
+            projectedBillableSeconds: 10 * 60 * 60,
+            currency: "TRY",
+            note: "10 adam/saat"
+        )
+        try overrideRepository.upsert(override)
+
+        let fetched = try XCTUnwrap(overrideRepository.fetch(todoId: todo.id))
+        XCTAssertEqual(fetched.overrideType, .projectedFee)
+        XCTAssertEqual(fetched.unitPriceMinor, 200_000)
+        XCTAssertEqual(fetched.projectedBillableSeconds, 36_000)
+        XCTAssertEqual(fetched.note, "10 adam/saat")
+        XCTAssertNil(fetched.fixedFeeMinor)
+    }
+
+    func test_fetchSessionIndependent_returnsProjectedAndFixedFeesOnly() throws {
+        let tracked = try makeTodo(title: "Süre")
+        let projected = try makeTodo(title: "Projelendirilmiş")
+        let fixed = try makeTodo(title: "Sabit")
+
+        try overrideRepository.upsert(TodoBillingOverride(
+            todoId: tracked.id,
+            overrideType: .unitPrice,
+            unitPriceMinor: 100_000
+        ))
+        try overrideRepository.upsert(TodoBillingOverride(
+            todoId: projected.id,
+            overrideType: .projectedFee,
+            unitPriceMinor: 200_000,
+            projectedBillableSeconds: 7_200
+        ))
+        try overrideRepository.upsert(TodoBillingOverride(
+            todoId: fixed.id,
+            overrideType: .fixedFee,
+            fixedFeeMinor: 300_000
+        ))
+
+        let results = try overrideRepository.fetchSessionIndependent(
+            organizationId: BuiltInOrganizationId.default
+        )
+
+        XCTAssertEqual(Set(results.map(\.todoId)), [projected.id, fixed.id])
+        XCTAssertEqual(Set(results.map(\.overrideType)), [.projectedFee, .fixedFee])
+    }
+
+    func test_upsert_projectedFeeWithoutDuration_isRejectedByDatabase() throws {
+        let todo = try makeTodo()
+        let invalid = TodoBillingOverride(
+            todoId: todo.id,
+            overrideType: .projectedFee,
+            unitPriceMinor: 200_000,
+            projectedBillableSeconds: nil
+        )
+
+        XCTAssertThrowsError(try overrideRepository.upsert(invalid))
+    }
+
     // MARK: - todoId UNIQUE
 
     func test_upsert_replacesExistingOverride_forSameTodo() throws {

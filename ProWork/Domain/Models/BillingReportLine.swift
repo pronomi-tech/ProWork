@@ -5,6 +5,12 @@
 import Foundation
 import os
 
+enum BillingLineSourceKind: String, Hashable {
+    case timeSession
+    case projectedFee
+    case fixedFee
+}
+
 /// A single line of a `BillingReportRun`. Snapshotted at finalize time —
 /// the line stays fixed even if the source records (todo, customer, category) are deleted.
 struct BillingReportLine: Identifiable, Hashable {
@@ -13,6 +19,8 @@ struct BillingReportLine: Identifiable, Hashable {
 
     // References (deletions are tolerated)
     var sessionId: String?
+    var sourceKind: BillingLineSourceKind?
+    var sourceId: String?
     var todoId: String
 
     // Snapshot columns (copied at finalize time)
@@ -70,6 +78,8 @@ struct BillingReportLine: Identifiable, Hashable {
         id: String = UUID().uuidString,
         runId: String,
         sessionId: String? = nil,
+        sourceKind: BillingLineSourceKind? = nil,
+        sourceId: String? = nil,
         todoId: String,
         todoTitle: String,
         projectId: String? = nil,
@@ -113,6 +123,8 @@ struct BillingReportLine: Identifiable, Hashable {
         self.id = id
         self.runId = runId
         self.sessionId = sessionId
+        self.sourceKind = sourceKind
+        self.sourceId = sourceId
         self.todoId = todoId
         self.todoTitle = todoTitle
         self.projectId = projectId
@@ -187,6 +199,8 @@ extension BillingReportLine {
     var unitPrice: Money { Money(minorUnits: unitPriceMinor, currency: currency) }
     var selectionKey: String {
         Self.makeSelectionKey(
+            sourceKind: sourceKind,
+            sourceId: sourceId,
             sessionId: sessionId,
             todoId: todoId,
             segmentIndex: segmentIndex,
@@ -206,6 +220,29 @@ extension BillingReportLine {
             syncStatus: syncStatus,
             lastSyncedAt: lastSyncedAt,
             originDeviceId: originDeviceId
+        )
+    }
+
+    static func makeSelectionKey(
+        sourceKind: BillingLineSourceKind?,
+        sourceId: String?,
+        sessionId: String?,
+        todoId: String,
+        segmentIndex: Int,
+        startedAt: Date?
+    ) -> String {
+        if let sourceKind, let sourceId,
+           sourceKind == .projectedFee || sourceKind == .fixedFee {
+            // The override identity, not its current pricing method, owns the
+            // commercial charge. Keeping one key across projected/fixed method
+            // changes prevents the same todo override from being billed twice.
+            return "todoBillingOverride:\(sourceId)"
+        }
+        return makeSelectionKey(
+            sessionId: sessionId,
+            todoId: todoId,
+            segmentIndex: segmentIndex,
+            startedAt: startedAt
         )
     }
 

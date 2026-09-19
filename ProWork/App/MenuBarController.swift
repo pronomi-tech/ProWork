@@ -3,6 +3,7 @@
 //  Created by Pronomi.
 
 import AppKit
+import Combine
 import SwiftUI
 import os
 
@@ -25,6 +26,7 @@ final class MenuBarController: NSObject {
     // references match their actual ownership semantics.
     private var settingsStore: AppSettingsStore?
     private var automationController: WorkAutomationController?
+    private var activeSessionCancellable: AnyCancellable?
     private var toastStore: ProWorkToastStore?
     /// Required so the popover's active-session duration
     /// ticks while open. Without this the elapsed time was frozen at
@@ -50,7 +52,15 @@ final class MenuBarController: NSObject {
         openMainWindow: @escaping () -> Void
     ) {
         self.settingsStore = settingsStore
-        self.automationController = automationController
+        if self.automationController !== automationController {
+            self.automationController = automationController
+            activeSessionCancellable = automationController.$activeSession
+                .map { $0 != nil }
+                .removeDuplicates()
+                .sink { [weak self] isActive in
+                    self?.updateStatusItemAppearance(isActive: isActive)
+                }
+        }
         self.toastStore = toastStore
         self.clockTicker = clockTicker
         openMainWindowAction = openMainWindow
@@ -74,7 +84,6 @@ final class MenuBarController: NSObject {
         item.isVisible = true
 
         if let button = item.button {
-            button.image = NSImage(systemSymbolName: "stopwatch", accessibilityDescription: "ProWork")
             button.imagePosition = .imageOnly
             button.target = self
             button.action = #selector(handleStatusItemInteraction(_:))
@@ -82,6 +91,30 @@ final class MenuBarController: NSObject {
         }
 
         statusItem = item
+        updateStatusItemAppearance(isActive: automationController?.activeSession != nil)
+    }
+
+    private func updateStatusItemAppearance(isActive: Bool) {
+        guard let button = statusItem?.button else { return }
+
+        if isActive {
+            // A custom tint on NSStatusBarButton's template image can suppress
+            // the symbol. Use an explicitly colored non-template image while
+            // active so the icon remains visible on both menu bar appearances.
+            let configuration = NSImage.SymbolConfiguration(paletteColors: [.systemGreen])
+            let image = NSImage(
+                systemSymbolName: "stopwatch",
+                accessibilityDescription: "ProWork"
+            )?.withSymbolConfiguration(configuration)
+            image?.isTemplate = false
+            button.image = image
+        } else {
+            let image = NSImage(systemSymbolName: "stopwatch", accessibilityDescription: "ProWork")
+            image?.isTemplate = true
+            button.image = image
+        }
+
+        button.contentTintColor = nil
     }
 
     private func removeStatusItem() {

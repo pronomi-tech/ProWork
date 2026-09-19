@@ -244,8 +244,10 @@ final class BillingRunExportService {
                 line.note ?? "—",
                 line.isFixedFee ? "" : Self.displayDateTimeWithSeconds(line.startedAt),
                 line.isFixedFee ? "" : Self.displayDateTimeWithSeconds(line.endedAt),
-                line.isFixedFee ? ProWorkLocalizer.shared.string("export.fixedFee", defaultValue: "Sabit Ücret") : line.serviceType.title,
-                line.isFixedFee ? "" : line.timeType.title,
+                line.sourceKind == .projectedFee
+                    ? ProWorkLocalizer.shared.string("billing.source.projectedFee", defaultValue: "Projelendirilmiş Ücret")
+                    : (line.isFixedFee ? ProWorkLocalizer.shared.string("export.fixedFee", defaultValue: "Sabit Ücret") : line.serviceType.title),
+                line.sourceKind == .timeSession || line.sourceKind == nil ? line.timeType.title : "",
                 line.isFixedFee ? ProWorkFormatters.durationHHmmss(0) : ProWorkFormatters.durationHHmmss(line.billableSeconds),
                 ProWorkFormatters.moneyAmount(
                     line.isFixedFee
@@ -423,6 +425,8 @@ private struct BillingRunExportPayload: Encodable {
     }
 
     struct LinePayload: Encodable {
+        let sourceKind: String?
+        let sourceId: String?
         let workTitle: String
         let note: String?
         /// Encoded as ISO 8601 string so the on-disk shape
@@ -445,6 +449,8 @@ private struct BillingRunExportPayload: Encodable {
         let isVatExempt: Bool
 
         nonisolated init(_ line: BillingReportLine) {
+            sourceKind = line.sourceKind?.rawValue
+            sourceId = line.sourceId
             workTitle = line.todoTitle
             note = line.note
             startedAt = line.startedAt.map(BillingRunExportPayload.iso8601String)

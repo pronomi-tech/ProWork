@@ -113,4 +113,33 @@ final class TodoTimeSessionsViewModel: ObservableObject {
             errorMessage = error.localizedDescription
         }
     }
+
+    func canResumeRecentlyEndedSession(
+        _ session: WorkSessionListItem,
+        now: Date = Date()
+    ) -> Bool {
+        do {
+            return TodoTimeSessionRepository.canResumeRecentlyEndedSession(
+                session,
+                among: try sessionRepository.fetchAllListItems(),
+                now: now
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    @discardableResult
+    func resumeRecentlyEndedSession(id: String, todoId: String) -> Bool {
+        do {
+            try sessionRepository.resumeRecentlyEndedSession(sessionId: id)
+            load(todoId: todoId)
+            errorMessage = nil
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
 }

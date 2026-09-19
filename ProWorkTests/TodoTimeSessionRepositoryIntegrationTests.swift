@@ -94,6 +94,89 @@ final class TodoTimeSessionRepositoryIntegrationTests: XCTestCase {
         XCTAssertNotNil(resumed?.runningSinceAt)
     }
 
+    func test_resumeRecentlyEndedSession_reopensLatestAutomaticSessionWithinTenMinutes() throws {
+        try sessionRepository.startSession(todoId: todo.id, startStatusId: BuiltInTodoStatusId.inProgress)
+        try sessionRepository.stopOpenSession(todoId: todo.id, endStatusId: BuiltInTodoStatusId.done)
+
+        let stopped = try XCTUnwrap(try sessionRepository.fetchSessions(todoId: todo.id).first)
+        let endedAt = try XCTUnwrap(stopped.endedAt)
+        let accumulatedDuration = stopped.durationSeconds
+
+        try sessionRepository.resumeRecentlyEndedSession(
+            sessionId: stopped.id,
+            now: endedAt.addingTimeInterval(5 * 60)
+        )
+
+        let resumed = try XCTUnwrap(try sessionRepository.fetchSessions(todoId: todo.id).first)
+        XCTAssertNil(resumed.endedAt)
+        XCTAssertNil(resumed.pausedAt)
+        XCTAssertNil(resumed.endStatusId)
+        XCTAssertEqual(resumed.runningSinceAt, endedAt)
+        XCTAssertEqual(resumed.durationSeconds, accumulatedDuration)
+    }
+
+    func test_resumeRecentlyEndedSession_rejectsSessionOlderThanTenMinutes() throws {
+        try sessionRepository.startSession(todoId: todo.id, startStatusId: BuiltInTodoStatusId.inProgress)
+        try sessionRepository.stopOpenSession(todoId: todo.id, endStatusId: BuiltInTodoStatusId.done)
+
+        let stopped = try XCTUnwrap(try sessionRepository.fetchSessions(todoId: todo.id).first)
+        let endedAt = try XCTUnwrap(stopped.endedAt)
+
+        XCTAssertThrowsError(
+            try sessionRepository.resumeRecentlyEndedSession(
+                sessionId: stopped.id,
+                now: endedAt.addingTimeInterval(10 * 60 + 1)
+            )
+        )
+        XCTAssertNotNil(try sessionRepository.fetchSessions(todoId: todo.id).first?.endedAt)
+    }
+
+    func test_resumeRecentlyEndedSession_rejectsManualSession() throws {
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let endedAt = startedAt.addingTimeInterval(60)
+        try sessionRepository.insertManualSession(
+            todoId: todo.id,
+            startedAt: startedAt,
+            endedAt: endedAt,
+            note: nil
+        )
+        let session = try XCTUnwrap(try sessionRepository.fetchSessions(todoId: todo.id).first)
+
+        XCTAssertThrowsError(
+            try sessionRepository.resumeRecentlyEndedSession(
+                sessionId: session.id,
+                now: endedAt.addingTimeInterval(60)
+            )
+        )
+        XCTAssertNotNil(try sessionRepository.fetchSessions(todoId: todo.id).first?.endedAt)
+    }
+
+    func test_resumeRecentlyEndedSession_rejectsEndedSessionWhenNewerSessionIsOpen() throws {
+        try sessionRepository.startSession(todoId: todo.id, startStatusId: BuiltInTodoStatusId.inProgress)
+        try sessionRepository.stopOpenSession(todoId: todo.id, endStatusId: BuiltInTodoStatusId.done)
+        let stopped = try XCTUnwrap(try sessionRepository.fetchSessions(todoId: todo.id).first)
+        let endedAt = try XCTUnwrap(stopped.endedAt)
+
+        let otherTodo = Todo(
+            categoryId: category.id,
+            title: "Yeni çalışma",
+            statusId: BuiltInTodoStatusId.waiting
+        )
+        try todoRepository.insert(otherTodo)
+        try sessionRepository.startSession(
+            todoId: otherTodo.id,
+            startStatusId: BuiltInTodoStatusId.inProgress
+        )
+
+        XCTAssertThrowsError(
+            try sessionRepository.resumeRecentlyEndedSession(
+                sessionId: stopped.id,
+                now: endedAt.addingTimeInterval(60)
+            )
+        )
+        XCTAssertEqual(try sessionRepository.fetchOpenSession(todoId: otherTodo.id)?.todoId, otherTodo.id)
+    }
+
     func test_fetchPausedSession_returnsOnlyPausedRow() throws {
         try sessionRepository.startSession(todoId: todo.id, startStatusId: BuiltInTodoStatusId.inProgress)
         guard let sessionId = try sessionRepository.fetchOpenSession(todoId: todo.id)?.id else {

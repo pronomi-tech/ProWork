@@ -120,6 +120,42 @@ final class WorkFolderRepositoryIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func test_projectFolderSelection_resolvesCustomerProjectAndFolder() throws {
+        let folder = WorkFolder(projectId: project.id, name: "Teslimatlar")
+        try repository.insert(folder)
+
+        let assignment = WorkLocationSelection.folder(folder.id).assignment(
+            projects: try projectRepository.fetchAll(),
+            folders: try repository.fetchAll()
+        )
+
+        XCTAssertEqual(
+            assignment,
+            WorkLocationAssignment(
+                customerId: customer.id,
+                projectId: project.id,
+                folderId: folder.id
+            )
+        )
+    }
+
+    @MainActor
+    func test_independentFolderSelection_keepsCustomerAndProjectEmpty() throws {
+        let folder = WorkFolder(name: "İdari")
+        try repository.insert(folder)
+
+        let assignment = WorkLocationSelection.folder(folder.id).assignment(
+            projects: try projectRepository.fetchAll(),
+            folders: try repository.fetchAll()
+        )
+
+        XCTAssertEqual(
+            assignment,
+            WorkLocationAssignment(folderId: folder.id)
+        )
+    }
+
+    @MainActor
     func test_todos_projectAndFolderSelectionsRespectDescendantOption() throws {
         let projectFolder = WorkFolder(projectId: project.id, name: "260902")
         try repository.insert(projectFolder)
@@ -195,6 +231,239 @@ final class WorkFolderRepositoryIntegrationTests: XCTestCase {
         try projectRepository.softDelete(id: project.id, by: BuiltInUserId.defaultOwner)
 
         XCTAssertNil(try repository.fetch(id: folder.id))
+    }
+
+    func test_archiveAndRestore_applyToEntireSubtree() throws {
+        let root = WorkFolder(name: "Tamamlanan Proje")
+        let child = WorkFolder(parentFolderId: root.id, name: "Teslim")
+        try repository.insert(root)
+        try repository.insert(child)
+
+        try repository.archive(id: root.id, by: BuiltInUserId.defaultOwner)
+
+        XCTAssertTrue(try repository.fetchAll().isEmpty)
+        let archived = try repository.fetchAll(includeArchived: true)
+        XCTAssertEqual(Set(archived.map(\.id)), [root.id, child.id])
+        XCTAssertTrue(archived.allSatisfy(\.isArchived))
+
+        try repository.restore(id: root.id, by: BuiltInUserId.defaultOwner)
+
+        let restored = try repository.fetchAll()
+        XCTAssertEqual(Set(restored.map(\.id)), [root.id, child.id])
+        XCTAssertTrue(restored.allSatisfy { !$0.isArchived })
+    }
+
+    func test_restoringArchivedChildAlsoRestoresItsAncestorPath() throws {
+        let root = WorkFolder(name: "Kök")
+        let child = WorkFolder(parentFolderId: root.id, name: "Alt")
+        try repository.insert(root)
+        try repository.insert(child)
+        try repository.archive(id: root.id, by: BuiltInUserId.defaultOwner)
+
+        try repository.restore(id: child.id, by: BuiltInUserId.defaultOwner)
+
+        let restoredIds = Set(try repository.fetchAll().map(\.id))
+        XCTAssertEqual(restoredIds, [root.id, child.id])
+    }
+
+    func test_archiveRejectsUnbilledSessionInDescendantFolder() throws {
+        let root = WorkFolder(name: "Kök")
+        let child = WorkFolder(parentFolderId: root.id, name: "Alt")
+        try repository.insert(root)
+        try repository.insert(child)
+
+        let todo = Todo(
+            folderId: child.id,
+            categoryId: category.id,
+            title: "Faturalandırılacak çalışma"
+        )
+        try todoRepository.insert(todo)
+        let startedAt = BillingFixtures.date(2026, 9, 19, 10)
+        try TodoTimeSessionRepository().insertManualSession(
+            todoId: todo.id,
+            startedAt: startedAt,
+            endedAt: startedAt.addingTimeInterval(3_600),
+            note: nil
+        )
+
+        XCTAssertThrowsError(
+            try repository.archive(id: root.id, by: BuiltInUserId.defaultOwner)
+        ) { error in
+            XCTAssertEqual(error as? WorkFolderRepositoryError, .folderHasUnbilledWork)
+        }
+        XCTAssertNotNil(try repository.fetch(id: root.id))
+        XCTAssertNotNil(try repository.fetch(id: child.id))
+    }
+
+    func test_archiveRejectsUnbilledProjectedFee() throws {
+        let folder = WorkFolder(name: "Sözleşmeli İş")
+        try repository.insert(folder)
+        let todo = Todo(
+            customerId: customer.id,
+            folderId: folder.id,
+            categoryId: category.id,
+            title: "Projelendirilmiş çalışma"
+        )
+        try todoRepository.insert(todo)
+        try TodoBillingOverrideRepository().upsert(
+            TodoBillingOverride(
+                todoId: todo.id,
+                overrideType: .projectedFee,
+                unitPriceMinor: 1_000_00,
+                projectedBillableSeconds: 3_600
+            )
+        )
+
+        XCTAssertThrowsError(
+            try repository.archive(id: folder.id, by: BuiltInUserId.defaultOwner)
+        ) { error in
+            XCTAssertEqual(error as? WorkFolderRepositoryError, .folderHasUnbilledWork)
+        }
+    }
+
+    func test_archiveAllowsNonBillableWork() throws {
+        let folder = WorkFolder(name: "İdari")
+        try repository.insert(folder)
+        let todo = Todo(
+            folderId: folder.id,
+            categoryId: category.id,
+            title: "İdari çalışma",
+            isBillable: false
+        )
+        try todoRepository.insert(todo)
+        let startedAt = BillingFixtures.date(2026, 9, 19, 10)
+        try TodoTimeSessionRepository().insertManualSession(
+            todoId: todo.id,
+            startedAt: startedAt,
+            endedAt: startedAt.addingTimeInterval(1_800),
+            note: nil
+        )
+
+        try repository.archive(id: folder.id, by: BuiltInUserId.defaultOwner)
+
+        XCTAssertNil(try repository.fetch(id: folder.id))
+        XCTAssertTrue(try XCTUnwrap(repository.fetch(id: folder.id, includeArchived: true)).isArchived)
+    }
+
+    func test_archiveAllowsSessionAssignedToNonCancelledBillingRun() throws {
+        let folder = WorkFolder(projectId: project.id, name: "Faturalanan İş")
+        try repository.insert(folder)
+        let todo = Todo(
+            customerId: customer.id,
+            projectId: project.id,
+            folderId: folder.id,
+            categoryId: category.id,
+            title: "Faturalanmış çalışma"
+        )
+        try todoRepository.insert(todo)
+        let startedAt = BillingFixtures.date(2026, 9, 19, 10)
+        let sessionRepository = TodoTimeSessionRepository()
+        try sessionRepository.insertManualSession(
+            todoId: todo.id,
+            startedAt: startedAt,
+            endedAt: startedAt.addingTimeInterval(3_600),
+            note: nil
+        )
+        let session = try XCTUnwrap(
+            sessionRepository.fetchAllListItems().first(where: { $0.todoId == todo.id })
+        )
+        let run = BillingReportRun(
+            customerId: customer.id,
+            periodStart: "2026-09-01",
+            periodEnd: "2026-09-30"
+        )
+        try BillingReportRunRepository().insert(run)
+        try BillingReportLineRepository().insert(
+            BillingReportLine(
+                runId: run.id,
+                sessionId: session.id,
+                sourceKind: .timeSession,
+                sourceId: session.id,
+                todoId: todo.id,
+                todoTitle: todo.title,
+                projectId: project.id,
+                projectName: project.name,
+                customerId: customer.id,
+                customerName: customer.name,
+                categoryId: category.id,
+                categoryName: category.name,
+                serviceType: .remote,
+                timeType: .regular,
+                actualSeconds: 3_600,
+                billableSeconds: 3_600,
+                unitPriceMinor: 100_00,
+                amountMinor: 100_00
+            )
+        )
+
+        try repository.archive(id: folder.id, by: BuiltInUserId.defaultOwner)
+
+        XCTAssertTrue(try XCTUnwrap(repository.fetch(id: folder.id, includeArchived: true)).isArchived)
+    }
+
+    func test_archivedFolderRejectsNewTodoAssignment() throws {
+        let folder = WorkFolder(name: "Arşiv")
+        try repository.insert(folder)
+        try repository.archive(id: folder.id, by: BuiltInUserId.defaultOwner)
+
+        XCTAssertThrowsError(
+            try todoRepository.insert(
+                Todo(folderId: folder.id, categoryId: category.id, title: "Yeni çalışma")
+            )
+        )
+    }
+
+    @MainActor
+    func test_archivedFolderContentsAreHiddenUntilArchiveToggleIsEnabled() throws {
+        let folder = WorkFolder(name: "Geçmiş")
+        try repository.insert(folder)
+        let todo = Todo(
+            folderId: folder.id,
+            categoryId: category.id,
+            title: "Geçmiş çalışma",
+            isBillable: false
+        )
+        try todoRepository.insert(todo)
+        let startedAt = BillingFixtures.date(2026, 9, 19, 10)
+        try TodoTimeSessionRepository().insertManualSession(
+            todoId: todo.id,
+            startedAt: startedAt,
+            endedAt: startedAt.addingTimeInterval(1_800),
+            note: nil
+        )
+        try repository.archive(id: folder.id, by: BuiltInUserId.defaultOwner)
+
+        let todosViewModel = TodosViewModel(services: AppServices(database: .shared))
+        todosViewModel.load()
+        XCTAssertFalse(
+            todosViewModel.visibleTodos(
+                for: .all,
+                includeDescendantFolders: false
+            ).contains(where: { $0.id == todo.id })
+        )
+        XCTAssertTrue(
+            todosViewModel.visibleTodos(
+                for: .all,
+                includeDescendantFolders: false,
+                showArchivedFolders: true
+            ).contains(where: { $0.id == todo.id })
+        )
+
+        let sessionsViewModel = WorkSessionsViewModel(services: AppServices(database: .shared))
+        sessionsViewModel.loadData()
+        XCTAssertFalse(
+            sessionsViewModel.visibleSessions(
+                for: .all,
+                includeDescendantFolders: false
+            ).contains(where: { $0.todoId == todo.id })
+        )
+        XCTAssertTrue(
+            sessionsViewModel.visibleSessions(
+                for: .all,
+                includeDescendantFolders: false,
+                showArchivedFolders: true
+            ).contains(where: { $0.todoId == todo.id })
+        )
     }
 
     @MainActor

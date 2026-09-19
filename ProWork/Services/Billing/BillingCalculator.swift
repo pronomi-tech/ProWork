@@ -315,6 +315,8 @@ enum BillingCalculator {
         let line = BillingReportLine(
             runId: runId,
             sessionId: session.id,
+            sourceKind: .timeSession,
+            sourceId: session.id,
             todoId: input.todo.id,
             todoTitle: input.todo.title,
             projectId: input.project?.id,
@@ -414,6 +416,8 @@ enum BillingCalculator {
         let line = BillingReportLine(
             runId: runId,
             sessionId: input.session.id,
+            sourceKind: .timeSession,
+            sourceId: input.session.id,
             todoId: input.todo.id,
             todoTitle: input.todo.title,
             projectId: input.project?.id,

@@ -23,6 +23,7 @@ final class TodosViewModel: ObservableObject {
     @Published private(set) var statuses: [TodoStatus] = []
     @Published var quickCategoryId: String = ""
     @Published var errorMessage: String?
+    @Published private(set) var errorEventID: UUID?
 
     private let todoRepository: TodoRepository
     private let customerRepository: CustomerRepository
@@ -31,6 +32,7 @@ final class TodosViewModel: ObservableObject {
     private let categoryRepository: TaskCategoryRepository
     private let statusRepository: TodoStatusRepository
     private let timeSessionRepository: TodoTimeSessionRepository
+    private let billingOverrideRepository: TodoBillingOverrideRepository
 
     init(services: AppServices = .shared) {
         self.todoRepository = services.todoRepository
@@ -40,6 +42,7 @@ final class TodosViewModel: ObservableObject {
         self.categoryRepository = services.categoryRepository
         self.statusRepository = services.statusRepository
         self.timeSessionRepository = services.todoTimeSessionRepository
+        self.billingOverrideRepository = services.todoBillingOverrideRepository
     }
 
     // MARK: - Derived
@@ -56,29 +59,43 @@ final class TodosViewModel: ObservableObject {
             ?? BuiltInTodoStatusId.waiting
     }
 
+    var activeFolders: [WorkFolder] {
+        folders.filter { !$0.isArchived }
+    }
+
     func categoryDefaultBillable(categoryId: String) -> Bool {
         categories.first(where: { $0.id == categoryId })?.isBillableDefault ?? true
     }
 
     func visibleTodos(
         for selection: WorkLocationSelection,
-        includeDescendantFolders: Bool
+        includeDescendantFolders: Bool,
+        showArchivedFolders: Bool = false
     ) -> [TodoListItem] {
+        let displayedFolderIds = Set(
+            folders.lazy
+                .filter { showArchivedFolders || !$0.isArchived }
+                .map(\.id)
+        )
         switch selection {
         case .all:
-            return todos
+            return todos.filter { todo in
+                todo.folderId.map { displayedFolderIds.contains($0) } ?? true
+            }
         case .project(let projectId):
             return todos.filter {
-                $0.projectId == projectId
-                    && (includeDescendantFolders || $0.folderId == nil)
+                guard $0.projectId == projectId else { return false }
+                guard includeDescendantFolders else { return $0.folderId == nil }
+                return $0.folderId.map { displayedFolderIds.contains($0) } ?? true
             }
         case .folder(let folderId):
             let folderIds = includeDescendantFolders
                 ? WorkFolderHierarchy.descendantIds(of: folderId, in: folders)
                 : Set([folderId])
+            let visibleFolderIds = folderIds.intersection(displayedFolderIds)
             return todos.filter { todo in
                 guard let todoFolderId = todo.folderId else { return false }
-                return folderIds.contains(todoFolderId)
+                return visibleFolderIds.contains(todoFolderId)
             }
         }
     }
@@ -86,11 +103,13 @@ final class TodosViewModel: ObservableObject {
     func todosForStatus(
         _ status: TodoStatus,
         selection: WorkLocationSelection,
-        includeDescendantFolders: Bool
+        includeDescendantFolders: Bool,
+        showArchivedFolders: Bool = false
     ) -> [TodoListItem] {
         visibleTodos(
             for: selection,
-            includeDescendantFolders: includeDescendantFolders
+            includeDescendantFolders: includeDescendantFolders,
+            showArchivedFolders: showArchivedFolders
         ).filter { $0.statusId == status.id }
     }
 
@@ -100,7 +119,7 @@ final class TodosViewModel: ObservableObject {
         do {
             customers = try customerRepository.fetchAll()
             projects = try projectRepository.fetchAll()
-            folders = try workFolderRepository.fetchAll()
+            folders = try workFolderRepository.fetchAll(includeArchived: true)
             categories = try categoryRepository.fetchAll()
             statuses = try statusRepository.fetchAll()
             todos = try todoRepository.fetchAll()
@@ -116,7 +135,7 @@ final class TodosViewModel: ObservableObject {
 
             errorMessage = nil
         } catch {
-            errorMessage = error.localizedDescription
+            report(error)
         }
     }
 
@@ -128,7 +147,7 @@ final class TodosViewModel: ObservableObject {
             return
         }
 
-        let assignment = assignment(for: location)
+        let assignment = location.assignment(projects: projects, folders: folders)
         let todo = Todo(
             customerId: assignment.customerId,
             projectId: assignment.projectId,
@@ -155,7 +174,7 @@ final class TodosViewModel: ObservableObject {
             errorMessage = nil
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            report(error)
             return false
         }
     }
@@ -168,34 +187,75 @@ final class TodosViewModel: ObservableObject {
             errorMessage = nil
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            report(error)
+            return false
+        }
+    }
+
+    @discardableResult
+    func archiveFolder(id: String) -> Bool {
+        do {
+            try workFolderRepository.archive(id: id, by: AppServices.currentUserId)
+            load()
+            errorMessage = nil
+            return true
+        } catch {
+            report(error)
+            return false
+        }
+    }
+
+    @discardableResult
+    func restoreFolder(id: String) -> Bool {
+        do {
+            try workFolderRepository.restore(id: id, by: AppServices.currentUserId)
+            load()
+            errorMessage = nil
+            return true
+        } catch {
+            report(error)
             return false
         }
     }
 
     /// Returns `true` if `create` succeeded; the View uses this to decide whether to dismiss the dialog.
     @discardableResult
-    func create(_ todo: Todo) -> Bool {
+    func create(_ todo: Todo, billingOverride: TodoBillingOverride? = nil) -> Bool {
         do {
-            try todoRepository.insert(todo)
+            try todoRepository.transactionally {
+                try todoRepository.insert(todo)
+                if let billingOverride {
+                    try billingOverrideRepository.upsert(billingOverride)
+                }
+            }
             load()
             errorMessage = nil
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            report(error)
             return false
         }
     }
 
     @discardableResult
-    func update(_ todo: Todo) -> Bool {
+    func update(_ todo: Todo, billingOverride: TodoBillingOverride? = nil) -> Bool {
         do {
-            try todoRepository.update(todo)
+            try todoRepository.transactionally {
+                try todoRepository.update(todo)
+                if let billingOverride {
+                    try billingOverrideRepository.upsert(billingOverride)
+                } else {
+                    try billingOverrideRepository.remove(
+                        todoId: todo.id,
+                        by: AppServices.currentUserId
+                    )
+                }
+            }
             load()
             errorMessage = nil
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            report(error)
             return false
         }
     }
@@ -209,7 +269,7 @@ final class TodosViewModel: ObservableObject {
             load()
             errorMessage = nil
         } catch {
-            errorMessage = error.localizedDescription
+            report(error)
         }
     }
 
@@ -272,7 +332,7 @@ final class TodosViewModel: ObservableObject {
             return targetStatus.startsTimer ? .needsWorkStart : .moved
         } catch {
             todos[index] = previousTodo
-            errorMessage = error.localizedDescription
+            report(error)
             return .failed
         }
     }
@@ -295,7 +355,7 @@ final class TodosViewModel: ObservableObject {
                 return active
             }
         } catch {
-            errorMessage = error.localizedDescription
+            report(error)
         }
         return nil
     }
@@ -333,7 +393,7 @@ final class TodosViewModel: ObservableObject {
 
             errorMessage = nil
         } catch {
-            errorMessage = error.localizedDescription
+            report(error)
         }
     }
 
@@ -353,11 +413,16 @@ final class TodosViewModel: ObservableObject {
 
             errorMessage = nil
         } catch {
-            errorMessage = error.localizedDescription
+            report(error)
         }
     }
 
     // MARK: - Helpers
+
+    private func report(_ error: Error) {
+        errorMessage = error.localizedDescription
+        errorEventID = UUID()
+    }
 
     private func makeUpdatedTodo(
         _ todo: TodoListItem,
@@ -380,23 +445,4 @@ final class TodosViewModel: ObservableObject {
         return updatedTodo
     }
 
-    private func assignment(
-        for location: WorkLocationSelection
-    ) -> (customerId: String?, projectId: String?, folderId: String?) {
-        switch location {
-        case .all:
-            return (nil, nil, nil)
-        case .project(let projectId):
-            let customerId = projects.first(where: { $0.id == projectId })?.customerId
-            return (customerId, projectId, nil)
-        case .folder(let folderId):
-            guard let folder = folders.first(where: { $0.id == folderId }) else {
-                return (nil, nil, nil)
-            }
-            let customerId = folder.projectId.flatMap { projectId in
-                projects.first(where: { $0.id == projectId })?.customerId
-            }
-            return (customerId, folder.projectId, folder.id)
-        }
-    }
 }

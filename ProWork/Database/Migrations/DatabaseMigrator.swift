@@ -103,7 +103,9 @@ enum DatabaseMigrator {
         [
             Migration001InitialSchema(),
             Migration002(),
-            Migration003()
+            Migration003(),
+            Migration004(),
+            Migration005()
         ]
     }
 

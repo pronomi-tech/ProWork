@@ -13,12 +13,16 @@ final class WorkAutomationController: ObservableObject {
     @Published private(set) var quickTodos: [TodoListItem] = []
     @Published private(set) var idleSeconds: TimeInterval = 0
     @Published private(set) var lastAutomationMessage: String?
+    /// Advances after a successful menu-bar or automation mutation so open
+    /// database-backed screens can reload immediately without polling.
+    @Published private(set) var workSessionRevision: UInt64 = 0
 
     private let controlService: WorkSessionControlService
     /// Injectable so tests can substitute a mock that
     /// records `notifyIdleAutoStop` calls without invoking the real
     /// UNUserNotificationCenter.
     private let notificationService: AppNotificationService
+    private let idleSecondsProvider: @MainActor () -> TimeInterval
     private var settings: AppSettings = .defaults
     /// Fast tick (every 30s) — enough for the idle-threshold check and
     /// firing the action; does no DB queries.
@@ -35,10 +39,12 @@ final class WorkAutomationController: ObservableObject {
 
     init(
         controlService: WorkSessionControlService? = nil,
-        notificationService: AppNotificationService? = nil
+        notificationService: AppNotificationService? = nil,
+        idleSecondsProvider: @escaping @MainActor () -> TimeInterval = WorkAutomationController.currentIdleSeconds
     ) {
         self.controlService = controlService ?? WorkSessionControlService()
         self.notificationService = notificationService ?? AppNotificationService()
+        self.idleSecondsProvider = idleSecondsProvider
     }
 
     func start() {
@@ -85,7 +91,7 @@ final class WorkAutomationController: ObservableObject {
     }
 
     func refresh() {
-        idleSeconds = Self.currentIdleSeconds()
+        idleSeconds = idleSecondsProvider()
 
         do {
             activeSession = try controlService.fetchActiveSession()
@@ -146,6 +152,7 @@ final class WorkAutomationController: ObservableObject {
         do {
             try action()
             hasTriggeredIdleStop = false
+            workSessionRevision &+= 1
         } catch {
             lastAutomationMessage = error.localizedDescription
         }
@@ -154,11 +161,12 @@ final class WorkAutomationController: ObservableObject {
     /// Fast tick: only updates the idle seconds and triggers the
     /// auto-stop action if needed. Does not touch the DB — it's the
     /// hot path, so it produces zero I/O when there's no active session.
-    private func fastTick() {
-        idleSeconds = Self.currentIdleSeconds()
+    func fastTick() {
+        idleSeconds = idleSecondsProvider()
 
         guard settings.idleAutoStopEnabled,
-              activeSession != nil,
+              let activeSession,
+              !activeSession.isAIAgentTask,
               idleSeconds >= TimeInterval(settings.idleAutoStopMinutes * 60) else {
             hasTriggeredIdleStop = false
             return
@@ -167,7 +175,7 @@ final class WorkAutomationController: ObservableObject {
         guard !hasTriggeredIdleStop else { return }
 
         do {
-            let pausedTaskTitle = activeSession?.todoTitle ?? localized("menuBar.header.active", defaultValue: "Aktif çalışma")
+            let pausedTaskTitle = activeSession.todoTitle
             try controlService.pauseActiveWork()
             lastAutomationMessage = String(
                 format: localized(
@@ -180,6 +188,7 @@ final class WorkAutomationController: ObservableObject {
             hasTriggeredIdleStop = true
             // After a pause, sync the UI state from the DB.
             refresh()
+            workSessionRevision &+= 1
         } catch {
             lastAutomationMessage = error.localizedDescription
         }

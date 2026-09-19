@@ -246,10 +246,12 @@ struct BillingRunDetailPanel: View {
                 .proWorkTextStyle(.caption)
                 .foregroundStyle(.secondary)
                 .frame(width: 120, alignment: .leading)
-            Text(line.serviceType.title)
+            Text(line.sourceKind == .projectedFee
+                 ? localized("billing.source.projectedFee", defaultValue: "Projelendirilmiş Ücret")
+                 : (line.isFixedFee ? localized("billing.source.fixedFee", defaultValue: "Sabit Tutar") : line.serviceType.title))
                 .proWorkTextStyle(.caption)
                 .frame(width: 90, alignment: .leading)
-            Text(line.timeType.title)
+            Text(line.sourceKind == .timeSession || line.sourceKind == nil ? line.timeType.title : "—")
                 .proWorkTextStyle(.caption)
                 .frame(width: 100, alignment: .leading)
             Text(ProWorkFormatters.durationHHmmss(line.actualSeconds))
@@ -269,13 +271,24 @@ struct BillingRunDetailPanel: View {
                 .frame(width: 110, alignment: .trailing)
             Text(line.isManual
                  ? localized("workSessions.source.manual", defaultValue: "Manuel")
-                 : localized("workSessions.source.automatic", defaultValue: "Otomatik"))
+                 : billingSourceTitle(for: line))
                 .proWorkTextStyle(.caption)
                 .foregroundStyle(line.isManual ? .orange : .secondary)
                 .frame(width: 80, alignment: .leading)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+    }
+
+    private func billingSourceTitle(for line: BillingReportLine) -> String {
+        switch line.sourceKind {
+        case .projectedFee:
+            return localized("billing.source.projectedFee", defaultValue: "Projelendirilmiş Ücret")
+        case .fixedFee:
+            return localized("billing.source.fixedFee", defaultValue: "Sabit Tutar")
+        case .timeSession, .none:
+            return localized("billing.source.timeSession", defaultValue: "Süre Kaydı")
+        }
     }
 
     private func paymentsCard(_ bundle: BillingRunBundle) -> some View {

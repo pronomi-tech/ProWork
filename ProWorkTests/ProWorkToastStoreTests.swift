@@ -37,6 +37,15 @@ final class ProWorkToastStoreTests: XCTestCase {
         XCTAssertEqual(store.toasts.map(\.style), [.info, .success, .warning])
     }
 
+    func test_show_sameMessageTwice_appendsBothOccurrences() {
+        let store = ProWorkToastStore()
+        store.show("same error", style: .error)
+        store.show("same error", style: .error)
+
+        XCTAssertEqual(store.toasts.map(\.message), ["same error", "same error"])
+        XCTAssertNotEqual(store.toasts[0].id, store.toasts[1].id)
+    }
+
     func test_dismiss_removesOnlyMatchingToast() {
         let store = ProWorkToastStore()
         store.show("a", style: .info)

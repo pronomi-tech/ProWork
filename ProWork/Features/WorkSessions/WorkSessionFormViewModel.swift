@@ -31,16 +31,26 @@ final class WorkSessionFormViewModel: ObservableObject {
     }
 
     private let todoRepository: TodoRepository
+    private let billingOverrideRepository: TodoBillingOverrideRepository
 
     init(services: AppServices = .shared) {
         self.todoRepository = services.todoRepository
+        self.billingOverrideRepository = services.todoBillingOverrideRepository
     }
 
     /// Creates an inline todo from the form, refetches the entire list and
     /// returns it. On failure errorMessage is set and nil is returned.
-    func createTodo(_ todo: Todo) -> [TodoListItem]? {
+    func createTodo(
+        _ todo: Todo,
+        billingOverride: TodoBillingOverride?
+    ) -> [TodoListItem]? {
         do {
-            try todoRepository.insert(todo)
+            try todoRepository.transactionally {
+                try todoRepository.insert(todo)
+                if let billingOverride {
+                    try billingOverrideRepository.upsert(billingOverride)
+                }
+            }
             let refreshed = try todoRepository.fetchAll()
             errorMessage = nil
             return refreshed

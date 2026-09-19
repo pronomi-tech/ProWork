@@ -40,3 +40,6 @@ ExportOptions.plist
 !.claude/settings.json
 !.claude/agents/
 !.claude/commands/
+
+# Local code-review artifacts
+/Code Review/

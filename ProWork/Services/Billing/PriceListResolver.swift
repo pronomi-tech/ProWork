@@ -295,6 +295,11 @@ enum PriceListResolver {
                 if let fee = override.fixedFeeMinor {
                     return .todoFixedFee(amountMinor: fee, currency: override.currency)
                 }
+            case .projectedFee:
+                // Projelendirilmiş ücret, oturum fiyat çözümleme
+                // zincirine girmez; BillingComputationService tek görev
+                // kaynağı olarak ayrı bir satır üretir.
+                break
             case .unitPrice:
                 if let unit = override.unitPriceMinor {
                     return .todoUnitPriceOverride(

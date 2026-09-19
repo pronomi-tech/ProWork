@@ -132,6 +132,9 @@ final class BillingComputationService {
         let holidays = try holidayRepository.fetchAll(organizationId: organizationId)
         let vatRates = try vatRateRepository.fetchAll(organizationId: organizationId)
         let priceLists = try priceListRepository.fetchAll(organizationId: organizationId)
+        let sessionIndependentOverrides = try overrideRepository.fetchSessionIndependent(
+            organizationId: organizationId
+        )
 
         // Bulk fetch instead of N+1. The old loop issued one
         // SQL per price list — a tenant with dozens of customer-scoped
@@ -180,7 +183,9 @@ final class BillingComputationService {
         // 3. Bulk-fetch the todo / session / project / override data needed for the period.
         // In the old flow each session triggered 4-6 separate queries (todo, session,
         // project, override, billing rule); an N+1 explosion at 1,000-row periods.
-        let todoIds = Array(Set(periodItems.map { $0.todoId }))
+        let todoIds = Array(Set(
+            periodItems.map(\.todoId) + sessionIndependentOverrides.map(\.todoId)
+        ))
         let sessionIds = periodItems.map { $0.id }
 
         let todosById = Dictionary(
@@ -250,6 +255,13 @@ final class BillingComputationService {
             let project = todo.projectId.flatMap { projectsById[$0] }
 
             let category = categoriesById[todo.categoryId]
+
+            // Projelendirilmiş and fixed fees are todo-level commercial
+            // sources. Work sessions remain in operational reports but must not
+            // create additional monetary lines for these billing arrangements.
+            if overridesByTodoId[todo.id]?.overrideType.isSessionIndependent == true {
+                continue
+            }
 
             // Apply the customer-specific rule if present, otherwise the global rule.
             // Thanks to the bulk fetch (Y14) we don't hit the DB.
@@ -350,11 +362,28 @@ final class BillingComputationService {
             reportSessionIds: reportSessionIdsForPricing
         )
 
+        lines.append(contentsOf: makeSessionIndependentLines(
+            overrides: sessionIndependentOverrides,
+            todosById: todosById,
+            customersById: customersById,
+            projectsById: projectsById,
+            categoriesById: categoriesById,
+            customerIdFilter: customerIdFilter,
+            folderIdsFilter: folderIdsFilter,
+            vatCalculator: vatCalculator,
+            runId: runId
+        ))
+
         // A session may produce multiple time-type segments in chronological
         // order while source sessions arrive newest-first. Normalize the final
         // collection before assigning its persisted presentation order so every
         // preview, saved statement, and export follows the same newest-first rule.
         lines.sort { lhs, rhs in
+            let lhsIsCommercialSource = lhs.sourceKind == .projectedFee || lhs.sourceKind == .fixedFee
+            let rhsIsCommercialSource = rhs.sourceKind == .projectedFee || rhs.sourceKind == .fixedFee
+            if lhsIsCommercialSource != rhsIsCommercialSource {
+                return lhsIsCommercialSource
+            }
             let lhsStart = lhs.startedAt ?? .distantPast
             let rhsStart = rhs.startedAt ?? .distantPast
             if lhsStart != rhsStart {
@@ -367,6 +396,112 @@ final class BillingComputationService {
         }
 
         return lines
+    }
+
+    private func makeSessionIndependentLines(
+        overrides: [TodoBillingOverride],
+        todosById: [String: Todo],
+        customersById: [String: Customer],
+        projectsById: [String: Project],
+        categoriesById: [String: TaskCategory],
+        customerIdFilter: String?,
+        folderIdsFilter: Set<String>?,
+        vatCalculator: VATCalculator,
+        runId: String
+    ) -> [BillingReportLine] {
+        let pricingDate = clock.now()
+        let pricingDateString = Holiday.dateFormatter.string(from: pricingDate)
+
+        return overrides.compactMap { override in
+            guard let todo = todosById[override.todoId],
+                  todo.isBillable,
+                  let customerId = todo.customerId,
+                  let customer = customersById[customerId],
+                  customerIdFilter.map({ $0 == customerId }) ?? true,
+                  folderIdsFilter.map({ ids in
+                      todo.folderId.map(ids.contains) ?? false
+                  }) ?? true else {
+                return nil
+            }
+
+            let category = categoriesById[todo.categoryId]
+            guard category?.isBillableDefault ?? true else { return nil }
+
+            let project = todo.projectId.flatMap { projectsById[$0] }
+            let billableSeconds: Int
+            let unitPriceMinor: Int
+            let fixedFeeMinor: Int?
+            let subtotalMinor: Int
+            let sourceKind: BillingLineSourceKind
+
+            switch override.overrideType {
+            case .projectedFee:
+                guard let projectedSeconds = override.projectedBillableSeconds,
+                      projectedSeconds > 0,
+                      let projectedUnitPrice = override.unitPriceMinor else {
+                    return nil
+                }
+                billableSeconds = projectedSeconds
+                unitPriceMinor = projectedUnitPrice
+                fixedFeeMinor = nil
+                subtotalMinor = Money.fromHourlyRate(
+                    Money(minorUnits: projectedUnitPrice, currency: override.currency),
+                    billableSeconds: projectedSeconds
+                ).minorUnits
+                sourceKind = .projectedFee
+            case .fixedFee:
+                guard let fee = override.fixedFeeMinor else { return nil }
+                billableSeconds = 0
+                unitPriceMinor = 0
+                fixedFeeMinor = fee
+                subtotalMinor = fee
+                sourceKind = .fixedFee
+            case .unitPrice:
+                return nil
+            }
+
+            let vat = vatCalculator.calculate(
+                subtotalMinor: subtotalMinor,
+                customerVatRateId: customer.vatRateId,
+                projectVatRateId: project?.vatRateId,
+                categoryVatRateId: category?.vatRateId,
+                dateString: pricingDateString
+            )
+
+            return BillingReportLine(
+                runId: runId,
+                sessionId: nil,
+                sourceKind: sourceKind,
+                sourceId: override.id,
+                todoId: todo.id,
+                todoTitle: todo.title,
+                projectId: project?.id,
+                projectName: project?.name,
+                customerId: customer.id,
+                customerName: customer.name,
+                categoryId: category?.id,
+                categoryName: category?.name,
+                serviceType: ServiceType(rawValue: customer.defaultServiceType) ?? .remote,
+                timeType: .regular,
+                actualSeconds: 0,
+                billableSeconds: billableSeconds,
+                unitPriceMinor: unitPriceMinor,
+                fixedFeeMinor: fixedFeeMinor,
+                amountMinor: subtotalMinor,
+                currency: override.currency,
+                vatRate: vat.rate,
+                vatMinor: vat.vatMinor,
+                totalMinor: vat.totalMinor,
+                isVatExempt: vat.isExempt,
+                isBillable: true,
+                isManual: false,
+                isFixedFee: sourceKind == .fixedFee,
+                startedAt: nil,
+                endedAt: nil,
+                note: override.note,
+                organizationId: todo.organizationId
+            )
+        }
     }
 
     // MARK: - PriceContext

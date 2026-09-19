@@ -5,10 +5,12 @@
 import Foundation
 import os
 
-/// Price override type for a specific todo.
-/// Per spec §3 / Q7 the two are XOR — either a unit price or a fixed fee.
+/// Billing arrangement for a specific todo. `unitPrice` keeps the existing
+/// tracked-time override, while the other cases are session-independent
+/// commercial sources that must be emitted once per todo.
 enum TodoBillingOverrideType: String, CaseIterable, Identifiable, Hashable {
     case unitPrice  // overrides the hourly unit price
+    case projectedFee // agreed man-hours multiplied by an hourly unit price
     case fixedFee   // total amount for the todo (duration-independent)
 
     var id: String { rawValue }
@@ -16,8 +18,13 @@ enum TodoBillingOverrideType: String, CaseIterable, Identifiable, Hashable {
     var title: String {
         switch self {
         case .unitPrice: return ProWorkLocalizer.shared.string("billingOverride.unitPrice", defaultValue: "Birim Ücret Override")
+        case .projectedFee: return ProWorkLocalizer.shared.string("billingOverride.projectedFee", defaultValue: "Projelendirilmiş Ücret")
         case .fixedFee: return ProWorkLocalizer.shared.string("billingOverride.fixedFee", defaultValue: "Sabit Tutar")
         }
+    }
+
+    var isSessionIndependent: Bool {
+        self == .projectedFee || self == .fixedFee
     }
 }
 
@@ -26,9 +33,12 @@ struct TodoBillingOverride: Identifiable, Hashable {
     let id: String
     var todoId: String
     var overrideType: TodoBillingOverrideType
-    /// Set when the type is `unitPrice`; nil when the type is `fixedFee`.
+    /// Set for tracked-time unit-price overrides and projected fees.
     var unitPriceMinor: Int?
-    /// Set when the type is `fixedFee`; nil when the type is `unitPrice`.
+    /// Contracted duration for `projectedFee`; actual work sessions remain
+    /// operational evidence and do not replace this priced quantity.
+    var projectedBillableSeconds: Int?
+    /// Set only when the type is `fixedFee`.
     var fixedFeeMinor: Int?
     var currency: String
     var note: String?
@@ -49,6 +59,7 @@ struct TodoBillingOverride: Identifiable, Hashable {
         todoId: String,
         overrideType: TodoBillingOverrideType,
         unitPriceMinor: Int? = nil,
+        projectedBillableSeconds: Int? = nil,
         fixedFeeMinor: Int? = nil,
         currency: String = "TRY",
         note: String? = nil,
@@ -63,30 +74,28 @@ struct TodoBillingOverride: Identifiable, Hashable {
         lastSyncedAt: Date? = nil,
         originDeviceId: String? = DeviceIdentity.current
     ) {
-        // the two price fields are XOR by spec
-        // (§3 / Q7). A row that carries both was silently resolved
-        // by BillingCalculator picking whichever field its current branch
-        // happened to read first, masking real billing-rule bugs.
-        // Normalise here so the model invariant is "exactly one of
-        // unitPriceMinor / fixedFeeMinor is non-nil, matching
-        // overrideType". In debug builds we trip an assertion so the
-        // source of the inconsistency is obvious; in release builds we
-        // drop the off-type value and log a warning rather than crash
-        // on a legacy row.
-        let (normalisedUnit, normalisedFixed): (Int?, Int?) = {
+        // Normalize fields by pricing method so stale values from a previous
+        // selection cannot leak into billing after the user changes methods.
+        let (normalisedUnit, normalisedProjectedSeconds, normalisedFixed): (Int?, Int?, Int?) = {
             switch overrideType {
             case .unitPrice:
+                if fixedFeeMinor != nil || projectedBillableSeconds != nil {
+                    assertionFailure("TodoBillingOverride: tracked-time override carried session-independent values; dropping them")
+                    ProWorkLog.database.error("TodoBillingOverride conflict (todoId=\(todoId, privacy: .private)): unitPrice override carried session-independent values; dropped.")
+                }
+                return (unitPriceMinor, nil, nil)
+            case .projectedFee:
                 if fixedFeeMinor != nil {
-                    assertionFailure("TodoBillingOverride: overrideType=.unitPrice but fixedFeeMinor is set; dropping fixedFeeMinor")
-                    ProWorkLog.database.error("TodoBillingOverride conflict (todoId=\(todoId, privacy: .private)): unitPrice override carried a fixedFee value; dropped.")
+                    assertionFailure("TodoBillingOverride: projectedFee carried fixedFeeMinor; dropping it")
+                    ProWorkLog.database.error("TodoBillingOverride conflict (todoId=\(todoId, privacy: .private)): projectedFee carried fixedFeeMinor; dropped.")
                 }
-                return (unitPriceMinor, nil)
+                return (unitPriceMinor, projectedBillableSeconds.map { max(0, $0) }, nil)
             case .fixedFee:
-                if unitPriceMinor != nil {
-                    assertionFailure("TodoBillingOverride: overrideType=.fixedFee but unitPriceMinor is set; dropping unitPriceMinor")
-                    ProWorkLog.database.error("TodoBillingOverride conflict (todoId=\(todoId, privacy: .private)): fixedFee override carried a unitPrice value; dropped.")
+                if unitPriceMinor != nil || projectedBillableSeconds != nil {
+                    assertionFailure("TodoBillingOverride: fixedFee carried hourly pricing values; dropping them")
+                    ProWorkLog.database.error("TodoBillingOverride conflict (todoId=\(todoId, privacy: .private)): fixedFee carried hourly pricing values; dropped.")
                 }
-                return (nil, fixedFeeMinor)
+                return (nil, nil, fixedFeeMinor)
             }
         }()
 
@@ -94,6 +103,7 @@ struct TodoBillingOverride: Identifiable, Hashable {
         self.todoId = todoId
         self.overrideType = overrideType
         self.unitPriceMinor = normalisedUnit
+        self.projectedBillableSeconds = normalisedProjectedSeconds
         self.fixedFeeMinor = normalisedFixed
         self.currency = currency.uppercased()
         self.note = note
@@ -139,6 +149,7 @@ extension TodoBillingOverride {
         todoId: String,
         overrideType: TodoBillingOverrideType,
         unitPriceMinor: Int? = nil,
+        projectedBillableSeconds: Int? = nil,
         fixedFeeMinor: Int? = nil,
         currency: String = "TRY",
         note: String? = nil,
@@ -149,6 +160,7 @@ extension TodoBillingOverride {
             todoId: todoId,
             overrideType: overrideType,
             unitPriceMinor: unitPriceMinor,
+            projectedBillableSeconds: projectedBillableSeconds,
             fixedFeeMinor: fixedFeeMinor,
             currency: currency,
             note: note,

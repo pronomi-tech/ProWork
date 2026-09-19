@@ -28,6 +28,7 @@ struct BillingRunCreateSheet: View {
         case todo
         case customer
         case project
+        case source
         case serviceType
         case timeType
         case startedAt
@@ -231,7 +232,7 @@ struct BillingRunCreateSheet: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(localized("billing.previewSelection.title", defaultValue: "Satır Seçimi"))
                             .proWorkTextStyle(.headline)
-                        Text(localized("billing.previewSelection.subtitle", defaultValue: "Aynı hesap satırı birden fazla hizmet dökümünde kullanılamaz. Kilitli satırlar görünür ama seçilemez."))
+                        Text(localized("billing.previewSelection.subtitle", defaultValue: "Süre kayıtları seçilen dönemden gelir; Projelendirilmiş Ücretler tarihten bağımsız kullanılabilir. Aynı kaynak ikinci kez seçilemez."))
                             .proWorkTextStyle(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -300,7 +301,7 @@ struct BillingRunCreateSheet: View {
                 ProWorkGridEmptyState(
                     systemImage: "list.bullet.clipboard",
                     title: localized("billing.previewSelection.empty.title", defaultValue: "Satır bulunamadı"),
-                    message: localized("billing.previewSelection.empty.message", defaultValue: "Seçilen dönem için hesaplanabilir hizmet satırı bulunamadı.")
+                    message: localized("billing.previewSelection.empty.message", defaultValue: "Seçilen dönemde süre kaydı veya kullanılabilir Projelendirilmiş Ücret bulunamadı.")
                 )
             },
             row: { line in previewRow(line) }
@@ -318,6 +319,9 @@ struct BillingRunCreateSheet: View {
             }
             previewHeaderCell(.project, defaultWidth: 150, minWidth: 90, maxWidth: 320, alignment: .leading) {
                 Text(localized("projects.title.single", defaultValue: "Proje"))
+            }
+            previewHeaderCell(.source, defaultWidth: 150, minWidth: 110, maxWidth: 260, alignment: .leading) {
+                Text(localized("workSessions.column.source", defaultValue: "Kaynak"))
             }
             previewHeaderCell(.serviceType, defaultWidth: 90, minWidth: 70, maxWidth: 220, alignment: .leading) {
                 Text(localized("priceLists.rows.form.serviceType", defaultValue: "Hizmet"))
@@ -346,7 +350,7 @@ struct BillingRunCreateSheet: View {
 
     private func previewRow(_ previewLine: BillingDraftPreviewLine) -> some View {
         let line = previewLine.line
-        let isOpenSession = line.endedAt == nil
+        let isOpenSession = line.sourceKind == .timeSession && line.endedAt == nil
 
         return HStack(spacing: 12) {
             ProWorkCheckbox(
@@ -369,6 +373,11 @@ struct BillingRunCreateSheet: View {
                 .proWorkTextStyle(.caption)
                 .foregroundStyle(.secondary)
                 .frame(width: previewColumnWidth(.project, defaultWidth: 150), alignment: .leading)
+                .lineLimit(1)
+            Text(billingSourceTitle(for: line))
+                .proWorkTextStyle(.caption, weight: line.sourceKind == .projectedFee ? .semibold : .regular)
+                .foregroundStyle(line.sourceKind == .projectedFee ? Color.accentColor : Color.secondary)
+                .frame(width: previewColumnWidth(.source, defaultWidth: 150), alignment: .leading)
                 .lineLimit(1)
             Text(line.isFixedFee ? localized("export.column.fixedFee", defaultValue: "Sabit") : line.serviceType.title)
                 .proWorkTextStyle(.caption)
@@ -397,7 +406,7 @@ struct BillingRunCreateSheet: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(line.isManual
                      ? localized("workSessions.source.manual", defaultValue: "Manuel")
-                     : localized("workSessions.source.automatic", defaultValue: "Otomatik"))
+                     : billingSourceTitle(for: line))
                     .proWorkTextStyle(.caption)
                     .foregroundStyle(line.isManual ? .orange : .secondary)
 
@@ -424,12 +433,24 @@ struct BillingRunCreateSheet: View {
             + previewColumnWidth(.todo, defaultWidth: 260)
             + previewColumnWidth(.customer, defaultWidth: 150)
             + previewColumnWidth(.project, defaultWidth: 150)
+            + previewColumnWidth(.source, defaultWidth: 150)
             + previewColumnWidth(.serviceType, defaultWidth: 90)
             + previewColumnWidth(.timeType, defaultWidth: 100)
             + previewColumnWidth(.startedAt, defaultWidth: 150)
             + previewColumnWidth(.billable, defaultWidth: 70)
             + previewColumnWidth(.amount, defaultWidth: 130)
             + previewColumnWidth(.status, defaultWidth: 180)
+    }
+
+    private func billingSourceTitle(for line: BillingReportLine) -> String {
+        switch line.sourceKind {
+        case .projectedFee:
+            return localized("billing.source.projectedFee", defaultValue: "Projelendirilmiş Ücret")
+        case .fixedFee:
+            return localized("billing.source.fixedFee", defaultValue: "Sabit Tutar")
+        case .timeSession, .none:
+            return localized("billing.source.timeSession", defaultValue: "Süre Kaydı")
+        }
     }
 
     private func previewHeaderCell<Content: View>(
