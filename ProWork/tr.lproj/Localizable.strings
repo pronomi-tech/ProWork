@@ -701,6 +701,7 @@
 "workSessions.column.end" = "Bitiş";
 "workSessions.column.duration" = "Süre";
 "workSessions.column.customerProject" = "Müşteri / Proje";
+"workSessions.column.serviceType" = "Çalışma Şekli";
 "workSessions.column.source" = "Kaynak";
 "workSessions.source.manual" = "Manuel";
 "workSessions.source.automatic" = "Otomatik";
@@ -766,11 +767,13 @@
 "workSessions.form.duration.minutes" = "%d dk";
 "workSessions.form.duration.hours" = "%d saat";
 "workSessions.form.note.placeholder" = "Opsiyonel not";
+"workSessions.form.serviceType" = "Çalışma Şekli";
+"workSessions.form.billingWindowMode" = "Zaman Penceresi";
+"workSessions.form.billingWindowMode.default" = "Varsayılan";
 "workSessions.form.billingTimeType" = "Mesai Değerlendirmesi";
 "workSessions.form.billingTimeType.automatic" = "Otomatik";
 "workSessions.form.billingTimeType.reason" = "Düzeltme Nedeni";
 "workSessions.form.billingTimeType.reason.placeholder" = "Opsiyonel açıklama";
-"workSessions.form.billingTimeType.help" = "Otomatik seçim çalışma aralığını mesai kurallarına göre böler. Manuel seçim kaydın faturalandırılabilir süresinin tamamına uygulanır.";
 "workSessions.form.tab.session" = "Çalışma Bilgileri";
 "workSessions.form.tab.assessment" = "Mesai ve Not";
 "workSessions.form.error.invalidRange" = "Yapılacak iş seçilmeli ve bitiş zamanı başlangıçtan sonra olmalıdır.";

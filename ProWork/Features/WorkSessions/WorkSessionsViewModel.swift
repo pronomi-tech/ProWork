@@ -205,6 +205,8 @@ final class WorkSessionsViewModel: ObservableObject {
         startedAt: Date,
         endedAt: Date,
         note: String?,
+        serviceType: ServiceType,
+        billingWindowModeOverride: BillingWindowMode?,
         billingTimeTypeOverride: TimeType?,
         billingTimeTypeOverrideReason: String?
     ) -> Bool {
@@ -214,6 +216,8 @@ final class WorkSessionsViewModel: ObservableObject {
                 startedAt: startedAt,
                 endedAt: endedAt,
                 note: note,
+                serviceType: serviceType,
+                billingWindowModeOverride: billingWindowModeOverride,
                 billingTimeTypeOverride: billingTimeTypeOverride,
                 billingTimeTypeOverrideReason: billingTimeTypeOverrideReason
             )
@@ -234,6 +238,8 @@ final class WorkSessionsViewModel: ObservableObject {
         endedAt: Date,
         note: String?,
         isManual: Bool,
+        serviceType: ServiceType,
+        billingWindowModeOverride: BillingWindowMode?,
         billingTimeTypeOverride: TimeType?,
         billingTimeTypeOverrideReason: String?
     ) -> Bool {
@@ -245,6 +251,8 @@ final class WorkSessionsViewModel: ObservableObject {
                 endedAt: endedAt,
                 note: note,
                 isManual: isManual,
+                serviceType: serviceType,
+                billingWindowModeOverride: billingWindowModeOverride,
                 billingTimeTypeOverride: billingTimeTypeOverride,
                 billingTimeTypeOverrideReason: billingTimeTypeOverrideReason
             )

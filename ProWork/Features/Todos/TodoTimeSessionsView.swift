@@ -53,12 +53,14 @@ struct TodoTimeSessionsView: View {
                 categories: viewModel.categories,
                 statuses: viewModel.statuses,
                 fixedTodo: todo
-            ) { _, todoId, startedAt, endedAt, note, _, timeTypeOverride, overrideReason in
+            ) { _, todoId, startedAt, endedAt, note, _, serviceType, windowModeOverride, timeTypeOverride, overrideReason in
                 if viewModel.createManualSession(
                     todoId: todoId,
                     startedAt: startedAt,
                     endedAt: endedAt,
                     note: note,
+                    serviceType: serviceType,
+                    billingWindowModeOverride: windowModeOverride,
                     billingTimeTypeOverride: timeTypeOverride,
                     billingTimeTypeOverrideReason: overrideReason
                 ) {
@@ -78,11 +80,11 @@ struct TodoTimeSessionsView: View {
                 fixedTodo: todo,
                 onContinue: viewModel.canResumeRecentlyEndedSession(session) ? {
                     if viewModel.resumeRecentlyEndedSession(id: session.id, todoId: todo.id) {
-                        automationController.refresh()
+                        automationController.synchronizeExternalSessionChange()
                         editingSession = nil
                     }
                 } : nil
-            ) { sessionId, todoId, startedAt, endedAt, note, isManual, timeTypeOverride, overrideReason in
+            ) { sessionId, todoId, startedAt, endedAt, note, isManual, serviceType, windowModeOverride, timeTypeOverride, overrideReason in
                 guard let sessionId else {
                     return
                 }
@@ -94,6 +96,8 @@ struct TodoTimeSessionsView: View {
                     endedAt: endedAt,
                     note: note,
                     isManual: isManual,
+                    serviceType: serviceType,
+                    billingWindowModeOverride: windowModeOverride,
                     billingTimeTypeOverride: timeTypeOverride,
                     billingTimeTypeOverrideReason: overrideReason
                 ) {
@@ -190,6 +194,9 @@ struct TodoTimeSessionsView: View {
             Text(settingsStore.localized("workSessions.column.source", defaultValue: "Kaynak"))
                 .frame(width: ProWorkLayout.scaled(80, using: settingsStore), alignment: .leading)
 
+            Text(settingsStore.localized("workSessions.column.serviceType", defaultValue: "Çalışma Şekli"))
+                .frame(width: ProWorkLayout.scaled(105, using: settingsStore), alignment: .leading)
+
             Text(settingsStore.localized("vat.form.note", defaultValue: "Not"))
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -222,6 +229,12 @@ struct TodoTimeSessionsView: View {
 
             sourceBadge(session)
                 .frame(width: ProWorkLayout.scaled(80, using: settingsStore), alignment: .leading)
+
+            Label(session.serviceType.title, systemImage: session.serviceType.systemImage)
+                .proWorkTextStyle(.caption2, weight: .medium)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(width: ProWorkLayout.scaled(105, using: settingsStore), alignment: .leading)
 
             VStack(alignment: .leading, spacing: ProWorkLayout.scaled(2, using: settingsStore)) {
                 if let timeType = session.billingTimeTypeOverride {
@@ -397,6 +410,8 @@ struct TodoTimeSessionsView: View {
             endedAt: session.endedAt,
             durationSeconds: session.durationSeconds,
             isManual: session.isManual,
+            serviceType: session.serviceType,
+            billingWindowModeOverride: session.billingWindowModeOverride,
             note: session.note,
             billingTimeTypeOverride: session.billingTimeTypeOverride,
             billingTimeTypeOverrideReason: session.billingTimeTypeOverrideReason,

@@ -236,6 +236,68 @@ final class TodoTimeSessionRepositoryIntegrationTests: XCTestCase {
         XCTAssertEqual(session.note, "Tamamlandı")
     }
 
+    func test_serviceType_usesProjectDefaultAndAllowsPerSessionOverride() throws {
+        let customer = Customer(name: "Yerinde müşteri", defaultServiceType: ServiceType.onsite.rawValue)
+        try CustomerRepository().insert(customer)
+        let project = Project(
+            customerId: customer.id,
+            name: "Uzaktan proje",
+            defaultServiceType: ServiceType.remote.rawValue
+        )
+        try ProjectRepository().insert(project)
+        let scopedTodo = Todo(
+            customerId: customer.id,
+            projectId: project.id,
+            categoryId: category.id,
+            title: "Hizmet türü testi",
+            statusId: BuiltInTodoStatusId.waiting
+        )
+        try todoRepository.insert(scopedTodo)
+
+        try sessionRepository.startSession(
+            todoId: scopedTodo.id,
+            startStatusId: BuiltInTodoStatusId.inProgress
+        )
+        XCTAssertEqual(
+            try sessionRepository.fetchOpenSession(todoId: scopedTodo.id)?.serviceType,
+            .remote
+        )
+        if let openSessionId = try sessionRepository.fetchOpenSession(todoId: scopedTodo.id)?.id {
+            try sessionRepository.stopSession(
+                sessionId: openSessionId,
+                endStatusId: BuiltInTodoStatusId.done
+            )
+        }
+
+        let started = Date(timeIntervalSince1970: 1_700_000_000)
+        try sessionRepository.insertManualSession(
+            todoId: scopedTodo.id,
+            startedAt: started,
+            endedAt: started.addingTimeInterval(3600),
+            note: nil,
+            serviceType: .onsite
+        )
+
+        var manualSession = try XCTUnwrap(
+            try sessionRepository.fetchSessions(todoId: scopedTodo.id).first(where: { $0.isManual })
+        )
+        XCTAssertEqual(manualSession.serviceType, .onsite)
+
+        try sessionRepository.updateSession(
+            id: manualSession.id,
+            todoId: scopedTodo.id,
+            startedAt: started,
+            endedAt: started.addingTimeInterval(3600),
+            note: nil,
+            isManual: true,
+            serviceType: .remote
+        )
+        manualSession = try XCTUnwrap(
+            try sessionRepository.fetchSessions(todoId: scopedTodo.id).first(where: { $0.isManual })
+        )
+        XCTAssertEqual(manualSession.serviceType, .remote)
+    }
+
     func test_timeTypeOverride_roundTripsAndAutomaticClearsReason() throws {
         let started = Date(timeIntervalSince1970: 1_700_000_000)
         let ended = started.addingTimeInterval(3600)
@@ -266,6 +328,47 @@ final class TodoTimeSessionRepositoryIntegrationTests: XCTestCase {
         session = try XCTUnwrap(try sessionRepository.fetchSessions(todoId: todo.id).first)
         XCTAssertNil(session.billingTimeTypeOverride)
         XCTAssertNil(session.billingTimeTypeOverrideReason)
+    }
+
+    func test_billingWindowModeOverride_roundTripsAndCanReturnToDefault() throws {
+        let started = Date(timeIntervalSince1970: 1_700_000_000)
+        let ended = started.addingTimeInterval(600)
+        try sessionRepository.insertManualSession(
+            todoId: todo.id,
+            startedAt: started,
+            endedAt: ended,
+            note: nil,
+            billingWindowModeOverride: .session
+        )
+
+        var session = try XCTUnwrap(try sessionRepository.fetchSessions(todoId: todo.id).first)
+        XCTAssertEqual(session.billingWindowModeOverride, .session)
+
+        try sessionRepository.updateSession(
+            id: session.id,
+            todoId: todo.id,
+            startedAt: started,
+            endedAt: ended,
+            note: nil,
+            isManual: true,
+            billingWindowModeOverride: nil
+        )
+
+        session = try XCTUnwrap(try sessionRepository.fetchSessions(todoId: todo.id).first)
+        XCTAssertNil(session.billingWindowModeOverride)
+    }
+
+    func test_billingWindowModeOverride_rejectsNonSessionMode() throws {
+        let started = Date(timeIntervalSince1970: 1_700_000_000)
+        XCTAssertThrowsError(
+            try sessionRepository.insertManualSession(
+                todoId: todo.id,
+                startedAt: started,
+                endedAt: started.addingTimeInterval(600),
+                note: nil,
+                billingWindowModeOverride: .report
+            )
+        )
     }
 
     func test_timeTypeOverride_rejectsUnknownPersistedValue() throws {

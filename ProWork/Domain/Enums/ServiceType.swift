@@ -36,4 +36,19 @@ enum ServiceType: String, CaseIterable, Identifiable, Hashable {
     }
 
     static let `default`: ServiceType = .remote
+
+    static func resolvedDefault(
+        projectValue: String?,
+        customerValue: String?
+    ) -> ServiceType {
+        if let projectValue,
+           let projectServiceType = ServiceType(rawValue: projectValue) {
+            return projectServiceType
+        }
+        if let customerValue,
+           let customerServiceType = ServiceType(rawValue: customerValue) {
+            return customerServiceType
+        }
+        return .default
+    }
 }

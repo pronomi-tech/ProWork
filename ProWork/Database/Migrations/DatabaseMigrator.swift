@@ -105,7 +105,8 @@ enum DatabaseMigrator {
             Migration002(),
             Migration003(),
             Migration004(),
-            Migration005()
+            Migration005(),
+            Migration006()
         ]
     }
 

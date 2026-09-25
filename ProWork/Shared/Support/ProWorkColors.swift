@@ -12,7 +12,7 @@ import os
 /// removing a color.
 enum ProWorkColors {
     enum Named: String, CaseIterable {
-        case blue, orange, purple, cyan, red, green, yellow, indigo, mint, pink
+        case blue, orange, purple, cyan, red, green, yellow, indigo, mint, pink, gray
 
         var color: Color {
             switch self {
@@ -26,6 +26,7 @@ enum ProWorkColors {
             case .indigo: return .indigo
             case .mint: return .mint
             case .pink: return .pink
+            case .gray: return .gray
             }
         }
     }

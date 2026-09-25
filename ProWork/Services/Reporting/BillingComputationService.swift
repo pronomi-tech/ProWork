@@ -561,7 +561,9 @@ final class BillingComputationService {
         }
 
         func effectiveBillingWindowMode(organizationMode: BillingWindowMode) -> BillingWindowMode {
-            input.project?.billingWindowMode ?? organizationMode
+            input.session.billingWindowModeOverride
+                ?? input.project?.billingWindowMode
+                ?? organizationMode
         }
     }
 

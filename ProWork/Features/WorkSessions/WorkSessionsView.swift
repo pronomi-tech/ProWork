@@ -159,12 +159,14 @@ struct WorkSessionsView: View {
                 onTodosChanged: { _ in
                     viewModel.loadData()
                 }
-            ) { _, todoId, startedAt, endedAt, note, _, timeTypeOverride, overrideReason in
+            ) { _, todoId, startedAt, endedAt, note, _, serviceType, windowModeOverride, timeTypeOverride, overrideReason in
                 if viewModel.createManualSession(
                     todoId: todoId,
                     startedAt: startedAt,
                     endedAt: endedAt,
                     note: note,
+                    serviceType: serviceType,
+                    billingWindowModeOverride: windowModeOverride,
                     billingTimeTypeOverride: timeTypeOverride,
                     billingTimeTypeOverrideReason: overrideReason
                 ) {
@@ -186,11 +188,11 @@ struct WorkSessionsView: View {
                 },
                 onContinue: viewModel.canResumeRecentlyEndedSession(session) ? {
                     if viewModel.resumeRecentlyEndedSession(id: session.id) {
-                        automationController.refresh()
+                        automationController.synchronizeExternalSessionChange()
                         editingSession = nil
                     }
                 } : nil
-            ) { sessionId, todoId, startedAt, endedAt, note, isManual, timeTypeOverride, overrideReason in
+            ) { sessionId, todoId, startedAt, endedAt, note, isManual, serviceType, windowModeOverride, timeTypeOverride, overrideReason in
                 guard let sessionId else { return }
 
                 if viewModel.updateSession(
@@ -200,6 +202,8 @@ struct WorkSessionsView: View {
                     endedAt: endedAt,
                     note: note,
                     isManual: isManual,
+                    serviceType: serviceType,
+                    billingWindowModeOverride: windowModeOverride,
                     billingTimeTypeOverride: timeTypeOverride,
                     billingTimeTypeOverrideReason: overrideReason
                 ) {
@@ -610,6 +614,9 @@ struct WorkSessionsView: View {
             Text(settingsStore.localized("workSessions.column.customerProject", defaultValue: "Müşteri / Proje"))
                 .proWorkFrame(width: 190, alignment: .leading)
 
+            Text(settingsStore.localized("workSessions.column.serviceType", defaultValue: "Çalışma Şekli"))
+                .proWorkFrame(width: 100, alignment: .leading)
+
             Text(settingsStore.localized("todoForm.folder", defaultValue: "Klasör"))
                 .proWorkFrame(width: 150, alignment: .leading)
 
@@ -681,6 +688,12 @@ struct WorkSessionsView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
                 .proWorkFrame(width: 190, alignment: .leading)
+
+            Label(session.serviceType.title, systemImage: session.serviceType.systemImage)
+                .proWorkTextStyle(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .proWorkFrame(width: 100, alignment: .leading)
 
             Text(viewModel.folderPath(forTodoId: session.todoId) ?? "—")
                 .proWorkTextStyle(.caption)

@@ -701,6 +701,7 @@
 "workSessions.column.end" = "End";
 "workSessions.column.duration" = "Duration";
 "workSessions.column.customerProject" = "Customer / Project";
+"workSessions.column.serviceType" = "Work Location";
 "workSessions.column.source" = "Source";
 "workSessions.source.manual" = "Manual";
 "workSessions.source.automatic" = "Automatic";
@@ -766,11 +767,13 @@
 "workSessions.form.duration.minutes" = "%d min";
 "workSessions.form.duration.hours" = "%d hour";
 "workSessions.form.note.placeholder" = "Optional note";
+"workSessions.form.serviceType" = "Work Location";
+"workSessions.form.billingWindowMode" = "Billing Window";
+"workSessions.form.billingWindowMode.default" = "Default";
 "workSessions.form.billingTimeType" = "Working-hours Assessment";
 "workSessions.form.billingTimeType.automatic" = "Automatic";
 "workSessions.form.billingTimeType.reason" = "Adjustment Reason";
 "workSessions.form.billingTimeType.reason.placeholder" = "Optional explanation";
-"workSessions.form.billingTimeType.help" = "Automatic splits the work range according to working-hours rules. A manual selection applies to the entire billable duration of the record.";
 "workSessions.form.tab.session" = "Work Details";
 "workSessions.form.tab.assessment" = "Assessment & Note";
 "workSessions.form.error.invalidRange" = "A todo must be selected and the end time must be after the start time.";

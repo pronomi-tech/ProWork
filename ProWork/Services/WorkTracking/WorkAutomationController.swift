@@ -107,6 +107,13 @@ final class WorkAutomationController: ObservableObject {
         }
     }
 
+    /// Synchronizes mutations performed by database-backed forms with every
+    /// screen that observes the shared work-session revision.
+    func synchronizeExternalSessionChange() {
+        refresh()
+        workSessionRevision &+= 1
+    }
+
     func startWork(todoId: String) {
         runAction {
             try controlService.startWork(todoId: todoId)

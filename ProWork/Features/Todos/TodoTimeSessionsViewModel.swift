@@ -52,6 +52,8 @@ final class TodoTimeSessionsViewModel: ObservableObject {
         startedAt: Date,
         endedAt: Date,
         note: String?,
+        serviceType: ServiceType,
+        billingWindowModeOverride: BillingWindowMode?,
         billingTimeTypeOverride: TimeType?,
         billingTimeTypeOverrideReason: String?
     ) -> Bool {
@@ -61,6 +63,8 @@ final class TodoTimeSessionsViewModel: ObservableObject {
                 startedAt: startedAt,
                 endedAt: endedAt,
                 note: note,
+                serviceType: serviceType,
+                billingWindowModeOverride: billingWindowModeOverride,
                 billingTimeTypeOverride: billingTimeTypeOverride,
                 billingTimeTypeOverrideReason: billingTimeTypeOverrideReason
             )
@@ -81,6 +85,8 @@ final class TodoTimeSessionsViewModel: ObservableObject {
         endedAt: Date,
         note: String?,
         isManual: Bool,
+        serviceType: ServiceType,
+        billingWindowModeOverride: BillingWindowMode?,
         billingTimeTypeOverride: TimeType?,
         billingTimeTypeOverrideReason: String?
     ) -> Bool {
@@ -92,6 +98,8 @@ final class TodoTimeSessionsViewModel: ObservableObject {
                 endedAt: endedAt,
                 note: note,
                 isManual: isManual,
+                serviceType: serviceType,
+                billingWindowModeOverride: billingWindowModeOverride,
                 billingTimeTypeOverride: billingTimeTypeOverride,
                 billingTimeTypeOverrideReason: billingTimeTypeOverrideReason
             )

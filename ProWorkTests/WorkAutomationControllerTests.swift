@@ -69,6 +69,18 @@ final class WorkAutomationControllerTests: XCTestCase {
         XCTAssertNotNil(controller.lastAutomationMessage)
     }
 
+    func testSynchronizeExternalSessionChangeAdvancesRevisionAndRefreshesState() throws {
+        try TodoTimeSessionRepository().startSession(
+            todoId: todo.id,
+            startStatusId: todo.statusId
+        )
+
+        controller.synchronizeExternalSessionChange()
+
+        XCTAssertEqual(controller.workSessionRevision, 1)
+        XCTAssertEqual(controller.activeSession?.todoId, todo.id)
+    }
+
     func testIdleAutoStop_doesNotPauseAIAgentTask() throws {
         var aiTodo = todo!
         aiTodo.isAIAgentTask = true

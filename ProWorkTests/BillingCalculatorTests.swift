@@ -82,6 +82,50 @@ final class BillingCalculatorTests: XCTestCase {
         XCTAssertEqual(line.totalMinor, 180_000)
     }
 
+    func test_sessionServiceType_overridesCustomerDefaultForPricing() {
+        let start = date(2026, 5, 7, 10, 0)
+        let end = date(2026, 5, 7, 11, 0)
+        let category = TaskCategory(id: "dev", name: "Geliştirme", isBillableDefault: true)
+        let customer = Customer(id: "C1", name: "ABC", defaultServiceType: "remote", defaultMinBillingMinutes: 0)
+        let todo = Todo(customerId: customer.id, categoryId: category.id, title: "Yerinde çalışma", isBillable: true)
+        let session = TodoTimeSession(
+            todoId: todo.id,
+            startedAt: start,
+            endedAt: end,
+            durationSeconds: 3600,
+            serviceType: .onsite
+        )
+        let priceList = PriceList(id: "L", ownerType: .customer, ownerId: customer.id, name: "Liste", currency: "TRY")
+        let remoteRow = PriceListRow(priceListId: priceList.id, serviceType: .remote, timeType: .regular, unitPriceMinor: 100_000)
+        let onsiteRow = PriceListRow(priceListId: priceList.id, serviceType: .onsite, timeType: .regular, unitPriceMinor: 250_000)
+        let context = PriceResolutionContext(
+            todoOverride: nil,
+            projectPriceLists: [],
+            customerPriceLists: [priceList],
+            globalPriceLists: [],
+            organizationCurrency: "TRY",
+            rowsByListId: [priceList.id: [remoteRow, onsiteRow]]
+        )
+
+        let output = BillingCalculator.calculate(
+            input: BillingCalculationInput(
+                session: session,
+                todo: todo,
+                customer: customer,
+                project: nil,
+                category: category,
+                rule: standardRule(),
+                holidays: [],
+                priceContext: context,
+                vatCalculator: BillingFixtures.standardVatCalculator()
+            ),
+            runId: "session-service-type"
+        )
+
+        XCTAssertEqual(output.lines.first?.serviceType, .onsite)
+        XCTAssertEqual(output.lines.first?.unitPriceMinor, 250_000)
+    }
+
     func test_withoutMinimumWindow_pricesExactSeconds_withoutMinuteRounding() {
         let start = date(2026, 9, 11, 9, 2, 0)
         let end = date(2026, 9, 11, 10, 48, 28)

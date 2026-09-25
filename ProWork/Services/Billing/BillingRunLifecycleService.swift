@@ -656,16 +656,17 @@ final class BillingRunLifecycleService {
             customerId: customerId,
             excludingRunId: excludingRunId
         )
-        let assignmentByKey = Dictionary(
-            assignments.map { ($0.selectionKey, $0.runLabel) },
-            uniquingKeysWith: { current, _ in current }
-        )
-        let previewLines = lines.map { line in
-            BillingDraftPreviewLine(
-                line: line,
-                blockingRunLabel: assignmentByKey[line.selectionKey] ?? (line.sourceKind == .timeSession && line.endedAt == nil ? ProWorkLocalizer.shared.string("billingRuns.blocking.openSession", defaultValue: "Açık oturum") : nil)
-            )
-        }
+        let assignedKeys = Set(assignments.map(\.selectionKey))
+        let previewLines = lines
+            .filter { !assignedKeys.contains($0.selectionKey) }
+            .map { line in
+                BillingDraftPreviewLine(
+                    line: line,
+                    blockingRunLabel: line.sourceKind == .timeSession && line.endedAt == nil
+                        ? ProWorkLocalizer.shared.string("billingRuns.blocking.openSession", defaultValue: "Açık oturum")
+                        : nil
+                )
+            }
         return BillingDraftPreview(
             lines: previewLines
         )
@@ -695,24 +696,25 @@ final class BillingRunLifecycleService {
                 kind: .livePreview
             )
             let customerIds = Set(lines.map(\.customerId))
-            var assignmentByKey: [String: String] = [:]
+            var assignedKeys: Set<String> = []
             for customerId in customerIds {
                 let assignments = try lineRepository.fetchSelectionAssignments(
                     organizationId: organizationId,
                     customerId: customerId
                 )
-                for assignment in assignments where assignmentByKey[assignment.selectionKey] == nil {
-                    assignmentByKey[assignment.selectionKey] = assignment.runLabel
-                }
+                assignedKeys.formUnion(assignments.map(\.selectionKey))
             }
             return BillingDraftPreview(
-                lines: lines.map { line in
-                    BillingDraftPreviewLine(
-                        line: line,
-                        blockingRunLabel: assignmentByKey[line.selectionKey]
-                            ?? (line.sourceKind == .timeSession && line.endedAt == nil ? ProWorkLocalizer.shared.string("billingRuns.blocking.openSession", defaultValue: "Açık oturum") : nil)
-                    )
-                }
+                lines: lines
+                    .filter { !assignedKeys.contains($0.selectionKey) }
+                    .map { line in
+                        BillingDraftPreviewLine(
+                            line: line,
+                            blockingRunLabel: line.sourceKind == .timeSession && line.endedAt == nil
+                                ? ProWorkLocalizer.shared.string("billingRuns.blocking.openSession", defaultValue: "Açık oturum")
+                                : nil
+                        )
+                    }
             )
         }
     }

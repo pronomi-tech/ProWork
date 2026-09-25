@@ -10,6 +10,7 @@
 import XCTest
 @testable import ProWork
 
+@MainActor
 final class BillingPdfRendererSmokeTests: XCTestCase {
 
     func test_billingPdfRenderer_producesValidPDFForMinimalBundle() async throws {

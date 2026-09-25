@@ -37,18 +37,13 @@ final class ProjectsViewModel: ObservableObject, CRUDListViewModel {
         self.organizationRepository = services.organizationRepository
         self.vatRateRepository = services.vatRateRepository
 
-        // Swift 6 strict concurrency: NotificationCenter handler bir
-        // Sendable closure — can't directly capture the @MainActor-
-        // isolated `self`. Solution: the handler only fires
-        // `Task { @MainActor }` and after the hop re-acquires `self`
-        // yakalar. `queue: .main` zaten main thread'i garantiliyor, ama
-        // through a weak reference; MainActor isolation at the type level
-        // is provided by the Task.
+        // NotificationCenter's callback is Sendable, so retain self weakly
+        // until the explicit MainActor hop that performs the UI reload.
         customersChangeObserver = NotificationCenter.default.addObserver(
             forName: .proWorkCustomersDidChange,
             object: nil,
             queue: .main
-        ) { _ in
+        ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.load()
             }

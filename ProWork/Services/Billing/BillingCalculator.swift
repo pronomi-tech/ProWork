@@ -3,7 +3,8 @@
 //  Created by Pronomi.
 //  Spec §4 + §5 + §8 — The correct billing flow:
 //   1. Read the work record
-//   2. Resolve the todo info (customer/project/category/service type)
+//   2. Resolve the todo info (customer/project/category) and use the service
+//      type snapshot stored on the work record
 //   3. Check whether it's billable
 //   4. **First apply the minimum window** (sliding from session start):
 //        N = ceil(actualSeconds / windowSeconds)
@@ -167,7 +168,7 @@ enum BillingCalculator {
             totalBillableSeconds: isBillable ? billableSeconds : 0
         )
 
-        let serviceType = ServiceType(rawValue: customer.defaultServiceType) ?? .remote
+        let serviceType = session.serviceType
 
         // 6-7. Produce a line for each time-type chunk (VAT not yet applied).
         var lines: [BillingReportLine] = []
@@ -325,7 +326,7 @@ enum BillingCalculator {
             customerName: input.customer.name,
             categoryId: input.category?.id,
             categoryName: input.category?.name,
-            serviceType: ServiceType(rawValue: input.customer.defaultServiceType) ?? .remote,
+            serviceType: session.serviceType,
             timeType: session.billingTimeTypeOverride ?? .regular,
             segmentIndex: 0,
             actualSeconds: actualSeconds,

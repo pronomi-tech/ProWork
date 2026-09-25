@@ -57,6 +57,8 @@ struct WorkSessionFormView: View {
         _ endedAt: Date,
         _ note: String?,
         _ isManual: Bool,
+        _ serviceType: ServiceType,
+        _ billingWindowModeOverride: BillingWindowMode?,
         _ billingTimeTypeOverride: TimeType?,
         _ billingTimeTypeOverrideReason: String?
     ) -> Void
@@ -69,6 +71,8 @@ struct WorkSessionFormView: View {
     @State private var endDayOffset: Int = 0
     @State private var note: String = ""
     @State private var isManual: Bool = true
+    @State private var serviceTypeRawValue: String = ServiceType.default.rawValue
+    @State private var billingWindowModeOverrideRawValue: String = ""
     @State private var billingTimeTypeOverrideRawValue: String = ""
     @State private var billingTimeTypeOverrideReason: String = ""
     @State private var isShowingCreateTodoForm = false
@@ -93,6 +97,8 @@ struct WorkSessionFormView: View {
             _ endedAt: Date,
             _ note: String?,
             _ isManual: Bool,
+            _ serviceType: ServiceType,
+            _ billingWindowModeOverride: BillingWindowMode?,
             _ billingTimeTypeOverride: TimeType?,
             _ billingTimeTypeOverrideReason: String?
         ) -> Void
@@ -153,6 +159,11 @@ struct WorkSessionFormView: View {
         }
         .onChange(of: endDayOffset) { _, newValue in
             syncEndDateToOffset(newValue)
+        }
+        .onChange(of: selectedTodoId) { _, _ in
+            if isCreateMode {
+                applyDefaultServiceType()
+            }
         }
         .onChange(of: todos) { _, newValue in
             localTodos = newValue
@@ -219,6 +230,7 @@ struct WorkSessionFormView: View {
     private var sessionFields: some View {
         VStack(alignment: .leading, spacing: ProWorkLayout.scaled(14, using: settingsStore)) {
             todoSection
+            serviceTypeSection
             dateSection
             timeCards
             if showsQuickDurations {
@@ -227,8 +239,49 @@ struct WorkSessionFormView: View {
         }
     }
 
+    private var serviceTypeSection: some View {
+        VStack(alignment: .leading, spacing: ProWorkLayout.scaled(10, using: settingsStore)) {
+            Text(settingsStore.localized("workSessions.form.serviceType", defaultValue: "Çalışma Şekli"))
+                .proWorkTextStyle(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: ProWorkLayout.scaled(8, using: settingsStore)) {
+                ForEach(ServiceType.allCases) { serviceType in
+                    serviceTypeButton(serviceType)
+                }
+            }
+
+        }
+        .padding(ProWorkLayout.scaled(12, using: settingsStore))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: ProWorkLayout.scaled(14, using: settingsStore)))
+        .overlay(
+            RoundedRectangle(cornerRadius: ProWorkLayout.scaled(14, using: settingsStore))
+                .stroke(.quaternary, lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private func serviceTypeButton(_ serviceType: ServiceType) -> some View {
+        let button = Button {
+            serviceTypeRawValue = serviceType.rawValue
+        } label: {
+            Label(serviceType.title, systemImage: serviceType.systemImage)
+                .frame(maxWidth: .infinity, minHeight: ProWorkLayout.scaled(32, using: settingsStore))
+        }
+        .disabled(isActiveEditMode)
+
+        if serviceTypeRawValue == serviceType.rawValue {
+            button.buttonStyle(.borderedProminent)
+        } else {
+            button.buttonStyle(.bordered)
+        }
+    }
+
     private var assessmentFields: some View {
         VStack(alignment: .leading, spacing: ProWorkLayout.scaled(14, using: settingsStore)) {
+            billingWindowModeSection
             billingTimeTypeSection
             noteSection
         }
@@ -249,6 +302,11 @@ struct WorkSessionFormView: View {
         }
 
         return session.endedAt == nil
+    }
+
+    private var isCreateMode: Bool {
+        if case .create = mode { return true }
+        return false
     }
 
     private var showsQuickDurations: Bool {
@@ -634,13 +692,6 @@ struct WorkSessionFormView: View {
                 minHeight: 64
             )
             .disabled(isActiveEditMode || selectedBillingTimeTypeOverride == nil)
-
-            Text(settingsStore.localized(
-                "workSessions.form.billingTimeType.help",
-                defaultValue: "Otomatik seçim çalışma aralığını mesai kurallarına göre böler. Manuel seçim kaydın faturalandırılabilir süresinin tamamına uygulanır."
-            ))
-            .proWorkTextStyle(.caption2)
-            .foregroundStyle(.secondary)
         }
         .padding(ProWorkLayout.scaled(14, using: settingsStore))
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -650,6 +701,52 @@ struct WorkSessionFormView: View {
             RoundedRectangle(cornerRadius: ProWorkLayout.scaled(14, using: settingsStore))
                 .stroke(.quaternary, lineWidth: 1)
         )
+    }
+
+    private var billingWindowModeSection: some View {
+        VStack(alignment: .leading, spacing: ProWorkLayout.scaled(6, using: settingsStore)) {
+            Text(settingsStore.localized("workSessions.form.billingWindowMode", defaultValue: "Zaman Penceresi"))
+                .proWorkTextStyle(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: ProWorkLayout.scaled(8, using: settingsStore)) {
+                billingWindowModeButton(
+                    title: settingsStore.localized("workSessions.form.billingWindowMode.default", defaultValue: "Varsayılan"),
+                    rawValue: ""
+                )
+                billingWindowModeButton(
+                    title: BillingWindowMode.session.title,
+                    rawValue: BillingWindowMode.session.rawValue
+                )
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .padding(ProWorkLayout.scaled(14, using: settingsStore))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: ProWorkLayout.scaled(14, using: settingsStore)))
+        .overlay(
+            RoundedRectangle(cornerRadius: ProWorkLayout.scaled(14, using: settingsStore))
+                .stroke(.quaternary, lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private func billingWindowModeButton(title: String, rawValue: String) -> some View {
+        let button = Button {
+            billingWindowModeOverrideRawValue = rawValue
+        } label: {
+            Text(title)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, minHeight: ProWorkLayout.scaled(30, using: settingsStore))
+        }
+        .disabled(isActiveEditMode)
+
+        if billingWindowModeOverrideRawValue == rawValue {
+            button.buttonStyle(.borderedProminent)
+        } else {
+            button.buttonStyle(.bordered)
+        }
     }
 
     private var footer: some View {
@@ -700,6 +797,10 @@ struct WorkSessionFormView: View {
         TimeType(rawValue: billingTimeTypeOverrideRawValue)
     }
 
+    private var selectedBillingWindowModeOverride: BillingWindowMode? {
+        billingWindowModeOverrideRawValue == BillingWindowMode.session.rawValue ? .session : nil
+    }
+
     @ViewBuilder
     private func billingTimeTypeButton(title: String, rawValue: String) -> some View {
         let button = Button {
@@ -726,6 +827,8 @@ struct WorkSessionFormView: View {
             endedAt = roundedToFiveMinutes(Date())
             workDate = startedAt
             isManual = true
+            applyDefaultServiceType()
+            billingWindowModeOverrideRawValue = ""
             billingTimeTypeOverrideRawValue = ""
             billingTimeTypeOverrideReason = ""
 
@@ -740,6 +843,8 @@ struct WorkSessionFormView: View {
             workDate = startedAt
             note = session.note ?? ""
             isManual = session.isManual
+            serviceTypeRawValue = session.serviceType.rawValue
+            billingWindowModeOverrideRawValue = session.billingWindowModeOverride?.rawValue ?? ""
             billingTimeTypeOverrideRawValue = session.billingTimeTypeOverride?.rawValue ?? ""
             billingTimeTypeOverrideReason = session.billingTimeTypeOverrideReason ?? ""
 
@@ -779,6 +884,7 @@ struct WorkSessionFormView: View {
 
         localTodos = refreshedTodos
         selectedTodoId = todo.id
+        applyDefaultServiceType()
         onTodosChanged?(refreshedTodos)
         isShowingCreateTodoForm = false
     }
@@ -792,6 +898,25 @@ struct WorkSessionFormView: View {
         } else {
             endDayOffset = 0
         }
+    }
+
+    private func applyDefaultServiceType() {
+        guard let todo = localTodos.first(where: { $0.id == effectiveTodoId }) else {
+            serviceTypeRawValue = ServiceType.default.rawValue
+            return
+        }
+
+        let project = todo.projectId.flatMap { projectId in
+            projects.first(where: { $0.id == projectId })
+        }
+        let customerId = todo.customerId ?? project?.customerId
+        let customer = customerId.flatMap { id in
+            customers.first(where: { $0.id == id })
+        }
+        serviceTypeRawValue = ServiceType.resolvedDefault(
+            projectValue: project?.defaultServiceType,
+            customerValue: customer?.defaultServiceType
+        ).rawValue
     }
 
     private func syncDatesToWorkDate(_ newWorkDate: Date) {
@@ -875,6 +1000,7 @@ struct WorkSessionFormView: View {
         let cleanNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanOverrideReason = billingTimeTypeOverrideReason.trimmingCharacters(in: .whitespacesAndNewlines)
         let timeTypeOverride = selectedBillingTimeTypeOverride
+        let serviceType = ServiceType(rawValue: serviceTypeRawValue) ?? .default
 
         let sessionId: String?
         switch mode {
@@ -891,6 +1017,8 @@ struct WorkSessionFormView: View {
             endedAt,
             cleanNote.isEmpty ? nil : cleanNote,
             isManual,
+            serviceType,
+            selectedBillingWindowModeOverride,
             timeTypeOverride,
             timeTypeOverride == nil || cleanOverrideReason.isEmpty ? nil : cleanOverrideReason
         )

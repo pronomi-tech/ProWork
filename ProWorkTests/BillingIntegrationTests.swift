@@ -258,7 +258,7 @@ final class BillingIntegrationTests: XCTestCase {
         XCTAssertEqual(lines.first?.fixedFeeMinor, 2_000_000)
     }
 
-    func test_projectedFee_selectedIntoDraft_isBlockedFromAnotherActiveDraft() throws {
+    func test_projectedFee_selectedIntoDraft_isHiddenFromAnotherDraftPreview() throws {
         try seedSessionIndependentFee()
         let service = BillingRunLifecycleService()
         let periodStart = dayBoundary(year: 2026, month: 5, day: 1)
@@ -282,8 +282,9 @@ final class BillingIntegrationTests: XCTestCase {
             periodStart: dayBoundary(year: 2026, month: 1, day: 1),
             periodEnd: dayBoundary(year: 2026, month: 1, day: 31)
         )
+        XCTAssertEqual(secondPreview.lines.count, 0)
         XCTAssertEqual(secondPreview.availableLines.count, 0)
-        XCTAssertEqual(secondPreview.blockedLineCount, 1)
+        XCTAssertEqual(secondPreview.blockedLineCount, 0)
 
         XCTAssertThrowsError(try service.createDraft(
             customerId: customerId,
@@ -296,6 +297,43 @@ final class BillingIntegrationTests: XCTestCase {
                 return
             }
         }
+    }
+
+    func test_timeSession_selectedIntoDraft_isHiddenFromCustomerAndFolderPreviews() throws {
+        let folder = WorkFolder(id: "folder-used-session", name: "Kullanılmış Kayıtlar")
+        try WorkFolderRepository().insert(folder)
+        try seedSession(folderId: folder.id, durationMinutes: 60)
+
+        let service = BillingRunLifecycleService()
+        let periodStart = dayBoundary(year: 2026, month: 5, day: 1)
+        let periodEnd = dayBoundary(year: 2026, month: 5, day: 31)
+        let initialPreview = try service.previewDraft(
+            customerId: customerId,
+            periodStart: periodStart,
+            periodEnd: periodEnd
+        )
+        let selectionKey = try XCTUnwrap(initialPreview.availableLines.first?.selectionKey)
+
+        _ = try service.createDraft(
+            customerId: customerId,
+            periodStart: periodStart,
+            periodEnd: periodEnd,
+            selectedLineKeys: [selectionKey]
+        )
+
+        let customerPreview = try service.previewDraft(
+            customerId: customerId,
+            periodStart: periodStart,
+            periodEnd: periodEnd
+        )
+        let folderPreview = try service.previewDraft(
+            scope: .folder(folderId: folder.id, includesDescendants: false),
+            periodStart: periodStart,
+            periodEnd: periodEnd
+        )
+
+        XCTAssertTrue(customerPreview.lines.isEmpty)
+        XCTAssertTrue(folderPreview.lines.isEmpty)
     }
 
     func test_computePeriod_sessionSplitAtWorkdayBoundary_ordersNewestSegmentFirst() throws {
@@ -474,6 +512,38 @@ final class BillingIntegrationTests: XCTestCase {
         XCTAssertEqual(lines.map(\.amountMinor).reduce(0, +), 200_000)
         XCTAssertEqual(lines.map(\.vatMinor).reduce(0, +), 40_000)
         XCTAssertEqual(lines.map(\.totalMinor).reduce(0, +), 240_000)
+    }
+
+    func test_reportMode_sessionOverrideRoundsIndependentlyWithoutAffectingReportPool() throws {
+        var organization = try XCTUnwrap(try OrganizationRepository().fetchDefault())
+        organization.billingWindowMode = .report
+        try OrganizationRepository().update(organization)
+
+        let independent = try seedSession(startHour: 10, durationMinutes: 10)
+        let grouped = try seedSession(startHour: 11, durationMinutes: 20)
+        let sessionRepository = TodoTimeSessionRepository()
+        let independentSession = try XCTUnwrap(
+            try sessionRepository.fetchSessions(todoId: independent.todo.id).first
+        )
+        try sessionRepository.updateSession(
+            id: independentSession.id,
+            todoId: independent.todo.id,
+            startedAt: independent.sessionStart,
+            endedAt: independent.sessionEnd,
+            note: nil,
+            isManual: true,
+            billingWindowModeOverride: .session
+        )
+
+        let lines = try BillingComputationService().computePeriod(
+            customerId: customerId,
+            from: dayBoundary(year: 2026, month: 5, day: 7),
+            to: dayBoundary(year: 2026, month: 5, day: 8)
+        )
+
+        XCTAssertEqual(lines.first(where: { $0.todoId == independent.todo.id })?.billableMinutes, 60)
+        XCTAssertEqual(lines.first(where: { $0.todoId == grouped.todo.id })?.billableMinutes, 60)
+        XCTAssertEqual(lines.map(\.billableMinutes).reduce(0, +), 120)
     }
 
     func test_lifecycle_createDraft_noSessions_throwsNoBillableLines() throws {

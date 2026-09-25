@@ -114,6 +114,28 @@ final class Migration001SeedTests: XCTestCase {
         XCTAssertTrue(columns.contains("archivedAt"))
     }
 
+    func test_migration006_addsWorkSessionBillingControlsAsSingleMigration() throws {
+        let columns = try AppDatabase.shared.query(
+            "PRAGMA table_info(todo_time_sessions);"
+        ) { statement in
+            statement.text(at: 1) ?? ""
+        }
+        XCTAssertTrue(columns.contains("serviceType"))
+        XCTAssertTrue(columns.contains("billingWindowModeOverride"))
+
+        let migrationRows = try AppDatabase.shared.query("""
+        SELECT id, name
+        FROM schema_migrations
+        WHERE id IN (6, 7)
+        ORDER BY id;
+        """) { statement in
+            (statement.int(at: 0), statement.text(at: 1) ?? "")
+        }
+        XCTAssertEqual(migrationRows.count, 1)
+        XCTAssertEqual(migrationRows.first?.0, 6)
+        XCTAssertEqual(migrationRows.first?.1, "work_session_billing_controls")
+    }
+
     func test_migration004_repairsLegacyGlobalHolidayOrganizationReference() throws {
         try AppDatabase.shared.execute("PRAGMA foreign_keys = OFF;")
         try AppDatabase.shared.execute("""

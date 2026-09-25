@@ -295,7 +295,6 @@ private struct ProWorkToastWindowPresenter: NSViewRepresentable {
                 ProWorkToastPanelContent()
                     .proWorkFontScale(fontScale)
             )
-            hostingView.layoutSubtreeIfNeeded()
             let fittingSize = hostingView.fittingSize
             let panelSize = NSSize(width: max(1, fittingSize.width), height: max(1, fittingSize.height))
             let contentFrame = targetWindow.convertToScreen(targetWindow.contentLayoutRect)

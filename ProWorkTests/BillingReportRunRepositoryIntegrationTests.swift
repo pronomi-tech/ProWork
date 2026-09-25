@@ -97,7 +97,7 @@ final class BillingReportRunRepositoryIntegrationTests: XCTestCase {
     // MARK: - fetchUnpaid
 
     func test_fetchUnpaid_returnsOnlyFinalizedAndStillOwing() throws {
-        var draft = makeRun(periodStart: "2026-05-01", periodEnd: "2026-05-31", total: 100_00)
+        let draft = makeRun(periodStart: "2026-05-01", periodEnd: "2026-05-31", total: 100_00)
         try repository.insert(draft)
 
         var unpaidFinal = makeRun(periodStart: "2026-05-01", periodEnd: "2026-05-31", total: 200_00)

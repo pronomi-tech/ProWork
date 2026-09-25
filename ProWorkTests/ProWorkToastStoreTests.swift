@@ -76,16 +76,3 @@ final class ProWorkToastStoreTests: XCTestCase {
         XCTAssertEqual(symbols.count, 4, "each toast style should have a unique system image")
     }
 }
-
-// MARK: - Equatable test conveniences
-
-extension ProWorkToastMessage.Style: Equatable {
-    public static func == (lhs: Self, rhs: Self) -> Bool {
-        switch (lhs, rhs) {
-        case (.success, .success), (.error, .error), (.warning, .warning), (.info, .info):
-            return true
-        default:
-            return false
-        }
-    }
-}

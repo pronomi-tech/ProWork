@@ -16,6 +16,8 @@ struct TodoTimeSession: Identifiable, Hashable {
     var endStatusId: String?
     var note: String?
     var isManual: Bool
+    var serviceType: ServiceType
+    var billingWindowModeOverride: BillingWindowMode?
     var billingTimeTypeOverride: TimeType?
     var billingTimeTypeOverrideReason: String?
 
@@ -43,6 +45,8 @@ struct TodoTimeSession: Identifiable, Hashable {
         endStatusId: String? = nil,
         note: String? = nil,
         isManual: Bool = false,
+        serviceType: ServiceType = .default,
+        billingWindowModeOverride: BillingWindowMode? = nil,
         billingTimeTypeOverride: TimeType? = nil,
         billingTimeTypeOverrideReason: String? = nil,
         organizationId: String = BuiltInOrganizationId.default,
@@ -67,6 +71,8 @@ struct TodoTimeSession: Identifiable, Hashable {
         self.endStatusId = endStatusId
         self.note = note
         self.isManual = isManual
+        self.serviceType = serviceType
+        self.billingWindowModeOverride = billingWindowModeOverride
         self.billingTimeTypeOverride = billingTimeTypeOverride
         self.billingTimeTypeOverrideReason = billingTimeTypeOverrideReason
         self.organizationId = organizationId
@@ -110,6 +116,8 @@ extension TodoTimeSession {
         endStatusId: String? = nil,
         note: String? = nil,
         isManual: Bool = false,
+        serviceType: ServiceType = .default,
+        billingWindowModeOverride: BillingWindowMode? = nil,
         billingTimeTypeOverride: TimeType? = nil,
         billingTimeTypeOverrideReason: String? = nil,
         meta: RecordMetadata
@@ -126,6 +134,8 @@ extension TodoTimeSession {
             endStatusId: endStatusId,
             note: note,
             isManual: isManual,
+            serviceType: serviceType,
+            billingWindowModeOverride: billingWindowModeOverride,
             billingTimeTypeOverride: billingTimeTypeOverride,
             billingTimeTypeOverrideReason: billingTimeTypeOverrideReason,
             organizationId: meta.organizationId,
